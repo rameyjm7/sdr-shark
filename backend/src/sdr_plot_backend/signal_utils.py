@@ -20,6 +20,10 @@ class PeakDetector:
         self.thread = None
         self.processed_data = None  # To store the processed data
         self.save_last_packet = True
+        self.processing_func = np.mean
+    
+    def set_processing_func(self, func):
+        self.processing_func = func
 
     def start_receiving_data(self):
         self.running = True
@@ -68,7 +72,8 @@ class PeakDetector:
                     "fft_averaging": vars.sdr_averagingCount()
                 }
                 self.processed_data = process_fft_data(records=records, metadata=metadata, 
-                                                       threshold_dB=vars.peak_threshold_minimum_dB)
+                                                       threshold_dB=vars.peak_threshold_minimum_dB,
+                                                       func=self.processing_func)
                             # Save the data to a pickle file
                 if self.save_last_packet:
                     if self.processed_data:

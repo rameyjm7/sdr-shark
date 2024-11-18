@@ -68,7 +68,7 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "http://10.139.1.27:5000",
+  "proxy": "http://10.139.1.86:5000",
   "devDependencies": {
     "@babel/core": "^7.24.9",
     "@babel/preset-env": "^7.24.8",
