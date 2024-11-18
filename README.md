@@ -12,3 +12,7 @@ For now, here is what is looks like: An SDR is streamed from the backend (python
 ![image](https://github.com/user-attachments/assets/b45a225d-c29a-41cd-ac24-9e92aef3b219)
 
 Analysis is done using python currently and decision trees are used to classify signal types based on characteristics such as center frequency and bandwidth
+
+Plot controls such as Y axis limits are available
+
+Max trace (green), Persistance trace (blue), and normal trace (yellow) all available. Normal trace supports averaging
