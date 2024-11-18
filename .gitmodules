@@ -1,0 +1,3 @@
+[submodule "sdrfly"]
+	path = sdrfly
+	url = https://github.com/rameyjm7/sdrfly.git
