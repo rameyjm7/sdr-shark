@@ -19,11 +19,14 @@ Plot controls such as Y-axis limits are available.
 
 The max trace (green), persistence trace (blue), and normal trace (yellow) are all available. The normal trace supports averaging.
 
-Some statistics are ran on the signals 
+Some statistics are ran on the signals
+
 ![image](https://github.com/user-attachments/assets/73b9d68d-9c32-48ad-99ab-bc1bd3c8c219)
 
 There are band dictionaries for signals based on center frequency and bandwidth right now 
+
 ![image](https://github.com/user-attachments/assets/350209c7-25d9-4213-ab2a-a45eece924e4)
+
 ![Uploading image.png…]()
 
 
