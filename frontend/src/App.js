@@ -4,11 +4,6 @@ import { createTheme, ThemeProvider } from '@mui/material/styles';
 import Split from 'split.js';
 import ControlPanel from './components/ControlPanel';
 import Plots from './components/Plots';
-import Analysis from './components/Analysis';
-import Actions from './components/Actions';
-import FileBrowser from './components/sdr_scheduler/FileBrowser';
-import Analyzer from './components/sdr_scheduler/Analyzer';
-import SigDex from './components/SigDex';
 import axios from 'axios';
 import './App.css';
 
@@ -65,7 +60,7 @@ const App = () => {
     numberOfPeaks: 5,
     showWaterfall: true,
     waterfallSamples: 100,
-    updateInterval:500
+    updateInterval: 500
   });
   const [showSecondTrace, setShowSecondTrace] = useState(false);
   const [minY, setMinY] = useState(-120);
@@ -242,9 +237,8 @@ const App = () => {
               flexGrow: 1, // Ensure tabs take up available space
             }}
           >
-            <Tab label="Plots" />
-            <Tab label="Analysis" />
-            {/* <Tab label="Actions" /> */}
+            <Tab label="Main" />
+            <Tab label="About" />
           </Tabs>
 
           {/* SDR Shark text and icon on the right */}
@@ -287,12 +281,48 @@ const App = () => {
                 horizontalLines={horizontalLines}
               />
             </TabPanel>
-            <TabPanel value={tabValue} index={1}>
-              <Analysis settings={settings} setSettings={setSettings} />
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center' }}>
+            <TabPanel
+              value={tabValue}
+              index={1}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                textAlign: 'center',
+                height: '100%',
+                padding: '20px'
+              }}
+            >
+              <Typography variant="h6" sx={{ marginBottom: '20px' }}>
+                About SDR Shark
+              </Typography>
+
+              <img
+                src="shark_icon.png"
+                alt="Shark Icon"
+                style={{ width: '150px', height: '150px', marginBottom: '20px' }}
+              />
+
+              <Typography variant="body1" style={{ marginBottom: '10px' }}>
+                Author: Jacob M. Ramey
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: '10px' }}>
+                Github: <a href="https://github.com/rameyjm7/SDR-Shark" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7/SDR-Shark</a>
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: '10px' }}>
+                LinkedIn: <a href="https://www.linkedin.com/in/rameyjm/" target="_blank" rel="noopener noreferrer">https://www.linkedin.com/in/rameyjm/</a>
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: '10px' }}>
+                License: <a href="https://github.com/rameyjm7/SDR-Shark/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">View License</a>
+              </Typography>
+              <Typography variant="body2" style={{ marginTop: '20px' }}>
+                Copyright (c) 2024 Jacob M. Ramey
+              </Typography>
             </TabPanel>
-            {/* <TabPanel value={tabValue} index={2}>
-              <Actions tasks={tasks} setTasks={setTasks} />
-            </TabPanel> */}
+
+            </div>
           </Box>
           <Box id="rightPanel" sx={{ paddingLeft: '10px', height: '100%', flex: '0 1 auto' }}>
             <ControlPanel

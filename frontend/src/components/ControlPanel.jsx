@@ -9,6 +9,7 @@ import Analysis from './Analysis';
 import Classifiers from './ControlPanel/Classifiers';
 import debounce from 'lodash/debounce';
 import '../App.css';
+import Actions from './Actions';
 const ControlPanel = ({
   settings,
   setSettings,
@@ -255,6 +256,7 @@ const ControlPanel = ({
         <Tab label="Plot" />
         <Tab label="Analysis" />
         <Tab label="Classifiers" />
+        <Tab label="Actions" />
       </Tabs>
       <Box className="control-panel-tab-content">
         {tabIndex === 0 && (
@@ -356,6 +358,11 @@ const ControlPanel = ({
             clearHorizontalLines={clearHorizontalLines}
           />
         )}
+        {tabIndex === 4 && (
+            <Actions tasks={tasks} setTasks={setTasks} />
+        )}
+
+
       </Box>
     </Box>
   );
