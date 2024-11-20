@@ -27,3 +27,19 @@ There are band dictionaries for signals based on center frequency and bandwidth 
 
 ![image](https://github.com/user-attachments/assets/350209c7-25d9-4213-ab2a-a45eece924e4)
 
+# How to install and run
+apt install python3-venv
+python3-venv /home/eng/python
+source /home/eng/python/bin/activate
+
+cd to the <repository root>/backend/ folder
+pip install .
+
+then for the backend, run
+python3 -m sdr_plot_backend
+
+for the frontend, in a new terminal, go the frontend folder and run these command to install the dependencies and run the frontend
+yarn install
+yarn start
+
+
