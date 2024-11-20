@@ -18,7 +18,7 @@ function getLocalIPAddress() {
 }
 
 // Determine the IP address
-const ipAddress = "10.139.1.86"; // getLocalIPAddress();
+const ipAddress = getLocalIPAddress();
 
 // Define the proxy URL based on the IP address
 const proxyUrl = `http://${ipAddress}:5000`;
