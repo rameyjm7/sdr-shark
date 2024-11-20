@@ -244,7 +244,7 @@ const App = () => {
           >
             <Tab label="Plots" />
             <Tab label="Analysis" />
-            <Tab label="Actions" />
+            {/* <Tab label="Actions" /> */}
           </Tabs>
 
           {/* SDR Shark text and icon on the right */}
@@ -290,9 +290,9 @@ const App = () => {
             <TabPanel value={tabValue} index={1}>
               <Analysis settings={settings} setSettings={setSettings} />
             </TabPanel>
-            <TabPanel value={tabValue} index={2}>
+            {/* <TabPanel value={tabValue} index={2}>
               <Actions tasks={tasks} setTasks={setTasks} />
-            </TabPanel>
+            </TabPanel> */}
           </Box>
           <Box id="rightPanel" sx={{ paddingLeft: '10px', height: '100%', flex: '0 1 auto' }}>
             <ControlPanel
