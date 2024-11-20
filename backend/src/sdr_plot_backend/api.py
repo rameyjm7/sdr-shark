@@ -58,64 +58,69 @@ def generate_fft_data():
     sdr_name = "sidekiq"
     current_freq = vars.sweep_settings['frequency_start']
     fft_max = None
-    fft_persist_data = []
+    fft_persist_data = None  # Initialize persistence trace
+    persistence_decay = vars.persistence_decay  # Fetch decay factor (e.g., 0.9)
+    
     while running:
         start_time = time.time()
+        
+        # Capture and process FFT samples
         capture_samples()
         current_fft = process_fft(sample_buffer)
         
+        # Suppress DC spike if enabled
         if vars.dc_suppress:
             dc_index = len(current_fft) // 2
             current_fft[dc_index] = current_fft[dc_index + 1]
-
-        # Normalize infinity values
+        
+        # Normalize invalid (inf) values
         current_fft = np.where(np.isinf(current_fft), -20, current_fft)
         
-        if fft_max is None:
-            fft_max = current_fft
-        else:
-            fft_max = np.maximum(fft_max,current_fft)
-            
+        # Update maximum FFT trace
+        fft_max = current_fft if fft_max is None else np.maximum(fft_max, current_fft)
+
+        # Handle persistence trace with decay
         if fft_persist_data is None:
-            fft_persist_data= [current_fft]
+            fft_persist_data = current_fft  # Initialize persistence trace
         else:
-            fft_persist_data.append(current_fft)
-            if len(fft_persist_data) > vars.sdr_averagingCount():
-                fft_persist_data.pop(0)
-            # Stack the samples into a 2D array (20 x 1024)
-            stacked_samples = np.vstack(fft_persist_data)
-            # Get the maximum values across the 20 sets for each sample point
-            fft_data['persist'] = np.max(stacked_samples, axis=0)
+            fft_persist_data = (
+                persistence_decay * fft_persist_data + (1 - persistence_decay) * current_fft
+            )
+        fft_data['persist'] = fft_persist_data
 
         if vars.sweeping_enabled:
-            # Append the current FFT to the full FFT for the sweep
-            if len(full_fft) == 0:
+            # Perform sweeping logic
+            if not full_fft:
                 full_fft = current_fft
             else:
                 full_fft = np.concatenate((full_fft, current_fft))
-
+            
             # Tune to the next frequency
             current_freq += 60e6
             if current_freq > vars.sweep_settings['frequency_stop']:
                 current_freq = vars.sweep_settings['frequency_start']
-                # Complete sweep, deliver the full FFT
+                
+                # Process completed sweep
                 averaged_fft = np.array(full_fft)
                 
-                # Calculate noise floor and store it in signal_stats
-                sorted_fft = np.sort(averaged_fft)
-                noise_floor_data = sorted_fft[:int(len(sorted_fft) * 0.2)]  # Use the lowest 10% of FFT values
-                noise_floor = np.mean(noise_floor_data)
-                vars.signal_stats["noise_floor"] = round(float(noise_floor),3)
-                vars.signal_stats["max"] = round(float(np.max(sorted_fft)),3)
+                # Calculate noise floor using the lowest 20% of FFT values
+                noise_floor = np.mean(np.percentile(averaged_fft, 20))
+                vars.signal_stats["noise_floor"] = round(noise_floor, 3)
+                vars.signal_stats["max"] = round(float(np.max(averaged_fft)), 3)
                 
-                downsampled_fft_avg = downsample(averaged_fft, len(current_fft))  # Downsample to match the normal FFT size
-                downsampled_fft = downsample(current_fft, len(current_fft))       # Downsample to match the normal FFT size
+                # Downsample FFT data for output
+                downsampled_fft_avg = downsample(averaged_fft, len(current_fft))
+                downsampled_fft = downsample(current_fft, len(current_fft))
 
+                # Update shared data
                 with data_lock:
                     fft_data['original_fft'] = downsampled_fft_avg.tolist()
                     waterfall_buffer.append(downsampled_fft.tolist())
                 
-                full_fft = []  # Clear the full FFT for the next sweep
+                # Reset for the next sweep
+                full_fft = []
+            
+            # Update SDR frequency
             vars.sdr_settings[sdr_name].frequency = current_freq
             vars.sdr0.set_frequency(current_freq)
             time.sleep(0.05)
@@ -124,37 +129,28 @@ def generate_fft_data():
             if len(full_fft) == 0:
                 full_fft = current_fft
             else:
-                full_fft = (full_fft[:vars.sample_size] * \
-                    ( vars.sdr_settings[sdr_name].averagingCount - 1) + current_fft) / vars.sdr_settings[sdr_name].averagingCount
-            # Calculate noise floor and store it in signal_stats
-            sorted_fft = np.sort(full_fft)
-            noise_floor_data = sorted_fft[:int(len(sorted_fft) * 0.2)]  # Use the lowest 10% of FFT values
-            noise_floor = np.mean(noise_floor_data)
-            vars.signal_stats["noise_floor"] = round(float(noise_floor),3)
-            vars.signal_stats["noise_riding_threshold"] = round(vars.signal_stats['noise_floor'] + vars.peak_threshold_minimum_dB,3)
-            vars.signal_stats['max'] = round(float(np.max(full_fft)),3)
-
-
-            max_index = np.argmax(full_fft)  # Index of the maximum value in the FFT
-
-            # Calculate the frequency step (resolution)
-            frequency_step = vars.sdr_sampleRate() / vars.sample_size  # Frequency resolution of each FFT bin
-
-            # Calculate the frequency corresponding to the maximum value
-            max_freq = ((max_index * frequency_step) + (vars.sdr_frequency() - vars.sdr_sampleRate() / 2))/1e6
-
-            # Store the max frequency in signal_stats
+                full_fft = (full_fft[:vars.sample_size] * (vars.sdr_settings[sdr_name].averagingCount - 1) + current_fft) / vars.sdr_settings[sdr_name].averagingCount
+            
+            # Calculate noise floor and signal stats
+            noise_floor = np.mean(np.percentile(full_fft, 20))
+            vars.signal_stats["noise_floor"] = round(noise_floor, 3)
+            vars.signal_stats["noise_riding_threshold"] = round(noise_floor + vars.peak_threshold_minimum_dB, 3)
+            vars.signal_stats['max'] = round(float(np.max(full_fft)), 3)
+            
+            # Determine maximum frequency
+            max_index = np.argmax(full_fft)
+            frequency_step = vars.sdr_sampleRate() / vars.sample_size
+            max_freq = ((max_index * frequency_step) + (vars.sdr_frequency() - vars.sdr_sampleRate() / 2)) / 1e6
             vars.signal_stats['max_freq'] = round(float(max_freq), 3)
 
-            if vars.signal_stats['max'] > vars.signal_stats["noise_riding_threshold"]:
-                vars.signal_stats['signal_detected'] = 1
-            else:
-                vars.signal_stats['signal_detected'] = 0
-            
+            # Signal detection logic
+            vars.signal_stats['signal_detected'] = 1 if vars.signal_stats['max'] > vars.signal_stats["noise_riding_threshold"] else 0
+
+            # Update shared data
             with data_lock:
                 fft_data['original_fft'] = full_fft.tolist()
                 fft_data['max'] = fft_max.tolist()
-                fft_data['persistance'] = [] # fft_data['persist'].tolist()
+                fft_data['persist'] = fft_persist_data.tolist()
                 waterfall_buffer.append(downsample(current_fft).tolist())
 
 def radio_scanner():

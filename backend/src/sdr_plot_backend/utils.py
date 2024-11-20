@@ -54,6 +54,7 @@ class sdr_scheduler_config:
         self.dc_suppress = True
         self.show_waterfall = True
         self.waterfall_samples = 100
+        self.persistence_decay  = 0.5
         self.number_of_peaks = 5
         self.showFirstTrace = True
         self.showSecondTrace = False
