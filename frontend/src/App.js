@@ -90,7 +90,7 @@ const App = () => {
     }
     // Check if frequency and bandwidth are numbers
     if (typeof frequency !== 'number' || typeof bandwidth !== 'number') {
-        return;
+      return;
     }
 
     // Calculate lower and upper bounds
@@ -99,62 +99,62 @@ const App = () => {
 
     // Check if the calculated bounds are numbers
     if (isNaN(lowerBound) || isNaN(upperBound)) {
-        console.error('Calculated bounds are NaN:', { lowerBound, upperBound });
-        return;
+      console.error('Calculated bounds are NaN:', { lowerBound, upperBound });
+      return;
     }
 
     setVerticalLines((prevLines) => [
-        ...prevLines,
-        { frequency: lowerBound, label: `${lowerBound.toFixed(2)} MHz` },
-        { frequency: upperBound, label: `${upperBound.toFixed(2)} MHz` },
-    ]);
-   sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
-
-};
-
-const clearVerticalLines = () => {
-  console.log('Clearing vertical lines');
-  setVerticalLines((prevLines) => []);
-  sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
-};
-
-const addHorizontalLines = (power) => {
-  // Check if power is a number
-  if (typeof power !== 'number') {
-      return;
-  }
-
-  setHorizontalLines((prevLines) => [
       ...prevLines,
-      { power: power, label: `${power.toFixed(2)} dB` },
-  ]);
-  sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
-  console.log(`Horizontal line added at ${power} dB`);
-};
+      { frequency: lowerBound, label: `${lowerBound.toFixed(2)} MHz` },
+      { frequency: upperBound, label: `${upperBound.toFixed(2)} MHz` },
+    ]);
+    sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
 
-const clearHorizontalLines = () => {
-console.log('Clearing horizontal lines');
-  setHorizontalLines((prevLines) => []);
-  sendMarkersToBackend(verticalLines, []); // Send to backend
-};
-
-
-const sendMarkersToBackend = (verticalLines, horizontalLines) => {
-  // Prepare data for backend
-  const markerData = {
-    vertical_lines: verticalLines,
-    horizontal_lines: horizontalLines,
   };
 
-  // Make a POST request to the backend
-  axios.post('/api/signal_detection', markerData)
-    .then(response => {
-      console.log('Markers sent to backend:', response.data);
-    })
-    .catch(error => {
-      console.error('Error sending markers to backend:', error);
-    });
-};
+  const clearVerticalLines = () => {
+    console.log('Clearing vertical lines');
+    setVerticalLines((prevLines) => []);
+    sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
+  };
+
+  const addHorizontalLines = (power) => {
+    // Check if power is a number
+    if (typeof power !== 'number') {
+      return;
+    }
+
+    setHorizontalLines((prevLines) => [
+      ...prevLines,
+      { power: power, label: `${power.toFixed(2)} dB` },
+    ]);
+    sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
+    console.log(`Horizontal line added at ${power} dB`);
+  };
+
+  const clearHorizontalLines = () => {
+    console.log('Clearing horizontal lines');
+    setHorizontalLines((prevLines) => []);
+    sendMarkersToBackend(verticalLines, []); // Send to backend
+  };
+
+
+  const sendMarkersToBackend = (verticalLines, horizontalLines) => {
+    // Prepare data for backend
+    const markerData = {
+      vertical_lines: verticalLines,
+      horizontal_lines: horizontalLines,
+    };
+
+    // Make a POST request to the backend
+    axios.post('/api/signal_detection', markerData)
+      .then(response => {
+        console.log('Markers sent to backend:', response.data);
+      })
+      .catch(error => {
+        console.error('Error sending markers to backend:', error);
+      });
+  };
 
   const handleTabChange = (event, newValue) => {
     setTabValue(newValue);
@@ -211,12 +211,51 @@ const sendMarkersToBackend = (verticalLines, horizontalLines) => {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box id="plotsContainer" sx={{ padding: 0, margin: 0, width: '100%', height: '100%' }}>
-        <Typography variant="h4" gutterBottom>SDR Shark</Typography>
-        <Tabs value={tabValue} onChange={handleTabChange} variant="scrollable" scrollButtons="auto">
-          <Tab label="Plots" />
-          <Tab label="Analysis" />
-          <Tab label="Actions" />
-        </Tabs>
+
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 16px',
+            width: '100%',
+          }}
+        >
+          {/* Tabs on the left */}
+          <Tabs
+            value={tabValue}
+            onChange={handleTabChange}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{
+              flexGrow: 1, // Ensure tabs take up available space
+            }}
+          >
+            <Tab label="Plots" />
+            <Tab label="Analysis" />
+            <Tab label="Actions" />
+          </Tabs>
+
+          {/* SDR Shark text and icon on the right */}
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              marginLeft: 'auto', // Push to the right
+            }}
+          >
+            <Typography variant="h6" sx={{ marginRight: '10px' }}>
+              SDR Shark
+            </Typography>
+            <img
+              src="shark_icon.png"
+              alt="Shark Icon"
+              style={{ width: '30px', height: '30px' }}
+            />
+          </Box>
+        </Box>
+
+
         <Box sx={{ display: 'flex', height: 'calc(100% - 100px)' }}>
           <Box id="leftPanel" sx={{ paddingRight: '10px', borderRight: '2px solid #444', height: '100%', flex: '0 1 auto' }}>
             <TabPanel value={tabValue} index={0}>
@@ -224,16 +263,16 @@ const sendMarkersToBackend = (verticalLines, horizontalLines) => {
                 settings={settings}
                 minY={minY}
                 maxY={maxY}
-                setMinY={setMinY}  
+                setMinY={setMinY}
                 setMaxY={setMaxY}
                 updateInterval={updateInterval}
                 waterfallSamples={waterfallSamples}
                 showWaterfall={showWaterfall}
                 showSecondTrace={showSecondTrace}
-                plotWidth={plotWidth} 
-                addVerticalLines={addVerticalLines} 
+                plotWidth={plotWidth}
+                addVerticalLines={addVerticalLines}
                 verticalLines={verticalLines}
-                addHorizontalLines={addHorizontalLines} 
+                addHorizontalLines={addHorizontalLines}
                 horizontalLines={horizontalLines}
               />
             </TabPanel>
@@ -258,9 +297,9 @@ const sendMarkersToBackend = (verticalLines, horizontalLines) => {
               setWaterfallSamples={setWaterfallSamples}
               showWaterfall={showWaterfall}
               setShowWaterfall={setShowWaterfall}
-              addVerticalLines={addVerticalLines}  
+              addVerticalLines={addVerticalLines}
               clearVerticalLines={clearVerticalLines}
-              addHorizontalLines={addHorizontalLines}  
+              addHorizontalLines={addHorizontalLines}
               clearHorizontalLines={clearHorizontalLines}
               verticalLines={verticalLines}
             />
