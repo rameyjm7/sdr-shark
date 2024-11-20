@@ -36,16 +36,15 @@ python3-venv /home/eng/python
 source /home/eng/python/bin/activate
 
 
-cd to the <repository root>/backend/ folder
+#cd to the <repository root>/backend/ folder
 
 pip install .
 
-then for the backend, run
+#then for the backend, run
 
 python3 -m sdr_plot_backend
 
-
-for the frontend, in a new terminal, go the frontend folder and run these command to install the dependencies and run the frontend
+#for the frontend, in a new terminal, go the frontend folder and run these command to install the dependencies and run the frontend
 
 yarn install
 
