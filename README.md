@@ -15,7 +15,8 @@ Analysis is currently done using Python, and decision trees are used to classify
 
 Plot controls such as Y-axis limits are available.
 
-![image](https://github.com/user-attachments/assets/c4b52962-d1dd-48a3-9db2-ea66483c3e88)
+![image](https://github.com/user-attachments/assets/1d487253-c29c-434c-94fa-ff2c31845241)
+
 
 The max trace (green), persistence trace (blue), and normal trace (yellow) are all available. The normal trace supports averaging.
 
