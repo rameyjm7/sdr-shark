@@ -35,6 +35,7 @@ const ControlPanel = ({
   const [saving, setSaving] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [tabIndex, setTabIndex] = useState(0);
+  const [tasks, setTasks] = useState([]);
 
   useEffect(() => {
     if (!settingsLoaded) {
@@ -155,7 +156,6 @@ const ControlPanel = ({
       sdr: newSdr,
       showSecondTrace: newSdr === 'hackrf',
     };
-    setSettings(updatedSettings);
     setSettings(updatedSettings);
 
     axios.post('/api/select_sdr', { sdr_name: newSdr })
@@ -359,8 +359,35 @@ const ControlPanel = ({
           />
         )}
         {tabIndex === 4 && (
-            <Actions tasks={tasks} setTasks={setTasks} />
+          <Actions
+            settings={settings}
+            setSettings={setSettings}
+            tasks={tasks}
+            setTasks={(newTasks) => {
+              setTasks(newTasks);
+
+              // Extract center frequency and bandwidth from the new tasks
+              if (newTasks.length > 0) {
+                const latestTask = newTasks[newTasks.length - 1];
+
+                if (latestTask.frequency && latestTask.bandwidth) {
+                  const newSettings = {
+                    ...settings,
+                    centerFrequency: latestTask.frequency,
+                    bandwidth: latestTask.bandwidth,
+                  };
+
+                  // Update settings with the extracted values
+                  setSettings(newSettings);
+
+                  // Optionally log the update for debugging
+                  console.log("Updated settings with task values:", newSettings);
+                }
+              }
+            }}
+          />
         )}
+
 
 
       </Box>

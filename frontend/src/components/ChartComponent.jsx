@@ -336,18 +336,23 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
             showlegend: false, // Show this trace in the legend
             name: 'Max FFT Data', // Label for the legend
           },
-          settings.showPersistanceTrace && {  // Conditionally add the Max FFT trace
+          settings.showPersistanceTrace && {  // Conditionally add the Persistence Trace
             x: Array.isArray(persistanceData) ? persistanceData.map((_, index) => {
-              return (baseFreq + index * freqStep).toFixed(2);
+              return (baseFreq + index * freqStep).toFixed(2); // Convert to MHz
             }) : [],
             y: Array.isArray(persistanceData) ? persistanceData : [],
             type: 'scatter',
             mode: 'lines',
-            marker: { color: 'blue' },
-            line: { shape: 'spline', width: 1 }, // Thinner trace lines
-            showlegend: false, // Show this trace in the legend
-            name: 'Persistance FFT Data', // Label for the legend
+            fill: 'tozeroy', // Fill area under the trace
+            fillcolor: 'rgba(0, 0, 255, 0.1)', // Blue fill with 20% transparency
+            line: {
+              color: 'rgba(0, 0, 255, 0.1)', // Semi-transparent blue line
+              shape: 'spline', // Smooth line shape
+              width: 1, // Thinner trace lines
+            },
+            showlegend: false, // Hide horizontal lines from the legend
           },
+          
           ...verticalLineTraces.map(trace => ({
             ...trace,
             showlegend: false, // Hide vertical lines from the legend

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Plot from 'react-plotly.js';
 
-const FFTPlot = ({ fftData, settings, minY, maxY, peaks }) => {
+const FFTPlot = ({ fftData, persistenceData, settings, minY, maxY, peaks }) => {
   const [tickVals, setTickVals] = useState([]);
   const [tickText, setTickText] = useState([]);
 
@@ -90,6 +90,7 @@ const FFTPlot = ({ fftData, settings, minY, maxY, peaks }) => {
   return (
     <Plot
       data={[
+        // Main FFT trace
         {
           x: Array.isArray(fftData) ? fftData.map((_, index) => ((settings.frequency - settings.sampleRate / 2) + (index * settings.sampleRate / fftData.length) / 1e6).toFixed(2)) : [], // Convert to MHz
           y: Array.isArray(fftData) ? fftData : [],
@@ -98,6 +99,16 @@ const FFTPlot = ({ fftData, settings, minY, maxY, peaks }) => {
           fill: 'tozeroy',
           fillcolor: 'rgba(255, 255, 255, 0.3)', // Under trace color white with some transparency
           line: { color: 'white', shape: 'spline', width: 1 }, // White trace line
+        },
+        // Persistence trace
+        {
+          x: Array.isArray(persistenceData) ? persistenceData.map((_, index) => ((settings.frequency - settings.sampleRate / 2) + (index * settings.sampleRate / persistenceData.length) / 1e6).toFixed(2)) : [], // Convert to MHz
+          y: Array.isArray(persistenceData) ? persistenceData : [],
+          type: 'scatter',
+          mode: 'lines',
+          fill: 'tozeroy',
+          fillcolor: 'rgba(255, 255, 0, 0.1)', // Yellowish persistence trace with transparency
+          line: { color: 'rgba(255, 255, 0, 0.2)', shape: 'spline', width: 1 }, // Semi-transparent yellow trace line
         },
       ]}
       layout={{

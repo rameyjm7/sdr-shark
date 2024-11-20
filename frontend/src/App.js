@@ -68,7 +68,6 @@ const App = () => {
   // const [waterfallSamples, setWaterfallSamples] = useState(100);
   const [showWaterfall, setShowWaterfall] = useState(true);
   const [tabValue, setTabValue] = useState(0);
-  const [tasks, setTasks] = useState([]);
   const [files, setFiles] = useState([]);
   const [currentPath, setCurrentPath] = useState('/');
   const [metadata, setMetadata] = useState(null);
