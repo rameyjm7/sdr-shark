@@ -216,9 +216,6 @@ const sendMarkersToBackend = (verticalLines, horizontalLines) => {
           <Tab label="Plots" />
           <Tab label="Analysis" />
           <Tab label="Actions" />
-          <Tab label="File Manager" />
-          <Tab label="Data Analyzer" />
-          <Tab label="SigDex" />
         </Tabs>
         <Box sx={{ display: 'flex', height: 'calc(100% - 100px)' }}>
           <Box id="leftPanel" sx={{ paddingRight: '10px', borderRight: '2px solid #444', height: '100%', flex: '0 1 auto' }}>
@@ -245,17 +242,6 @@ const sendMarkersToBackend = (verticalLines, horizontalLines) => {
             </TabPanel>
             <TabPanel value={tabValue} index={2}>
               <Actions tasks={tasks} setTasks={setTasks} />
-            </TabPanel>
-            <TabPanel value={tabValue} index={3}>
-              <FileBrowser onAnalyze={handleAnalyze} />
-            </TabPanel>
-            <TabPanel value={tabValue} index={4}>
-              <Analyzer fftData={fftData} metadata={metadata} />
-            </TabPanel>
-            <TabPanel value={tabValue} index={5}>
-              <Box sx={{ height: '100%', overflowY: 'auto' }}>  {/* Ensure SigDex is contained within the tab */}
-                <SigDex />
-              </Box>
             </TabPanel>
           </Box>
           <Box id="rightPanel" sx={{ paddingLeft: '10px', height: '100%', flex: '0 1 auto' }}>
