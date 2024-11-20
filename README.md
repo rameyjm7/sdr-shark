@@ -9,13 +9,14 @@ I will update the application to use some of these models and focus on performan
 
 For now,  An SDR is streamed from the backend (Python, SoapySDR) to the front end (React). 
 
-![image](https://github.com/user-attachments/assets/b45a225d-c29a-41cd-ac24-9e92aef3b219)
+![image](https://github.com/user-attachments/assets/7f075513-27fe-46db-9ee3-4bb546944a34)
 
 Analysis is currently done using Python, and decision trees are used to classify signal types based on characteristics such as center frequency and bandwidth.
 
 Plot controls such as Y-axis limits are available.
 
-![image](https://github.com/user-attachments/assets/c4b52962-d1dd-48a3-9db2-ea66483c3e88)
+![image](https://github.com/user-attachments/assets/1d487253-c29c-434c-94fa-ff2c31845241)
+
 
 The max trace (green), persistence trace (blue), and normal trace (yellow) are all available. The normal trace supports averaging.
 
