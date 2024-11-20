@@ -63,8 +63,8 @@ const ControlPanel = ({
       setLocalSettings(data);
       setUpdateInterval(data.updateInterval);
       setWaterfallSamples(data.waterfallSamples);
-      setMinY(minY);  
-      setMaxY(maxY);  
+      setMinY(minY);
+      setMaxY(maxY);
       setStatus('Settings loaded');
       setSettingsLoaded(true);
     } catch (error) {
@@ -196,11 +196,11 @@ const ControlPanel = ({
   const applySettings = async (newSettings) => {
     const enforcedSettings = enforceLimits(newSettings);
     setStatus('Updating settings...');
-    
+
     interval = settings.updateInterval;
     // Temporarily set updateInterval to 5000
     setUpdateInterval(5000);
-  
+
     try {
       await axios.post('/api/update_settings', enforcedSettings, {
         headers: {
@@ -211,14 +211,14 @@ const ControlPanel = ({
       setLocalSettings(enforcedSettings);
       // After settings are applied, revert updateInterval to the original value
       setUpdateInterval(interval);
-  
+
       setStatus('Settings updated');
     } catch (error) {
       console.error('Error updating settings:', error);
       setStatus('Error updating settings');
     }
   };
-  
+
 
   const sdrLimits = {
     hackrf: {
@@ -273,12 +273,12 @@ const ControlPanel = ({
               <MenuItem value="hackrf">HackRF</MenuItem>
               <MenuItem value="sidekiq">Sidekiq</MenuItem>
             </Select>
-            <SDRSettings 
-                settings={localSettings} 
-                handleChange={handleChange} 
-                handleKeyPress={handleKeyPress} 
-                setSettings={setSettings}
-              />
+            <SDRSettings
+              settings={localSettings}
+              handleChange={handleChange}
+              handleKeyPress={handleKeyPress}
+              setSettings={setSettings}
+            />
           </>
         )}
         {tabIndex === 1 && (
@@ -302,23 +302,23 @@ const ControlPanel = ({
           </>
         )}
         {tabIndex === 2 && (
-          <Analysis 
-          settings={localSettings}
-          setSettings={setLocalSettings}
-          addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
-          clearVerticalLines={clearVerticalLines}
-          addHorizontalLines={addHorizontalLines}  
-          clearHorizontalLines={clearHorizontalLines}  
-          />
-        )}
-        {tabIndex === 3 && (
-          <Classifiers 
+          <Analysis
             settings={localSettings}
             setSettings={setLocalSettings}
             addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
             clearVerticalLines={clearVerticalLines}
-            addHorizontalLines={addHorizontalLines}  
-            clearHorizontalLines={clearHorizontalLines}  
+            addHorizontalLines={addHorizontalLines}
+            clearHorizontalLines={clearHorizontalLines}
+          />
+        )}
+        {tabIndex === 3 && (
+          <Classifiers
+            settings={localSettings}
+            setSettings={setLocalSettings}
+            addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
+            clearVerticalLines={clearVerticalLines}
+            addHorizontalLines={addHorizontalLines}
+            clearHorizontalLines={clearHorizontalLines}
           />
         )}
       </Box>

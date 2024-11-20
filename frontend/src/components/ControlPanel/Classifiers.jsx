@@ -102,11 +102,11 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
       const frequency = classification.frequency;
       const bandwidth = classification.bandwidth;
       if (frequency && bandwidth) {
-        const newSettings = { 
-          ...settings, 
-          frequency: parseFloat(frequency), 
-          sampleRate: parseFloat(bandwidth), 
-          bandwidth: parseFloat(bandwidth), 
+        const newSettings = {
+          ...settings,
+          frequency: parseFloat(frequency),
+          sampleRate: parseFloat(bandwidth),
+          bandwidth: parseFloat(bandwidth),
         };
         setSettings(newSettings);
         updateSettings(newSettings).then(() => {

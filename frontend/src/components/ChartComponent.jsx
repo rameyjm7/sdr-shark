@@ -214,7 +214,7 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
     verticalLineTraces = verticalLines.map(({ frequency }) => {
       const lineColor = 'rgb(255, 0, 0)'; // Red color for vertical lines
       return {
-        x: [frequency*1e6, frequency*1e6], // Fixed frequency for both x points
+        x: [frequency * 1e6, frequency * 1e6], // Fixed frequency for both x points
         y: [minY, maxY],           // Span the full y-axis range
         type: 'scatter',
         mode: 'lines',
@@ -254,71 +254,71 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
   // this is called when a selection is made, allowing us to get the coordinates and send it to the backend to extract that waterfall
   const handleRelayout = (eventData) => {
     if (eventData['xaxis.range[0]'] && eventData['xaxis.range[1]'] &&
-        eventData['yaxis.range[0]'] && eventData['yaxis.range[1]']) {
+      eventData['yaxis.range[0]'] && eventData['yaxis.range[1]']) {
 
-        // Extract the box selection coordinates
-        const xStart = eventData['xaxis.range[0]'];
-        const xEnd = eventData['xaxis.range[1]'];
-        const yStart = eventData['yaxis.range[0]'];
-        const yEnd = eventData['yaxis.range[1]'];
+      // Extract the box selection coordinates
+      const xStart = eventData['xaxis.range[0]'];
+      const xEnd = eventData['xaxis.range[1]'];
+      const yStart = eventData['yaxis.range[0]'];
+      const yEnd = eventData['yaxis.range[1]'];
 
-        console.log(`Box selection coordinates: 
+      console.log(`Box selection coordinates: 
             xStart: ${xStart}, xEnd: ${xEnd}, 
             yStart: ${yStart}, yEnd: ${yEnd}`);
-        console.log(settings);
-        // Assuming frequency and sampleRate are part of your SDR settings
-        const frequency = settings.frequency; // Adjust based on your actual settings object structure
-        const sampleRate = settings.sampleRate; // Adjust based on your actual settings object structure
+      console.log(settings);
+      // Assuming frequency and sampleRate are part of your SDR settings
+      const frequency = settings.frequency; // Adjust based on your actual settings object structure
+      const sampleRate = settings.sampleRate; // Adjust based on your actual settings object structure
 
-        // Prepare the coordinates data to be sent to the backend
-        const coordinates = {
-            xStart,
-            xEnd,
-            yStart,
-            yEnd,
-            filename: `${frequency}_${sampleRate}`, // Default filename
-        };
+      // Prepare the coordinates data to be sent to the backend
+      const coordinates = {
+        xStart,
+        xEnd,
+        yStart,
+        yEnd,
+        filename: `${frequency}_${sampleRate}`, // Default filename
+      };
 
-        // Send the initial save request with the default filename
-        fetch('/api/save_selection', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(coordinates),
-        })
+      // Send the initial save request with the default filename
+      fetch('/api/save_selection', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(coordinates),
+      })
         .then(response => response.json())
         .then(data => {
-            console.log('Initial save success:', data);
+          console.log('Initial save success:', data);
 
-            // After the initial save, prompt the user to confirm or change the filename
-            const userFilename = prompt('Enter filename (leave blank to keep default):', coordinates.filename);
+          // After the initial save, prompt the user to confirm or change the filename
+          const userFilename = prompt('Enter filename (leave blank to keep default):', coordinates.filename);
 
-            if (userFilename && userFilename !== coordinates.filename) {
-                // Send the rename request if the filename is different
-                const renameData = {
-                    old_filename: coordinates.filename,
-                    new_filename: userFilename,
-                };
+          if (userFilename && userFilename !== coordinates.filename) {
+            // Send the rename request if the filename is different
+            const renameData = {
+              old_filename: coordinates.filename,
+              new_filename: userFilename,
+            };
 
-                fetch('/api/move', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(renameData),
-                })
-                .then(response => response.json())
-                .then(renameData => {
-                    console.log('Rename success:', renameData);
-                })
-                .catch((error) => {
-                    console.error('Rename error:', error);
-                });
-            }
+            fetch('/api/move', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(renameData),
+            })
+              .then(response => response.json())
+              .then(renameData => {
+                console.log('Rename success:', renameData);
+              })
+              .catch((error) => {
+                console.error('Rename error:', error);
+              });
+          }
         })
         .catch((error) => {
-            console.error('Initial save error:', error);
+          console.error('Initial save error:', error);
         });
     }
   };
@@ -406,52 +406,52 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
       />
       {showWaterfall && (
         <Plot
-        data={[
-          {
-            z: waterfallData,
-            type: 'heatmap',
-            colorscale: 'Jet',
-            zsmooth: 'fast',
-            zmin: minY,
-            zmax: maxY,
-            showscale: false, // Remove the color scale
-          },
-        ]}
-        layout={{
-          title: '',
-          xaxis: {
-            title: 'Frequency (MHz)',
-            color: 'white',
-            gridcolor: '#444',
-            zeroline: false, // Remove the white line across the 0 mark
-            tickvals: prevTickValsRef.current,
-            ticktext: prevTickTextRef.current,
-          },
-          yaxis: {
-            title: 'Samples',
-            color: 'white',
-            gridcolor: '#444',
-          },
-          margin: {
-            l: 50,
-            r: 50,
-            b: 50,
-            t: 0,
-            pad: 4
-          },
-          autosize: true,  // Let Plotly auto size
-          paper_bgcolor: '#000',
-          plot_bgcolor: '#000',
-          font: {
-            color: 'white',
-          },
-        }}
-        config={{
-          displayModeBar: false, // Hide the mode bar
-        }}
-        style={{ width: `${plotWidth}vw` }}
-        onRelayout={handleRelayout} // Attach the relayout event handler
-      />
+          data={[
+            {
+              z: waterfallData,
+              type: 'heatmap',
+              colorscale: 'Jet',
+              zsmooth: 'fast',
+              zmin: minY,
+              zmax: maxY,
+              showscale: false, // Remove the color scale
+            },
+          ]}
+          layout={{
+            title: '',
+            xaxis: {
+              title: 'Frequency (MHz)',
+              color: 'white',
+              gridcolor: '#444',
+              zeroline: false, // Remove the white line across the 0 mark
+              tickvals: prevTickValsRef.current,
+              ticktext: prevTickTextRef.current,
+            },
+            yaxis: {
+              title: 'Samples',
+              color: 'white',
+              gridcolor: '#444',
+            },
+            margin: {
+              l: 50,
+              r: 50,
+              b: 50,
+              t: 0,
+              pad: 4
+            },
+            autosize: true,  // Let Plotly auto size
+            paper_bgcolor: '#000',
+            plot_bgcolor: '#000',
+            font: {
+              color: 'white',
+            },
+          }}
+          config={{
+            displayModeBar: false, // Hide the mode bar
+          }}
+          style={{ width: `${plotWidth}vw` }}
+          onRelayout={handleRelayout} // Attach the relayout event handler
+        />
       )}
     </div>
   );

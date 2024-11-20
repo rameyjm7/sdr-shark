@@ -13,7 +13,9 @@ const WaterfallSettings = ({ settings, showWaterfall, setShowWaterfall }) => {
             min={10}
             max={1000}
             value={settings.updateInterval}
-            onChange={(e, value) => setShowWaterfall({ ...settings, updateInterval: value })}
+            onChange={(e, value) =>
+              setShowWaterfall({ ...settings, updateInterval: value }
+              )}
             valueLabelDisplay="auto"
             step={10}
             marks={[
