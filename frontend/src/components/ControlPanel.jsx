@@ -196,6 +196,11 @@ const ControlPanel = ({
   const applySettings = async (newSettings) => {
     const enforcedSettings = enforceLimits(newSettings);
     setStatus('Updating settings...');
+    
+    interval = settings.updateInterval;
+    // Temporarily set updateInterval to 5000
+    setUpdateInterval(5000);
+  
     try {
       await axios.post('/api/update_settings', enforcedSettings, {
         headers: {
@@ -203,13 +208,17 @@ const ControlPanel = ({
         },
       });
       setSettings(enforcedSettings);
-      setLocalSettings(enforcedSettings); 
+      setLocalSettings(enforcedSettings);
+      // After settings are applied, revert updateInterval to the original value
+      setUpdateInterval(interval);
+  
       setStatus('Settings updated');
     } catch (error) {
       console.error('Error updating settings:', error);
       setStatus('Error updating settings');
     }
   };
+  
 
   const sdrLimits = {
     hackrf: {

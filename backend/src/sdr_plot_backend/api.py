@@ -113,7 +113,7 @@ def generate_fft_data():
 
                 with data_lock:
                     fft_data['original_fft'] = downsampled_fft_avg.tolist()
-                    waterfall_buffer.append(downsample(downsampled_fft).tolist())
+                    waterfall_buffer.append(downsampled_fft.tolist())
                 
                 full_fft = []  # Clear the full FFT for the next sweep
             vars.sdr_settings[sdr_name].frequency = current_freq

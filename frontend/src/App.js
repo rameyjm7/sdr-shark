@@ -211,7 +211,7 @@ const sendMarkersToBackend = (verticalLines, horizontalLines) => {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <Box id="plotsContainer" sx={{ padding: 0, margin: 0, width: '100%', height: '100%' }}>
-        <Typography variant="h4" gutterBottom>SDR Plot Application</Typography>
+        <Typography variant="h4" gutterBottom>SDR Shark</Typography>
         <Tabs value={tabValue} onChange={handleTabChange} variant="scrollable" scrollButtons="auto">
           <Tab label="Plots" />
           <Tab label="Analysis" />

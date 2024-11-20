@@ -89,7 +89,7 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
         console.error('Error fetching data:', error);
       }
     };
-    const interval = setInterval(fetchData, updateInterval);
+    const interval = setInterval(fetchData, 500);
     return () => clearInterval(interval);
   }, [updateInterval, settings.frequency, settings.sampleRate]);
 
