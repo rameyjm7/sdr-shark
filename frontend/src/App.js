@@ -309,7 +309,10 @@ const App = () => {
                 Author: Jacob M. Ramey
               </Typography>
               <Typography variant="body1" style={{ marginBottom: '10px' }}>
-                Github: <a href="https://github.com/rameyjm7/SDR-Shark" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7/SDR-Shark</a>
+                Github Repo: <a href="https://github.com/rameyjm7/SDR-Shark" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7/SDR-Shark</a>
+              </Typography>
+              <Typography variant="body1" style={{ marginBottom: '10px' }}>
+                Github: <a href="https://github.com/rameyjm7" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7</a>
               </Typography>
               <Typography variant="body1" style={{ marginBottom: '10px' }}>
                 LinkedIn: <a href="https://www.linkedin.com/in/rameyjm/" target="_blank" rel="noopener noreferrer">https://www.linkedin.com/in/rameyjm/</a>
