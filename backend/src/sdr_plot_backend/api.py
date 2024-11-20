@@ -55,7 +55,7 @@ def process_fft(samples):
 
 def generate_fft_data():
     full_fft = []
-    sdr_name = "hackrf"
+    sdr_name = "sidekiq"
     current_freq = vars.sweep_settings['frequency_start']
     fft_max = None
     fft_persist_data = []

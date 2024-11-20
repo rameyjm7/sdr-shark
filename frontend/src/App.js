@@ -64,12 +64,13 @@ const App = () => {
     minPeakDistance: 0.1,
     numberOfPeaks: 5,
     showWaterfall: true,
+    waterfallSamples: 100,
+    updateInterval:500
   });
   const [showSecondTrace, setShowSecondTrace] = useState(false);
   const [minY, setMinY] = useState(-120);
   const [maxY, setMaxY] = useState(0);
-  const [updateInterval, setUpdateInterval] = useState(500);
-  const [waterfallSamples, setWaterfallSamples] = useState(100);
+  // const [waterfallSamples, setWaterfallSamples] = useState(100);
   const [showWaterfall, setShowWaterfall] = useState(true);
   const [tabValue, setTabValue] = useState(0);
   const [tasks, setTasks] = useState([]);
@@ -80,6 +81,16 @@ const App = () => {
   const [plotWidth, setPlotWidth] = useState(60); // Initial plot width in percentage
   const [verticalLines, setVerticalLines] = useState([]);  // State for vertical lines
   const [horizontalLines, setHorizontalLines] = useState([]);  // State for horizontal lines
+
+
+  const setUpdateInterval = (interval) => {
+    console.log('setting update interval');
+    setSettings(prevSettings => ({
+      ...prevSettings,
+      updateInterval: interval
+    }));
+  };
+
 
   const addVerticalLines = (frequency, bandwidth) => {
     if (typeof frequency == "string") {
@@ -265,8 +276,8 @@ const App = () => {
                 maxY={maxY}
                 setMinY={setMinY}
                 setMaxY={setMaxY}
-                updateInterval={updateInterval}
-                waterfallSamples={waterfallSamples}
+                // updateInterval={updateInterval}
+                // waterfallSamples={waterfallSamples}
                 showWaterfall={showWaterfall}
                 showSecondTrace={showSecondTrace}
                 plotWidth={plotWidth}
@@ -291,10 +302,10 @@ const App = () => {
               setMinY={setMinY}
               maxY={maxY}
               setMaxY={setMaxY}
-              updateInterval={updateInterval}
+              // updateInterval={updateInterval}
               setUpdateInterval={setUpdateInterval}
-              waterfallSamples={waterfallSamples}
-              setWaterfallSamples={setWaterfallSamples}
+              // waterfallSamples={waterfallSamples}
+              // setWaterfallSamples={setWaterfallSamples}
               showWaterfall={showWaterfall}
               setShowWaterfall={setShowWaterfall}
               addVerticalLines={addVerticalLines}

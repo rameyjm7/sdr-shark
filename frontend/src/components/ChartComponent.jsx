@@ -3,7 +3,7 @@ import axios from 'axios';
 import Plot from 'react-plotly.js';
 import '../App.css';
 
-const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY, updateInterval, waterfallSamples, showWaterfall, plotWidth, verticalLines, horizontalLines }) => {
+const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY, updateInterval, showWaterfall, plotWidth, verticalLines, horizontalLines }) => {
   const [fftData, setFftData] = useState([]);
   const [fftMaxData, setFftMaxData] = useState([]);
   const [persistanceData, setPersistanceData] = useState([]);
@@ -32,10 +32,6 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
   }, []);
 
   useEffect(() => {
-    console.log(`minY: ${minY}, maxY: ${maxY}`);
-  }, [minY, maxY]);
-
-  useEffect(() => {
     const fetchData = async () => {
       try {
         const response = await axios.get('/api/data');
@@ -47,10 +43,8 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
         const sanitizedWaterfallData = data.waterfall.map(row =>
           row.map(value => isNaN(value) ? -255 : value)
         );
-        setWaterfallData(sanitizedWaterfallData.slice(-waterfallSamples));
-
+        setWaterfallData(sanitizedWaterfallData.slice(-settings.waterfallSamples));
         setTime(data.time);
-
         if (data.settings.sweeping_enabled) {
           setSweepSettings({
             frequency_start: data.settings.sweep_settings.frequency_start,
@@ -68,10 +62,10 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
         console.error('Error fetching data:', error);
       }
     };
-
-    const interval = setInterval(fetchData, updateInterval);
+    console.log("fetching data every " + settings.updateInterval);
+    const interval = setInterval(fetchData, settings.updateInterval);
     return () => clearInterval(interval);
-  }, [updateInterval, waterfallSamples, setSweepSettings, settings.frequency, settings.sampleRate]);
+  }, [settings.updateInterval, settings.waterfallSamples, setSweepSettings, settings.frequency, settings.sampleRate]);
 
 
 
@@ -225,10 +219,6 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
     });
   }
 
-  useEffect(() => {
-    console.log(`Vertical lines to be added: ${JSON.stringify(verticalLines)}`);
-  }, [verticalLines]);
-
   // Initialize horizontalLineTraces before usage
   let horizontalLineTraces = [];
 
@@ -246,10 +236,6 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
       };
     });
   }
-
-  useEffect(() => {
-    console.log(`Horizontal lines to be added: ${JSON.stringify(horizontalLines)}`);
-  }, [horizontalLines]);
 
   // this is called when a selection is made, allowing us to get the coordinates and send it to the backend to extract that waterfall
   const handleRelayout = (eventData) => {

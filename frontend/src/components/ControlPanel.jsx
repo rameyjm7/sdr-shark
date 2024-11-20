@@ -1,16 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Select, MenuItem, IconButton, Tabs, Tab, Button, CircularProgress } from '@mui/material';
+import { Box, Typography, Select, MenuItem, IconButton, Tabs, Tab, Button, CircularProgress, Slider, FormControlLabel, Switch } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SaveIcon from '@mui/icons-material/Save';
 import axios from 'axios';
 import SDRSettings from './ControlPanel/SDRSettings';
 import PlotSettings from './ControlPanel/PlotSettings';
-import WaterfallSettings from './ControlPanel/WaterfallSettings';
 import Analysis from './Analysis';
 import Classifiers from './ControlPanel/Classifiers';
 import debounce from 'lodash/debounce';
 import '../App.css';
-
 const ControlPanel = ({
   settings,
   setSettings,
@@ -34,7 +32,6 @@ const ControlPanel = ({
   const [sdr, setSdr] = useState(settings.sdr || 'hackrf');
   const [status, setStatus] = useState('Ready');
   const [saving, setSaving] = useState(false);
-  const [localSettings, setLocalSettings] = useState(settings);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [tabIndex, setTabIndex] = useState(0);
 
@@ -43,10 +40,6 @@ const ControlPanel = ({
       fetchSettings();
     }
   }, [settingsLoaded]);
-
-  useEffect(() => {
-    updateSettings(localSettings);
-  }, [localSettings]);
 
   const fetchSettings = async () => {
     try {
@@ -60,13 +53,14 @@ const ControlPanel = ({
         ...data,
       }));
 
-      setLocalSettings(data);
+      setSettings(data);
       setUpdateInterval(data.updateInterval);
-      setWaterfallSamples(data.waterfallSamples);
       setMinY(minY);
       setMaxY(maxY);
       setStatus('Settings loaded');
       setSettingsLoaded(true);
+      setTimeout(fetchAndAdjustYAxis, 1000);
+
     } catch (error) {
       console.error('Error fetching settings:', error);
       setStatus('Error fetching settings');
@@ -97,7 +91,6 @@ const ControlPanel = ({
 
       const newMinY = noiseFloor - 30;
       const newMaxY = noiseFloor + 70;
-
       setMinY(newMinY);
       setMaxY(newMaxY);
     } catch (error) {
@@ -123,21 +116,21 @@ const ControlPanel = ({
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
     const newValue = type === 'checkbox' ? checked : parseFloat(value);
-    const newSettings = { ...localSettings, [name]: newValue };
-    setLocalSettings(newSettings);
+    const newSettings = { ...settings, [name]: newValue };
+    setSettings(newSettings);
   };
 
   const handleSliderChange = (e, value, name) => {
-    const newSettings = { ...localSettings, [name]: value };
-    setLocalSettings(newSettings);
-    if (name === 'averagingCount') {
-      debouncedApplySettings(newSettings);
-    }
+    const newSettings = { ...settings, [name]: value };
+    setSettings(newSettings);
+    // if (name === 'averagingCount') {
+    //   debouncedApplySettings(newSettings);
+    // }
   };
 
   const handleSliderChangeCommitted = (e, value, name) => {
     if (name === 'averagingCount') {
-      applySettings({ ...localSettings, [name]: value });
+      applySettings({ ...settings, [name]: value });
     }
   };
 
@@ -147,7 +140,7 @@ const ControlPanel = ({
 
   const handleKeyPress = (e) => {
     if (e.key === 'Enter') {
-      applySettings(localSettings);
+      applySettings(settings);
     }
   };
 
@@ -157,12 +150,12 @@ const ControlPanel = ({
     setStatus(`Changing SDR to ${newSdr}...`);
 
     const updatedSettings = {
-      ...localSettings,
+      ...settings,
       sdr: newSdr,
       showSecondTrace: newSdr === 'hackrf',
     };
     setSettings(updatedSettings);
-    setLocalSettings(updatedSettings);
+    setSettings(updatedSettings);
 
     axios.post('/api/select_sdr', { sdr_name: newSdr })
       .then(response => {
@@ -197,7 +190,7 @@ const ControlPanel = ({
     const enforcedSettings = enforceLimits(newSettings);
     setStatus('Updating settings...');
 
-    interval = settings.updateInterval;
+    const interval = settings.updateInterval;
     // Temporarily set updateInterval to 5000
     setUpdateInterval(5000);
 
@@ -208,7 +201,6 @@ const ControlPanel = ({
         },
       });
       setSettings(enforcedSettings);
-      setLocalSettings(enforcedSettings);
       // After settings are applied, revert updateInterval to the original value
       setUpdateInterval(interval);
 
@@ -254,7 +246,7 @@ const ControlPanel = ({
         <IconButton onClick={fetchSettings} sx={{ ml: 2 }}>
           <RefreshIcon />
         </IconButton>
-        <IconButton onClick={() => applySettings(localSettings)} sx={{ ml: 2 }}>
+        <IconButton onClick={() => applySettings(settings)} sx={{ ml: 2 }}>
           <SaveIcon />
         </IconButton>
       </Box>
@@ -274,7 +266,7 @@ const ControlPanel = ({
               <MenuItem value="sidekiq">Sidekiq</MenuItem>
             </Select>
             <SDRSettings
-              settings={localSettings}
+              settings={settings}
               handleChange={handleChange}
               handleKeyPress={handleKeyPress}
               setSettings={setSettings}
@@ -284,8 +276,9 @@ const ControlPanel = ({
         {tabIndex === 1 && (
           <>
             <PlotSettings
-              settings={localSettings}
-              setSettings={setLocalSettings}
+              settings={settings}
+              setSettings={setSettings}
+              setUpdateInterval={setUpdateInterval}
               handleSliderChange={handleSliderChange}
               handleSliderChangeCommitted={handleSliderChangeCommitted}
               handleChange={handleChange}
@@ -294,17 +287,59 @@ const ControlPanel = ({
               maxY={maxY}
               setMaxY={setMaxY}
             />
-            <WaterfallSettings
-              settings={localSettings}
+            {/* <WaterfallSettings
+              settings={settings}
+              setSettings={setSettings}
               showWaterfall={showWaterfall}
               setShowWaterfall={setShowWaterfall}
-            />
+            /> */}
+
+            <Box>
+              <Typography variant="h6" sx={{ mt: 2 }}>Waterfall Settings</Typography>
+
+              <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+
+                <Box sx={{ flex: 1, ml: 2 }}>
+                  <Typography gutterBottom>Waterfall Samples: {settings.waterfallSamples}</Typography>
+                  <Slider
+                    min={25}
+                    max={1000}
+                    value={settings.waterfallSamples}
+                    onChange={(e, value) => setSettings({ ...settings, waterfallSamples: value })}
+                    valueLabelDisplay="auto"
+                    step={25}
+                    marks={[
+                      { value: 25, label: '25' },
+                      { value: 500, label: '500' },
+                      { value: 1000, label: '1000' },
+                    ]}
+                  />
+                </Box>
+              </Box>
+
+              <FormControlLabel
+                control={
+                  <Switch
+                    checked={showWaterfall}
+                    onChange={() => {
+                      setSettings(!showWaterfall);
+                      const newSettings = { ...settings, showWaterfall: !showWaterfall };
+                      setSettings(newSettings);
+                    }}
+                    name="showWaterfall"
+                    color="primary"
+                  />
+                }
+                label="Enable Waterfall"
+              />
+            </Box>
+
           </>
         )}
         {tabIndex === 2 && (
           <Analysis
-            settings={localSettings}
-            setSettings={setLocalSettings}
+            settings={settings}
+            setSettings={setSettings}
             addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
             clearVerticalLines={clearVerticalLines}
             addHorizontalLines={addHorizontalLines}
@@ -313,8 +348,8 @@ const ControlPanel = ({
         )}
         {tabIndex === 3 && (
           <Classifiers
-            settings={localSettings}
-            setSettings={setLocalSettings}
+            settings={settings}
+            setSettings={setSettings}
             addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
             clearVerticalLines={clearVerticalLines}
             addHorizontalLines={addHorizontalLines}

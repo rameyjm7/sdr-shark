@@ -4,6 +4,7 @@ import { Box, Typography, Slider, FormControlLabel, Switch, Checkbox } from '@mu
 const PlotSettings = ({
   settings,
   setSettings,
+  setUpdateInterval,
   handleSliderChange,
   handleSliderChangeCommitted,
   handleChange,
@@ -109,6 +110,7 @@ const PlotSettings = ({
         label="Show Max Trace"
       />
 
+
       {/* Checkbox for enabling/disabling Persistance Trace */}
       <FormControlLabel
         control={
@@ -121,6 +123,31 @@ const PlotSettings = ({
         }
         label="Show Persistance Trace"
       />
+
+      <Box sx={{ flex: 1, mr: 2 }}>
+        <Typography gutterBottom>Update Interval (ms): {settings.updateInterval}</Typography>
+        <Slider
+          min={10}
+          max={1000}
+          value={settings.updateInterval}
+          onChange={(e, value) => {
+            setUpdateInterval(value); // Update the independent updateInterval state
+            setSettings((prevSettings) => ({
+              ...prevSettings,
+              updateInterval: value, // Update updateInterval in the settings state
+            }));
+            console.log("interval set to " + value);
+          }}
+          
+          valueLabelDisplay="auto"
+          step={10}
+          marks={[
+            { value: 10, label: '10 ms' },
+            { value: 500, label: '500 ms' },
+            { value: 1000, label: '1000 ms' },
+          ]}
+        />
+      </Box>
 
       {/* Y Axis Limits Sub-Panel */}
       <Box
@@ -178,6 +205,7 @@ const PlotSettings = ({
           </Box>
         </Box>
       </Box>
+
     </Box>
   );
 };
