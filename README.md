@@ -9,7 +9,7 @@ I will update the application to use some of these models and focus on performan
 
 For now,  An SDR is streamed from the backend (Python, SoapySDR) to the front end (React). 
 
-![image](https://github.com/user-attachments/assets/b45a225d-c29a-41cd-ac24-9e92aef3b219)
+![image](https://github.com/user-attachments/assets/7f075513-27fe-46db-9ee3-4bb546944a34)
 
 Analysis is currently done using Python, and decision trees are used to classify signal types based on characteristics such as center frequency and bandwidth.
 
