@@ -33,7 +33,7 @@ Peak annotations are available
 ![image](https://github.com/user-attachments/assets/1cc8edd8-28ef-4c25-acbe-3f888b2ae342)
 
 
-# How to install and run
+# How to install
 
 apt install python3-venv
 
@@ -46,14 +46,26 @@ source /home/eng/python/bin/activate
 
 pip install .
 
-#then for the backend, run
-
-python3 -m sdr_plot_backend
 
 #for the frontend, in a new terminal, go the frontend folder and run these command to install the dependencies and run the frontend
 
 yarn install
 
+# How to run
+
+Option 1 (Recommended for speed): Gunicorn using start.sh script
+
+From the repository root after installing the dependencies (backend and frontend), run ./start.sh to run the gunicorn server
+
+
+Option 2: If you want to make changes and develop
+
+# run the frontend from the frontend folder
 yarn start
+
+# run the backend using python3
+python3 -m sdr_plot_backend
+
+# Browse to the IP Address of your PC, port 3000. i.e. [http](http://10.139.1.86:3000/)
 
 
