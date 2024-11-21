@@ -184,8 +184,8 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     { field: 'avg_power', headerName: 'Power Avg. (dB)', width: 140 },
     { field: 'bandwidth', headerName: 'Bandwidth (MHz)', width: 140 },
     { field: 'classification', headerName: 'Classifications', width: 200 },
-    { field: 'freq_start', headerName: 'Frequency Start (MHz)', width: 180 },
-    { field: 'freq_end', headerName: 'Frequency End (MHz)', width: 180 },
+    // { field: 'freq_start', headerName: 'Frequency Start (MHz)', width: 180 },
+    // { field: 'freq_end', headerName: 'Frequency End (MHz)', width: 180 },
     {
       field: 'actions',
       headerName: 'Actions',
@@ -209,8 +209,8 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     avg_power: peak.avg_power !== undefined ? peak.avg_power.toFixed(3) : 'N/A',
     bandwidth: peak.bandwidth !== undefined ? peak.bandwidth.toFixed(3) : 'N/A',
     classification: peak.classification?.map(c => `${c.label} (${c.channel})`).join(', ') || 'N/A',
-    freq_start: peak.freq_start !== undefined ? peak.freq_start.toFixed(3) : 'N/A',
-    freq_end: peak.freq_end !== undefined ? peak.freq_end.toFixed(3) : 'N/A',
+    // freq_start: peak.freq_start !== undefined ? peak.freq_start.toFixed(3) : 'N/A',
+    // freq_end: peak.freq_end !== undefined ? peak.freq_end.toFixed(3) : 'N/A',
   }));
 
   useEffect(() => {
