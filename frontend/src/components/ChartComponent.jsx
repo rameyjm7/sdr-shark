@@ -127,16 +127,16 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
   };
 
   const generateAnnotations = (peaks, baseFreq, freqStep) => {
+    console.log(peaks);
     const startFreq = baseFreq;
     const endFreq = baseFreq + freqStep * (fftData.length - 1);
     if (!settings.peakDetection) return [];
-
     return peaks
-      .filter((peak) => peak.frequency >= startFreq && peak.frequency <= endFreq)
+      .filter((peak) => (peak.frequency*1e6) >= startFreq && (peak.frequency*1e6) <= endFreq)
       .map((peak) => {
         // Correct the frequency calculation here
-        const freq = startFreq + ((peak.frequency - startFreq) / freqStep) * freqStep;
-        const power = peak.power.toFixed(2);
+        const freq = startFreq + ((peak.frequency*1e6 - startFreq) / freqStep) * freqStep;
+        const power = peak.peak_power.toFixed(2);
         const powerColor = generateColor(power);
         return {
           x: freq.toFixed(2),
