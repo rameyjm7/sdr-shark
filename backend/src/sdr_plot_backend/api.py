@@ -171,7 +171,9 @@ def radio_scanner():
                 freq, fft_magnitude, noise_riding_threshold, signals, plot_ranges, freq_bound_left, freq_bound_right = processed_data
                 fft_data['original_fft2'] = fft_magnitude.tolist()  # Store the FFT data
                 fft_data['peaks'] = signals  # Store the detected peaks
-                waterfall_buffer2.append(downsample(np.array(fft_magnitude)).tolist())
+                if len(fft_magnitude) > 0:
+                    waterfall_buffer2.append(downsample(np.array(fft_magnitude)).tolist())
+                    
     
     detector.stop_receiving_data()
 

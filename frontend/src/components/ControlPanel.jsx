@@ -36,12 +36,37 @@ const ControlPanel = ({
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [tabIndex, setTabIndex] = useState(0);
   const [tasks, setTasks] = useState([]);
+  const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
 
   useEffect(() => {
     if (!settingsLoaded) {
       fetchSettings();
     }
   }, [settingsLoaded]);
+
+
+
+  // Function to delete a task
+  const deleteTask = (index) => {
+    const updatedTasks = tasks.filter((_, taskIndex) => taskIndex !== index);
+    setTasks(updatedTasks);
+
+    // Adjust currentTaskIndex if necessary
+    if (currentTaskIndex === index) {
+      setCurrentTaskIndex(null); // Reset currentTaskIndex if deleted
+    } else if (currentTaskIndex > index) {
+      setCurrentTaskIndex((prev) => prev - 1); // Adjust if a prior task was deleted
+    }
+  };
+
+  // Function to duplicate a task
+  const duplicateTask = (index) => {
+    const taskToDuplicate = tasks[index];
+    const duplicatedTask = { ...taskToDuplicate }; // Create a shallow copy
+    const updatedTasks = [...tasks];
+    updatedTasks.splice(index + 1, 0, duplicatedTask); // Insert duplicated task
+    setTasks(updatedTasks);
+  };
 
   const fetchSettings = async () => {
     try {
@@ -362,8 +387,12 @@ const ControlPanel = ({
           <Actions
             settings={settings}
             setSettings={setSettings}
+            deleteTask={deleteTask}
+            duplicateTask={duplicateTask}
+            currentTaskIndex={currentTaskIndex}
             tasks={tasks}
             setTasks={(newTasks) => {
+              console.log(newTasks);
               setTasks(newTasks);
 
               // Extract center frequency and bandwidth from the new tasks

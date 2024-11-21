@@ -4,66 +4,36 @@ import { Box, Typography, Button } from '@mui/material';
 import TaskForm from './sdr_scheduler/TaskForm';
 import TaskList from './sdr_scheduler/TaskList';
 
+const Actions = ({ tasks, setTasks, settings, setSettings, duplicateTask, deleteTask, currentTaskIndex }) => {
 
-const currentTaskIndex = 0;
+  // Function to add a new task
+  const handleAddTask = async (newTask) => {
+    try {
+      const response = await axios.post('/actions/tasks', newTask, {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      setTasks((prevTasks) => [...prevTasks, response.data]);
+    } catch (error) {
+      console.error('Error adding task:', error);
+    }
+  };
 
-const handleAddTask = async (newTask) => {
-  try {
-    const response = await axios.post('/actions/tasks', newTask, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-    setTasks([...tasks, response.data]);
-  } catch (error) {
-    console.error('Error adding task:', error);
-  }
-};
+  // Function to handle drag-and-drop reordering
+  const onDragEnd = (result) => {
+    if (!result.destination) return;
 
-    // Function to handle drag-and-drop reordering
-    const onDragEnd = (result) => {
-      if (!result.destination) return;
+    const reorderedTasks = Array.from(tasks);
+    const [removed] = reorderedTasks.splice(result.source.index, 1);
+    reorderedTasks.splice(result.destination.index, 0, removed);
 
-      const reorderedTasks = Array.from(tasks);
-      const [removed] = reorderedTasks.splice(result.source.index, 1);
-      reorderedTasks.splice(result.destination.index, 0, removed);
-
-      setTasks(reorderedTasks);
-    };
-
-
-
-    // Function to delete a task
-    const deleteTask = (index) => {
-      const updatedTasks = tasks.filter((_, taskIndex) => taskIndex !== index);
-      setTasks(updatedTasks);
-
-      // Adjust currentTaskIndex if necessary
-      if (currentTaskIndex === index) {
-        setCurrentTaskIndex(null); // Reset currentTaskIndex if deleted
-      } else if (currentTaskIndex > index) {
-        setCurrentTaskIndex((prev) => prev - 1); // Adjust if a prior task was deleted
-      }
-    };
+    setTasks(reorderedTasks);
+  };
 
 
-    
-    // Function to duplicate a task
-    const duplicateTask = (index) => {
-      const taskToDuplicate = tasks[index];
-      const duplicatedTask = { ...taskToDuplicate }; // Create a shallow copy
-      const updatedTasks = [...tasks];
-      updatedTasks.splice(index + 1, 0, duplicatedTask); // Insert duplicated task
-      setTasks(updatedTasks);
-    };
-
-
-const Actions = ({ tasks, setTasks, settings, setSettings }) => {
+  // Fetch tasks from the server
   useEffect(() => {
-
-
-
-
     const fetchTasks = async () => {
       try {
         const response = await axios.get('/actions/tasks');
@@ -74,7 +44,7 @@ const Actions = ({ tasks, setTasks, settings, setSettings }) => {
       }
     };
 
-    fetchTasks();
+    // fetchTasks();
   }, [setTasks]);
 
   const handleExecuteTasks = async () => {
@@ -90,7 +60,6 @@ const Actions = ({ tasks, setTasks, settings, setSettings }) => {
     }
     setSettings(settings);
   };
-
 
   return (
     <Box>
