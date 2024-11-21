@@ -60,12 +60,12 @@ From the repository root after installing the dependencies (backend and frontend
 
 Option 2: If you want to make changes and develop
 
-# run the frontend from the frontend folder
+#run the frontend from the frontend folder
 yarn start
 
-# run the backend using python3
+#run the backend using python3
 python3 -m sdr_plot_backend
 
-# Browse to the IP Address of your PC, port 3000. i.e. [http](http://10.139.1.86:3000/)
+Then, Browse to the IP Address of your PC, port 3000. i.e. [http](http://10.139.1.86:3000/)
 
 
