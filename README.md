@@ -53,12 +53,12 @@ yarn install
 
 # How to run
 
-Option 1 (Recommended for speed): Gunicorn using start.sh script
+**Option 1:** (Recommended for speed): Gunicorn using start.sh script
 
 From the repository root after installing the dependencies (backend and frontend), run ./start.sh to run the gunicorn server
 
 
-Option 2: If you want to make changes and develop
+**Option 2:** If you want to make changes and develop
 
 #run the frontend from the frontend folder
 yarn start
