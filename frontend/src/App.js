@@ -5,6 +5,7 @@ import { Typography, CssBaseline, Tabs, Tab, Box } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import Split from 'split.js';
 import ControlPanel from './components/ControlPanel';
+import Scanner from './components/Scanner';
 import Plots from './components/Plots';
 import axios from 'axios';
 import './App.css';
@@ -239,6 +240,7 @@ const App = () => {
             }}
           >
             <Tab label="Main" />
+            <Tab label="Scanner" />
             <Tab label="About" />
           </Tabs>
 
@@ -285,7 +287,7 @@ const App = () => {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center' }}>
             <TabPanel
               value={tabValue}
-              index={1}
+              index={2}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
@@ -325,6 +327,25 @@ const App = () => {
                 Copyright (c) 2024 Jacob M. Ramey
               </Typography>
             </TabPanel>
+
+            <TabPanel
+              value={tabValue}
+              index={1}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'flex-start', // Start content at the top
+                alignItems: 'stretch', // Stretch content to full width
+                height: '100%', // Occupy full height of the tab
+                width: '100%', // Occupy full width of the tab
+                padding: '0', // Remove extra padding
+                boxSizing: 'border-box',
+                overflow: 'hidden', // Prevent unwanted scrollbars
+              }}
+            >
+              <Scanner settings={settings} setSettings={setSettings} />
+            </TabPanel>
+
 
             </div>
           </Box>

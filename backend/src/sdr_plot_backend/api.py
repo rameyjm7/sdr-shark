@@ -90,8 +90,10 @@ def generate_fft_data():
 
         if vars.sweeping_enabled:
             # Perform sweeping logic
-            if not full_fft:
+            if full_fft is None:
                 full_fft = current_fft
+            elif type(full_fft) is list:
+                full_fft = np.concatenate((full_fft, current_fft))
             else:
                 full_fft = np.concatenate((full_fft, current_fft))
             
@@ -512,7 +514,6 @@ def cleanup():
     global running
     running = False
     vars.sdr0.stop()
-    vars.sdr1.stop()
     fft_thread.join()
     scanner_thread.join()
 
