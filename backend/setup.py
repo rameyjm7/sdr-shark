@@ -11,7 +11,7 @@ setup(
     install_requires=[
         "flask",
         "numpy",
-        "pyhackrf",
+        "websocket-client",
         "requests",
         "bluetooth_demod",
     ],

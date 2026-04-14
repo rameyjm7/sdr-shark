@@ -30,13 +30,20 @@ const ControlPanel = ({
   handleSaveSelection,
   verticalLines, // Add this prop to receive vertical lines
 }) => {
+  const toFinite = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
   const [sdr, setSdr] = useState(settings.sdr || 'hackrf');
+  const [availableSdrs, setAvailableSdrs] = useState([]);
   const [status, setStatus] = useState('Ready');
   const [saving, setSaving] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [tabIndex, setTabIndex] = useState(0);
   const [tasks, setTasks] = useState([]);
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
+  const selectedDevice = availableSdrs.find((d) => d.id === sdr) || null;
 
   useEffect(() => {
     if (!settingsLoaded) {
@@ -44,6 +51,24 @@ const ControlPanel = ({
     }
   }, [settingsLoaded]);
 
+  const fetchDevices = async () => {
+    try {
+      const response = await axios.get('/api/sdr_devices');
+      const payload = response.data || {};
+      const devices = Array.isArray(payload.devices) ? payload.devices : [];
+      setAvailableSdrs(devices);
+      if (payload.selected) {
+        setSdr(payload.selected);
+      } else if (devices.length > 0) {
+        setSdr(devices[0].id);
+      }
+      return { devices, selected: payload.selected };
+    } catch (error) {
+      console.error('Error fetching SDR devices:', error);
+      setAvailableSdrs([]);
+      return { devices: [], selected: null };
+    }
+  };
 
 
   // Function to delete a task
@@ -70,20 +95,29 @@ const ControlPanel = ({
 
   const fetchSettings = async () => {
     try {
+      const { devices, selected } = await fetchDevices();
       const response = await axios.get('/api/get_settings');
       const data = response.data;
-      setSdr(data.sdr);
+      const selectedSdr = selected || data.sdr || (devices[0] && devices[0].id) || 'hackrf';
+      setSdr(selectedSdr);
 
-      setSettings((prevSettings) => ({
-        ...prevSettings,
-        showSecondTrace: data.sdr === 'hackrf',
+      const sanitized = {
         ...data,
-      }));
+        sdr: selectedSdr,
+        frequency: toFinite(data.frequency, 751),
+        gain: toFinite(data.gain, 10),
+        sampleRate: toFinite(data.sampleRate, 20),
+        bandwidth: toFinite(data.bandwidth, 20),
+        frequency_start: toFinite(data.frequency_start, 700),
+        frequency_stop: toFinite(data.frequency_stop, 820),
+        updateInterval: toFinite(data.updateInterval, 500),
+        showSecondTrace: data.sdr === 'hackrf',
+        dcSuppress: typeof data.dcSuppress === 'boolean' ? data.dcSuppress : true,
+        sweeping_enabled: typeof data.sweeping_enabled === 'boolean' ? data.sweeping_enabled : false,
+      };
 
-      setSettings(data);
-      setUpdateInterval(data.updateInterval);
-      setMinY(minY);
-      setMaxY(maxY);
+      setSettings((prevSettings) => ({ ...prevSettings, ...sanitized }));
+      setUpdateInterval(sanitized.updateInterval);
       setStatus('Settings loaded');
       setSettingsLoaded(true);
       setTimeout(fetchAndAdjustYAxis, 1000);
@@ -142,13 +176,16 @@ const ControlPanel = ({
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    const newValue = type === 'checkbox' ? checked : parseFloat(value);
+    const parsed = parseFloat(value);
+    const newValue = type === 'checkbox' ? checked : (Number.isFinite(parsed) ? parsed : settings[name]);
     const newSettings = { ...settings, [name]: newValue };
     setSettings(newSettings);
   };
 
   const handleSliderChange = (e, value, name) => {
-    const newSettings = { ...settings, [name]: value };
+    const sliderValue = Array.isArray(value) ? value[0] : value;
+    const safeValue = Number.isFinite(sliderValue) ? sliderValue : settings[name];
+    const newSettings = { ...settings, [name]: safeValue };
     setSettings(newSettings);
     // if (name === 'averagingCount') {
     //   debouncedApplySettings(newSettings);
@@ -185,7 +222,6 @@ const ControlPanel = ({
 
     axios.post('/api/select_sdr', { sdr_name: newSdr })
       .then(response => {
-        console.log('SDR changed:', response.data);
         applySettings(updatedSettings);
         setStatus(`SDR changed to ${newSdr}`);
       })
@@ -197,17 +233,22 @@ const ControlPanel = ({
 
   const enforceLimits = (settings) => {
     const newSettings = { ...settings };
-    const limitKeys = ['frequency', 'gain', 'sampleRate', 'bandwidth'];
+    const device = availableSdrs.find((d) => d.id === sdr);
+    const freqMinMHz = device ? Number(device.freq_min_hz) / 1e6 : 1;
+    const freqMaxMHz = device ? Number(device.freq_max_hz) / 1e6 : 6000;
+    const srMaxMHz = device ? Number(device.max_sample_rate_sps) / 1e6 : 20;
 
-    limitKeys.forEach((key) => {
-      const limit = sdrLimits[sdr][key];
-      if (newSettings[key] < limit.min) {
-        newSettings[key] = limit.min;
-      }
-      if (newSettings[key] > limit.max) {
-        newSettings[key] = limit.max;
-      }
-    });
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+    newSettings.frequency = clamp(toFinite(newSettings.frequency, freqMinMHz), freqMinMHz, freqMaxMHz);
+    newSettings.gain = clamp(toFinite(newSettings.gain, 10), 0, 62);
+    newSettings.sampleRate = clamp(toFinite(newSettings.sampleRate, srMaxMHz), 0.25, srMaxMHz);
+    newSettings.bandwidth = clamp(toFinite(newSettings.bandwidth, newSettings.sampleRate), 0.2, srMaxMHz);
+    newSettings.frequency_start = clamp(toFinite(newSettings.frequency_start, freqMinMHz), freqMinMHz, freqMaxMHz);
+    newSettings.frequency_stop = clamp(toFinite(newSettings.frequency_stop, freqMaxMHz), freqMinMHz, freqMaxMHz);
+    if (newSettings.frequency_stop < newSettings.frequency_start) {
+      newSettings.frequency_stop = newSettings.frequency_start;
+    }
 
     return newSettings;
   };
@@ -234,22 +275,6 @@ const ControlPanel = ({
     } catch (error) {
       console.error('Error updating settings:', error);
       setStatus('Error updating settings');
-    }
-  };
-
-
-  const sdrLimits = {
-    hackrf: {
-      frequency: { min: 0, max: 7250 },
-      gain: { min: 0, max: 61 },
-      sampleRate: { min: 0, max: 20 },
-      bandwidth: { min: 0, max: 20 },
-    },
-    sidekiq: {
-      frequency: { min: 46.875, max: 6000 },
-      gain: { min: 0, max: 76 },
-      sampleRate: { min: 0.233, max: 61.233 },
-      bandwidth: { min: 0.233, max: 61.233 },
     }
   };
 
@@ -288,12 +313,16 @@ const ControlPanel = ({
           <>
             <Typography variant="h6">SDR Settings</Typography>
             <Typography variant="body1">Select SDR:</Typography>
-            <Select value={sdr} onChange={handleSdrChange} fullWidth>
-              <MenuItem value="hackrf">HackRF</MenuItem>
-              <MenuItem value="sidekiq">Sidekiq</MenuItem>
+            <Select value={sdr || ''} onChange={handleSdrChange} fullWidth disabled={availableSdrs.length === 0}>
+              {availableSdrs.map((device) => (
+                <MenuItem key={device.id} value={device.id}>
+                  {device.label || device.id}
+                </MenuItem>
+              ))}
             </Select>
             <SDRSettings
               settings={settings}
+              selectedDevice={selectedDevice}
               handleChange={handleChange}
               handleKeyPress={handleKeyPress}
               setSettings={setSettings}
@@ -392,7 +421,6 @@ const ControlPanel = ({
             currentTaskIndex={currentTaskIndex}
             tasks={tasks}
             setTasks={(newTasks) => {
-              console.log(newTasks);
               setTasks(newTasks);
 
               // Extract center frequency and bandwidth from the new tasks
@@ -410,7 +438,6 @@ const ControlPanel = ({
                   setSettings(newSettings);
 
                   // Optionally log the update for debugging
-                  console.log("Updated settings with task values:", newSettings);
                 }
               }
             }}

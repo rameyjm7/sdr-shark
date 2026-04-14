@@ -4,7 +4,7 @@ import pytest
 
 def test_find_peaks():
     import numpy as np
-    from sdrfly.sdr.sdr_generic import SDRGeneric
+    from sdr_plot_backend.sdr_generic import SDRGeneric
     from sdr_plot_backend.signal_utils import perform_and_refine_scan  # Import the function
     # Constants
     center_freq = 102e6  # Center frequency in Hz

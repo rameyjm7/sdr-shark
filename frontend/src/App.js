@@ -39,10 +39,10 @@ function TabPanel(props) {
       id={`tabpanel-${index}`}
       aria-labelledby={`tab-${index}`}
       {...other}
-      style={{ height: '100%' }} // Ensure the TabPanel takes up the full height
+      style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}
     >
       {value === index && (
-        <Box sx={{ p: 3, height: '100%' }}>
+        <Box sx={{ p: 1, height: '100%', minHeight: 0, overflow: 'hidden' }}>
           {children}
         </Box>
       )}
@@ -81,7 +81,6 @@ const App = () => {
 
 
   const setUpdateInterval = (interval) => {
-    console.log('setting update interval');
     setSettings(prevSettings => ({
       ...prevSettings,
       updateInterval: interval
@@ -121,7 +120,6 @@ const App = () => {
   };
 
   const clearVerticalLines = () => {
-    console.log('Clearing vertical lines');
     setVerticalLines((prevLines) => []);
     sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
   };
@@ -137,11 +135,9 @@ const App = () => {
       { power: power, label: `${power.toFixed(2)} dB` },
     ]);
     sendMarkersToBackend(verticalLines, horizontalLines); // Send to backend
-    console.log(`Horizontal line added at ${power} dB`);
   };
 
   const clearHorizontalLines = () => {
-    console.log('Clearing horizontal lines');
     setHorizontalLines((prevLines) => []);
     sendMarkersToBackend(verticalLines, []); // Send to backend
   };
@@ -157,7 +153,6 @@ const App = () => {
     // Make a POST request to the backend
     axios.post('/api/signal_detection', markerData)
       .then(response => {
-        console.log('Markers sent to backend:', response.data);
       })
       .catch(error => {
         console.error('Error sending markers to backend:', error);
@@ -170,7 +165,6 @@ const App = () => {
 
   const handleAnalyze = (file) => {
     const relativePath = currentPath + file.name;
-    console.log(`Analyzing file: ${relativePath}`);
 
     axios.get(`/api/file_manager/files/metadata`, {
       params: {
@@ -218,7 +212,18 @@ const App = () => {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Box id="plotsContainer" sx={{ padding: 0, margin: 0, width: '100%', height: '100%' }}>
+      <Box
+        id="plotsContainer"
+        sx={{
+          p: 0,
+          m: 0,
+          width: '100%',
+          height: '100vh',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
 
         <Box
           sx={{
@@ -264,8 +269,18 @@ const App = () => {
         </Box>
 
 
-        <Box sx={{ display: 'flex', height: 'calc(100% - 100px)' }}>
-          <Box id="leftPanel" sx={{ paddingRight: '10px', borderRight: '2px solid #444', height: '100%', flex: '0 1 auto' }}>
+        <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <Box
+            id="leftPanel"
+            sx={{
+              pr: '10px',
+              borderRight: '2px solid #444',
+              height: '100%',
+              minHeight: 0,
+              overflow: 'hidden',
+              flex: '0 1 auto',
+            }}
+          >
             <TabPanel value={tabValue} index={0}>
               <Plots
                 settings={settings}
@@ -284,7 +299,7 @@ const App = () => {
                 horizontalLines={horizontalLines}
               />
             </TabPanel>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', textAlign: 'center' }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 0, textAlign: 'center', overflow: 'hidden' }}>
             <TabPanel
               value={tabValue}
               index={2}
@@ -347,9 +362,20 @@ const App = () => {
             </TabPanel>
 
 
-            </div>
+            </Box>
           </Box>
-          <Box id="rightPanel" sx={{ paddingLeft: '10px', height: '100%', flex: '0 1 auto' }}>
+          <Box
+            id="rightPanel"
+            sx={{
+              pl: '10px',
+              height: '100%',
+              minHeight: 0,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              flex: '0 1 auto',
+            }}
+          >
             <ControlPanel
               settings={settings}
               setSettings={setSettings}

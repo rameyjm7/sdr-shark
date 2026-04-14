@@ -4,6 +4,11 @@ import Plot from 'react-plotly.js';
 import '../App.css';
 
 const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY, updateInterval, showWaterfall, plotWidth, verticalLines, horizontalLines }) => {
+  const toFinite = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
   const [fftData, setFftData] = useState([]);
   const [fftMaxData, setFftMaxData] = useState([]);
   const [persistanceData, setPersistanceData] = useState([]);
@@ -43,8 +48,10 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
         const sanitizedWaterfallData = data.waterfall.map(row =>
           row.map(value => isNaN(value) ? -255 : value)
         );
-        setWaterfallData(sanitizedWaterfallData.slice(-settings.waterfallSamples));
+        const safeWaterfallSamples = Math.max(1, toFinite(settings.waterfallSamples, 100));
+        setWaterfallData(sanitizedWaterfallData.slice(-safeWaterfallSamples));
         setTime(data.time);
+        setPeaks(Array.isArray(data.peaks) ? data.peaks : []);
         if (data.settings.sweeping_enabled) {
           setSweepSettings({
             frequency_start: data.settings.sweep_settings.frequency_start,
@@ -62,8 +69,8 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
         console.error('Error fetching data:', error);
       }
     };
-    console.log("fetching data every " + settings.updateInterval);
-    const interval = setInterval(fetchData, settings.updateInterval);
+    const safeInterval = Math.max(50, toFinite(settings.updateInterval, 500));
+    const interval = setInterval(fetchData, safeInterval);
     return () => clearInterval(interval);
   }, [settings.updateInterval, settings.waterfallSamples, setSweepSettings, settings.frequency, settings.sampleRate]);
 
@@ -78,7 +85,7 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
         const sanitizedMaxFftData = data.max.map(value => isNaN(value) ? -255 : value);
         setFftMaxData(sanitizedMaxFftData);
         const sanitizedPersistanceData = data.persistance.map(value => isNaN(value) ? -255 : value);
-        setPersistanceData(data.persistance);
+        setPersistanceData(sanitizedPersistanceData);
       } catch (error) {
         console.error('Error fetching data:', error);
       }
@@ -86,25 +93,6 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
     const interval = setInterval(fetchData, 500);
     return () => clearInterval(interval);
   }, [updateInterval, settings.frequency, settings.sampleRate]);
-
-  useEffect(() => {
-    const fetchPeaks = async () => {
-      try {
-        const response = await axios.get('/api/analytics', {
-          params: {
-            min_peak_distance: settings.minPeakDistance * 1e3, // Convert to Hz
-            number_of_peaks: settings.numberOfPeaks,
-          }
-        });
-        setPeaks(response.data.peaks);
-      } catch (error) {
-        console.error('Error fetching peaks:', error);
-      }
-    };
-
-    const interval = setInterval(fetchPeaks, 500);
-    return () => clearInterval(interval);
-  }, [settings.minPeakDistance, settings.numberOfPeaks]);
 
   const generateColor = (value) => {
     if (value >= 0) {
@@ -127,7 +115,6 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
   };
 
   const generateAnnotations = (peaks, baseFreq, freqStep) => {
-    console.log(peaks);
     const startFreq = baseFreq;
     const endFreq = baseFreq + freqStep * (fftData.length - 1);
     if (!settings.peakDetection) return [];
@@ -157,10 +144,24 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
       });
   };
 
+  const safeFrequencyMHz = toFinite(settings.frequency, 751);
+  const safeSampleRateMHz = Math.max(0.1, toFinite(settings.sampleRate, 20));
+  const safeSweepStartMHz = toFinite(sweepSettings.frequency_start, safeFrequencyMHz - safeSampleRateMHz / 2);
+  const safeSweepStopMHz = toFinite(sweepSettings.frequency_stop, safeFrequencyMHz + safeSampleRateMHz / 2);
+  const safeBandwidthHz = Math.max(
+    1,
+    toFinite(
+      sweepSettings.sweeping_enabled
+        ? (safeSweepStopMHz - safeSweepStartMHz) * 1e6
+        : safeSampleRateMHz * 1e6,
+      safeSampleRateMHz * 1e6,
+    ),
+  );
+  const safeBins = Math.max(1, fftData.length);
   const baseFreq = sweepSettings.sweeping_enabled
-    ? sweepSettings.frequency_start
-    : (settings.frequency - settings.sampleRate / 2) * 1e6;
-  const freqStep = (sweepSettings.sweeping_enabled ? sweepSettings.bandwidth : settings.sampleRate * 1e6) / fftData.length;
+    ? safeSweepStartMHz * 1e6
+    : (safeFrequencyMHz - safeSampleRateMHz / 2) * 1e6;
+  const freqStep = safeBandwidthHz / safeBins;
   const peakAnnotations = generateAnnotations(peaks, baseFreq, freqStep);
 
   const generateTickValsAndLabels = (startFreq, stopFreq) => {
@@ -181,12 +182,12 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
   };
 
   const { tickVals, tickText } = generateTickValsAndLabels(
-    sweepSettings.sweeping_enabled ? sweepSettings.frequency_start : (settings.frequency - settings.sampleRate / 2) * 1e6,
-    sweepSettings.sweeping_enabled ? sweepSettings.frequency_stop : (settings.frequency + settings.sampleRate / 2) * 1e6
+    baseFreq,
+    baseFreq + Math.max(1, freqStep * Math.max(1, safeBins - 1)),
   );
 
   // Ensure tick values are within a valid range
-  const isValidTickVals = tickVals.every(val => val >= 1e6 && val <= 1e10); // Adjust range as necessary
+  const isValidTickVals = tickVals.every((val) => Number.isFinite(val) && val >= 1e6 && val <= 1e10);
 
   if (isValidTickVals) {
     if (
@@ -196,25 +197,25 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
       prevTickValsRef.current = tickVals;
       prevTickTextRef.current = tickText;
     }
-  } else {
-    // Log an error message if the tick values are out of range
-    console.error("Tick values out of range:", tickVals);
   }
 
   // Initialize verticalLineTraces before usage
   let verticalLineTraces = [];
 
   if (verticalLines && verticalLines.length > 0) {
-    verticalLineTraces = verticalLines.map(({ frequency }) => {
+    verticalLineTraces = verticalLines
+      .filter(({ frequency }) => Number.isFinite(Number(frequency)))
+      .map(({ frequency }) => {
+      const f = Number(frequency);
       const lineColor = 'rgb(255, 0, 0)'; // Red color for vertical lines
       return {
-        x: [frequency * 1e6, frequency * 1e6], // Fixed frequency for both x points
+        x: [f * 1e6, f * 1e6], // Fixed frequency for both x points
         y: [minY, maxY],           // Span the full y-axis range
         type: 'scatter',
         mode: 'lines',
         line: { color: lineColor, width: 2 },
         hoverinfo: 'x',             // Show frequency on hover
-        name: `${frequency.toFixed(2)} MHz`, // Label for the legend
+        name: `${f.toFixed(2)} MHz`, // Label for the legend
       };
     });
   }
@@ -223,16 +224,19 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
   let horizontalLineTraces = [];
 
   if (horizontalLines && horizontalLines.length > 0) {
-    horizontalLineTraces = horizontalLines.map(({ power }) => {
+    horizontalLineTraces = horizontalLines
+      .filter(({ power }) => Number.isFinite(Number(power)))
+      .map(({ power }) => {
+      const p = Number(power);
       const lineColor = 'rgb(255, 0, 0)'; // Red color for horizontal lines
       return {
         x: [baseFreq, baseFreq + freqStep * (fftData.length - 1)], // Span the entire frequency range
-        y: [power, power],           // Fixed power level for both y points
+        y: [p, p],           // Fixed power level for both y points
         type: 'scatter',
         mode: 'lines',
         line: { color: lineColor, width: 2 },
         hoverinfo: 'y',             // Show power on hover
-        name: `${power.toFixed(2)} dB`, // Label for the legend
+        name: `${p.toFixed(2)} dB`, // Label for the legend
       };
     });
   }
@@ -248,10 +252,6 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
       const yStart = eventData['yaxis.range[0]'];
       const yEnd = eventData['yaxis.range[1]'];
 
-      console.log(`Box selection coordinates: 
-            xStart: ${xStart}, xEnd: ${xEnd}, 
-            yStart: ${yStart}, yEnd: ${yEnd}`);
-      console.log(settings);
       // Assuming frequency and sampleRate are part of your SDR settings
       const frequency = settings.frequency; // Adjust based on your actual settings object structure
       const sampleRate = settings.sampleRate; // Adjust based on your actual settings object structure
@@ -275,8 +275,6 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
       })
         .then(response => response.json())
         .then(data => {
-          console.log('Initial save success:', data);
-
           // After the initial save, prompt the user to confirm or change the filename
           const userFilename = prompt('Enter filename (leave blank to keep default):', coordinates.filename);
 
@@ -295,9 +293,7 @@ const ChartComponent = ({ settings, sweepSettings, setSweepSettings, minY, maxY,
               body: JSON.stringify(renameData),
             })
               .then(response => response.json())
-              .then(renameData => {
-                console.log('Rename success:', renameData);
-              })
+              .then(() => {})
               .catch((error) => {
                 console.error('Rename error:', error);
               });

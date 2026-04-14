@@ -13,11 +13,15 @@ const PlotSettings = ({
   setMinY,
   setMaxY,
 }) => {
-  const averagingCount = settings.averagingCount || 10;
-  const numTicks = settings.numTicks || 5;
-  const dcSuppress = settings.dcSuppress || false;
-  const showMaxTrace = settings.showMaxTrace || false;
-  const showPersistanceTrace = settings.showPersistanceTrace || false; // Corrected the spelling
+  const toFinite = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const averagingCount = toFinite(settings.averagingCount, 10);
+  const numTicks = toFinite(settings.numTicks, 5);
+  const dcSuppress = typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : false;
+  const showMaxTrace = typeof settings.showMaxTrace === 'boolean' ? settings.showMaxTrace : false;
+  const showPersistanceTrace = typeof settings.showPersistanceTrace === 'boolean' ? settings.showPersistanceTrace : false;
 
   const [lockYAxisRange, setLockYAxisRange] = useState(true); // Locked by default
 
@@ -36,7 +40,6 @@ const PlotSettings = ({
   };
 
   const handleCheckboxChange = (e) => {
-    console.log(e.target.name);
     setSettings(prevSettings => ({
       ...prevSettings,
       [e.target.name]: e.target.checked,
@@ -125,18 +128,19 @@ const PlotSettings = ({
       />
 
       <Box sx={{ flex: 1, mr: 2 }}>
-        <Typography gutterBottom>Update Interval (ms): {settings.updateInterval}</Typography>
+        <Typography gutterBottom>Update Interval (ms): {toFinite(settings.updateInterval, 500)}</Typography>
         <Slider
           min={10}
           max={1000}
-          value={settings.updateInterval}
+          value={toFinite(settings.updateInterval, 500)}
           onChange={(e, value) => {
+            const safeValue = Array.isArray(value) ? value[0] : value;
+            if (!Number.isFinite(safeValue)) return;
             setUpdateInterval(value); // Update the independent updateInterval state
             setSettings((prevSettings) => ({
               ...prevSettings,
-              updateInterval: value, // Update updateInterval in the settings state
+              updateInterval: safeValue, // Update updateInterval in the settings state
             }));
-            console.log("interval set to " + value);
           }}
           
           valueLabelDisplay="auto"

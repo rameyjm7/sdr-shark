@@ -30,6 +30,19 @@ fft_data = {
 }
 running = True
 
+
+def _to_builtin(value):
+    """Convert NumPy containers/scalars into JSON-serializable Python types."""
+    if isinstance(value, dict):
+        return {k: _to_builtin(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, deque)):
+        return [_to_builtin(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
 @jit(nopython=True)
 def downsample(data, target_length=256):
     step = len(data) / target_length
@@ -50,7 +63,8 @@ def capture_samples():
 
 def process_fft(samples):
     fft_result = np.fft.fftshift(np.fft.fft(samples))
-    fft_magnitude = 20 * np.log10(np.abs(fft_result))
+    # Add epsilon to avoid log10(0) warnings on silent bins.
+    fft_magnitude = 20 * np.log10(np.abs(fft_result) + 1e-12)
     return fft_magnitude
 
 def generate_fft_data():
@@ -291,7 +305,7 @@ def get_analytics():
 
         payload['peaks'] = peaks_response
     
-    return jsonify(payload)
+    return jsonify(_to_builtin(payload))
 
 
 @api_blueprint.route('/api/signal_detection', methods=['POST'])
@@ -452,10 +466,20 @@ def select_sdr():
     result = vars.reselect_radio(sdr_name)
     return jsonify({'status': 'success', 'result': result})
 
+
+@api_blueprint.route('/api/sdr_devices', methods=['GET'])
+def get_sdr_devices():
+    try:
+        devices = vars.sdr0.list_devices()
+        selected = vars.sdr0.device_id
+        return jsonify(_to_builtin({'devices': devices, 'selected': selected}))
+    except Exception as e:
+        return jsonify({'devices': [], 'selected': None, 'error': str(e)}), 200
+
 @api_blueprint.route('/api/get_settings', methods=['GET'])
 def get_settings():
     settings = {
-        'sdr': vars.radio_name,
+        'sdr': vars.sdr0.device_id or vars.radio_name,
         'frequency': vars.sdr_frequency() / 1e6,  # Convert to MHz
         'gain': vars.sdr_gain(),
         'sampleRate': vars.sdr_sampleRate() / 1e6,  # Convert to MHz
@@ -476,14 +500,14 @@ def get_settings():
         'lockBandwidthSampleRate': vars.lockBandwidthSampleRate,
         'signal_stats' : vars.signal_stats
     }
-    return jsonify(settings)
+    return jsonify(_to_builtin(settings))
 
 @api_blueprint.route('/api/update_settings', methods=['POST'])
 def update_settings():
     try:
         settings = request.json
         if settings['frequency'] == 0 or  settings['frequency'] is None or  settings['sampleRate'] is None or settings['bandwidth'] is None:
-            return jsonify({'success': True, 'settings': settings})
+            return jsonify(_to_builtin({'success': True, 'settings': settings}))
         new_settings = settings.copy()
         # Update vars with the new settings and save them
         new_settings['frequency'] = settings['frequency'] * 1e6
@@ -494,7 +518,7 @@ def update_settings():
         vars.apply_settings(new_settings)
         vars.save_settings()
 
-        return jsonify({'success': True, 'settings': settings})
+        return jsonify(_to_builtin({'success': True, 'settings': settings}))
     except Exception as e:
         print(e)
         return jsonify({'success': False, 'error': str(e)})
@@ -513,9 +537,16 @@ def stop_sweep():
 def cleanup():
     global running
     running = False
-    vars.sdr0.stop()
-    fft_thread.join()
-    scanner_thread.join()
+    try:
+        vars.sdr0.stop()
+    except Exception:
+        pass
+    for thread in (fft_thread, scanner_thread):
+        try:
+            if thread.is_alive():
+                thread.join(timeout=2)
+        except BaseException:
+            pass
 
 
 @api_blueprint.route('/api/move', methods=['POST'])

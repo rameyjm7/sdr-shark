@@ -16,7 +16,7 @@ name = "hatch_pth"
 dependencies = [
     "flask",
     "numpy",
-    "pyhackrf",
+    "websocket-client",
     "requests",
     "bluetooth_demod",
 ]

@@ -49,9 +49,7 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
 
   const updateSettings = async (newSettings) => {
     try {
-      console.log('Updating settings:', newSettings);
       await axios.post('/api/update_settings', newSettings);
-      console.log('Settings updated successfully!');
     } catch (error) {
       console.error('Error updating settings:', error);
     }
@@ -82,7 +80,6 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
           const newSettings = { ...settings, frequency: parseFloat(frequency) };
           setSettings(newSettings);
           updateSettings(newSettings).then(() => {
-            console.log(`Successfully tuned to ${frequency} MHz`);
           });
         } else {
           console.warn('Could not find frequency for the selected item.');
@@ -113,7 +110,6 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
           };
           setSettings(newSettings);
           updateSettings(newSettings).then(() => {
-            console.log(`Successfully tuned to ${frequency} MHz and set bandwidth to ${bandwidth} MHz`);
           });
         } else {
           console.warn('Could not find frequency or bandwidth for the selected item.');
@@ -134,12 +130,8 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
 
       const frequency = classification.frequency;
       const bandwidth = classification.bandwidth;
-      console.log(classification);
-      console.log(frequency);
-      console.log(bandwidth);
       if (frequency && bandwidth) {
         addVerticalLines(frequency, bandwidth);  // Call the function with frequency and bandwidth
-        console.log(`Vertical lines added at ${frequency} MHz ± ${bandwidth / 2} MHz`);
       } else {
         console.warn('No frequency or bandwidth found for the selected item.');
       }
@@ -151,10 +143,8 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     if (typeof value === 'number') {
       if (key.toLowerCase().includes('freq')) {
         addVerticalLines(value, 0.001);
-        console.log(`Vertical line added at: ${value} MHz`);
       } else {
         addHorizontalLines(value);
-        console.log(`Horizontal line added at: ${value} dB`);
       }
     } else {
       console.warn('Cannot add a line for a non-numeric value.');
@@ -165,7 +155,6 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     const noiseFloor = signalStats.noise_floor;
     if (noiseFloor !== undefined) {
       addHorizontalLines(noiseFloor);  // Call the function with noise floor value
-      console.log(`Horizontal line added at noise floor level: ${noiseFloor} dB`);
     } else {
       console.warn('Noise floor value is not available.');
     }
@@ -173,7 +162,6 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
   // Function to handle adding markers
   const handleAddMarkers = (frequency, bandwidth) => {
     // Logic to add vertical markers on the plot
-    console.log(`Adding markers at frequency: ${frequency} MHz and bandwidth: ${bandwidth} MHz`);
     addVerticalLines(frequency, bandwidth);
     // You can add your actual plotting logic here
   };

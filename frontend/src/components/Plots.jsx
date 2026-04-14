@@ -13,14 +13,6 @@ const Plots = ({ settings, updateInterval, showSecondTrace, showWaterfall, minY,
   });
 
   useEffect(() => {
-    console.log('Plots.js: horizontalLines passed to Plots:', horizontalLines);
-  }, [horizontalLines]);
-
-  useEffect(() => {
-    console.log('Plots.js: verticalLines passed to Plots:', verticalLines);
-  }, [verticalLines]);
-
-  useEffect(() => {
     fetchInitialSettings();
     const interval = setInterval(fetchSettings, 5000);
     return () => clearInterval(interval);
@@ -56,37 +48,6 @@ const Plots = ({ settings, updateInterval, showSecondTrace, showWaterfall, minY,
       console.error('Error fetching settings:', error);
     }
   };
-
-  const updateSettings = async (newSettings) => {
-    try {
-      await axios.post('/api/update_settings', newSettings);
-    } catch (error) {
-      console.error('Error updating settings:', error);
-    }
-  };
-
-
-  // Handle adding horizontal lines
-  useEffect(() => {
-    if (addHorizontalLines) {
-      addHorizontalLines((power) => {
-        addHorizontalLines((prevLines) => [...prevLines, { power: power }]);
-        console.log(`Horizontal lines added at ${power} dB`);
-      });
-    }
-  }, [addHorizontalLines]);
-
-  // Handle adding vertical lines
-  useEffect(() => {
-    if (addVerticalLines) {
-      addVerticalLines((frequency, bandwidth) => {
-        const lowerBound = frequency - bandwidth / 2;
-        const upperBound = frequency + bandwidth / 2;
-        setVerticalLines((prevLines) => [...prevLines, { frequency: lowerBound }, { frequency: upperBound }]);
-        console.log(`Vertical lines added at ${frequency} MHz ± ${bandwidth / 2} MHz`);
-      });
-    }
-  }, [addVerticalLines]);
 
   return (
     <div className="plots_container">
