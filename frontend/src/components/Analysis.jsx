@@ -124,6 +124,8 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
 
   const peakColumns = [
     { field: 'frequency', headerName: 'Frequency (MHz)', width: 180 },
+    { field: 'seen_count', headerName: 'Seen', width: 82 },
+    { field: 'age_seconds', headerName: 'Age (s)', width: 90 },
     { field: 'peak_power', headerName: 'Power Peak (dB)', width: 140 },
     { field: 'avg_power', headerName: 'Power Avg. (dB)', width: 140 },
     { field: 'bandwidth', headerName: 'Bandwidth (MHz)', width: 140 },
@@ -164,6 +166,8 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
   const peakRows = peaks.map((peak, index) => ({
     id: index,
     frequency: peak.frequency !== undefined ? peak.frequency.toFixed(3) : 'N/A',
+    seen_count: Number.isFinite(Number(peak.seen_count)) ? Number(peak.seen_count) : 1,
+    age_seconds: Number.isFinite(Number(peak.age_seconds)) ? Number(peak.age_seconds).toFixed(1) : '0.0',
     peak_power: peak.peak_power !== undefined ? peak.peak_power.toFixed(3) : 'N/A',
     avg_power: peak.avg_power !== undefined ? peak.avg_power.toFixed(3) : 'N/A',
     bandwidth: peak.bandwidth !== undefined ? peak.bandwidth.toFixed(5) : 'N/A',
@@ -208,7 +212,18 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
 
   useEffect(() => {
     if (settings.peakDetection === undefined) {
-      const newSettings = { ...settings, peakDetection: true };
+      const newSettings = {
+        ...settings,
+        peakDetection: true,
+      };
+      setSettings(newSettings);
+      updateSettings(newSettings);
+    }
+  }, [settings, setSettings]);
+
+  useEffect(() => {
+    if (!Number.isFinite(Number(settings.analysisRetentionSec))) {
+      const newSettings = { ...settings, analysisRetentionSec: 10 };
       setSettings(newSettings);
       updateSettings(newSettings);
     }
@@ -228,7 +243,7 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
         <Box
           sx={{
             display: 'grid',
-            gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: '220px minmax(250px, 1fr) minmax(250px, 1fr) 240px' },
+            gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: '220px minmax(220px, 1fr) minmax(220px, 1fr) minmax(220px, 1fr) 240px' },
             gap: 0.9,
             alignItems: 'center',
           }}
@@ -285,6 +300,27 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
                 { value: 0, label: '0' },
                 { value: 25, label: '25' },
                 { value: 50, label: '50' }
+              ]}
+              sx={{ mt: 0, mb: 0, maxWidth: 320, mx: 'auto' }}
+            />
+          </Box>
+
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ mb: 0.2, textAlign: 'center' }}>
+              Drop-off (s): {Number(settings.analysisRetentionSec ?? 10).toFixed(1)}
+            </Typography>
+            <Slider
+              size="small"
+              min={1}
+              max={60}
+              value={Number(settings.analysisRetentionSec ?? 10)}
+              onChange={(e, value) => handleSliderChange(e, value, 'analysisRetentionSec')}
+              valueLabelDisplay="auto"
+              step={1}
+              marks={[
+                { value: 1, label: '1' },
+                { value: 10, label: '10' },
+                { value: 60, label: '60' }
               ]}
               sx={{ mt: 0, mb: 0, maxWidth: 320, mx: 'auto' }}
             />

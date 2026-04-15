@@ -65,6 +65,7 @@ class sdr_scheduler_config:
         self.showMaxTrace = True
         self.showPeristanceTrace = True
         self.minPeakDistance = 0.1 # MHz
+        self.analysis_retention_sec = 10.0
         self.recordings_dir = os.getenv(
             "SDR_SHARK_RECORDINGS_DIR",
             os.path.join(self.app_root, "datascience", "recordings"),
@@ -190,6 +191,7 @@ class sdr_scheduler_config:
             "recordings_dir": self.recordings_dir,
             "lockBandwidthSampleRate": self.lockBandwidthSampleRate,
             "minPeakDistance": self.minPeakDistance,
+            "analysisRetentionSec": self.analysis_retention_sec,
             "radio_name": self.radio_name,
             "showFirstTrace": self.showFirstTrace,
             "showSecondTrace": self.showSecondTrace,
@@ -225,6 +227,7 @@ class sdr_scheduler_config:
             self.showMaxTrace = settings.get("showMaxTrace", self.showMaxTrace)
             self.showPeristanceTrace = settings.get("showPeristanceTrace", self.showPeristanceTrace)
             self.minPeakDistance = settings.get("minPeakDistance", self.minPeakDistance)
+            self.analysis_retention_sec = float(settings.get("analysisRetentionSec", self.analysis_retention_sec))
             self.radio_name = settings.get("radio_name", self.radio_name)
 
             # Validate the settings after applying them
@@ -295,6 +298,7 @@ class sdr_scheduler_config:
             "showSecondTrace": True,
             "showMaxTrace": True,
             "showPeristanceTrace": True,
+            "analysisRetentionSec": 10.0,
         }
 
 # Instantiate the configuration

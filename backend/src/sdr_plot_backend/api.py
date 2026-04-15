@@ -35,6 +35,14 @@ main_fft_updated_at = 0.0
 scanner_fft_updated_at = 0.0
 main_frame_seq = 0
 scanner_frame_seq = 0
+analysis_peak_memory = {}
+analysis_memory_lock = threading.Lock()
+
+
+def _quantize_mhz(value, step_mhz=0.05):
+    n = float(value)
+    step = max(0.001, float(step_mhz))
+    return round(round(n / step) * step, 3)
 
 def _safe_int(value, default, min_value=None, max_value=None):
     try:
@@ -344,16 +352,36 @@ def get_data():
         waterfall_rows = []
     waterfall_response = [[float(y) for y in x] for x in waterfall_rows]
         
-    # Dynamically add an index or remove if not needed
-    peaks_response = [{
-        'index': idx,  # Dynamically generate index
-        'frequency': float(peak['center_freq']),
-        'avg_power': float(peak['avg_power']),
-        'peak_power': float(peak['peak_power']),
-        'start_freq': float(peak['start_freq']),
-        'end_freq': float(peak['end_freq']),
-        'bandwidth': float(peak.get('bandwidth', 0.0))  # Handle missing 'bandwidth' key
-    } for idx, peak in enumerate(peaks_snapshot)]
+    center_freq_mhz = float(vars.sdr_frequency() / 1e6)
+    peaks_response = []
+    for idx, peak in enumerate(peaks_snapshot):
+        rel_center = float(peak['center_freq'])
+        rel_start = float(peak['start_freq'])
+        rel_end = float(peak['end_freq'])
+        bw_mhz = float(peak.get('bandwidth', 0.0))
+        abs_center = center_freq_mhz + rel_center
+        abs_start = center_freq_mhz + rel_start
+        abs_end = center_freq_mhz + rel_end
+        classifications = vars.classifier.classify_signal(abs_center, bw_mhz)
+
+        peaks_response.append({
+            'index': idx,
+            # Keep legacy relative fields for existing plots.
+            'frequency': rel_center,
+            'start_freq': rel_start,
+            'end_freq': rel_end,
+            # Add absolute MHz fields for detection/classification.
+            'absolute_frequency': abs_center,
+            'absolute_start_freq': abs_start,
+            'absolute_end_freq': abs_end,
+            'avg_power': float(peak['avg_power']),
+            'peak_power': float(peak['peak_power']),
+            'bandwidth': bw_mhz,
+            'classification': [
+                {'label': c.get('label', 'Unknown'), 'channel': c.get('channel', 'N/A')}
+                for c in classifications
+            ],
+        })
 
 
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -404,8 +432,11 @@ def get_analytics():
         
         # Use the processed peaks data from radio_scanner
         peaks_data = list(fft_data['peaks'])  # Retrieve peaks data
-        peaks_response = []
+    peaks_response = []
+    now = time.time()
+    retention_sec = max(1.0, float(getattr(vars, "analysis_retention_sec", 10.0)))
 
+    with analysis_memory_lock:
         for peak in peaks_data:
             freq = round(float(peak['center_freq'] + vars.sdr_frequency()/1e6), num_digits)
             freq_start = round(float(peak['start_freq'] + vars.sdr_frequency()/1e6), num_digits)
@@ -414,12 +445,25 @@ def get_analytics():
             bandwidth = round(float(peak.get('bandwidth', 0.0)), num_digits)
             avg_power = float(peak.get('avg_power', 0.0))
 
-            # Classify the signal
             classifications = vars.classifier.classify_signal(freq, bandwidth)
             classifications_list = [{"label": c['label'], "channel": c.get('channel', 'N/A')} for c in classifications]
+            primary_label = classifications_list[0]["label"] if classifications_list else "N/A"
+            key = (
+                _quantize_mhz(freq, step_mhz=0.05),
+                _quantize_mhz(max(0.0, bandwidth), step_mhz=0.05),
+                primary_label,
+            )
 
-            peaks_response.append({
-                'peak': f'Peak {peaks_data.index(peak) + 1}',
+            previous = analysis_peak_memory.get(key)
+            if previous is None or (now - float(previous.get("last_seen_ts", 0.0))) > retention_sec:
+                seen_count = 1
+                first_seen_ts = now
+            else:
+                seen_count = int(previous.get("seen_count", 0)) + 1
+                first_seen_ts = float(previous.get("first_seen_ts", now))
+
+            analysis_peak_memory[key] = {
+                'peak': f'Peak {len(analysis_peak_memory) + 1}',
                 'frequency': freq,
                 'freq_start': freq_start,
                 'freq_end': freq_end,
@@ -427,9 +471,26 @@ def get_analytics():
                 'avg_power': avg_power,
                 'bandwidth': bandwidth,
                 'classification': classifications_list,
-            })
+                'seen_count': seen_count,
+                'first_seen_ts': first_seen_ts,
+                'last_seen_ts': now,
+            }
 
-        payload['peaks'] = peaks_response
+        expired_keys = []
+        for key, row in analysis_peak_memory.items():
+            age_seconds = now - float(row.get("last_seen_ts", 0.0))
+            if age_seconds > retention_sec:
+                expired_keys.append(key)
+                continue
+            out = dict(row)
+            out['age_seconds'] = round(age_seconds, 2)
+            peaks_response.append(out)
+
+        for key in expired_keys:
+            analysis_peak_memory.pop(key, None)
+
+    peaks_response.sort(key=lambda x: float(x.get('frequency', 0.0)))
+    payload['peaks'] = peaks_response
     
     return jsonify(_to_builtin(payload))
 
@@ -625,6 +686,7 @@ def get_settings():
         'showMaxTrace': vars.showMaxTrace,
         'showPeristanceTrace': vars.showPeristanceTrace,
         'lockBandwidthSampleRate': vars.lockBandwidthSampleRate,
+        'analysisRetentionSec': float(getattr(vars, "analysis_retention_sec", 10.0)),
         'signal_stats' : vars.signal_stats
     }
     return jsonify(_to_builtin(settings))
