@@ -1,21 +1,42 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import Box from '@mui/material/Box';
-import { RichTreeView } from '@mui/x-tree-view/RichTreeView';
 import { DataGrid } from '@mui/x-data-grid';
-import { FormControlLabel, Slider, Switch, Typography, Menu, MenuItem, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button } from '@mui/material';
+import { FormControlLabel, Slider, Switch, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button } from '@mui/material';
+
+const FoldableSection = ({ title, defaultOpen = true, children }) => (
+  <Box
+    sx={{
+      border: '1px solid #2c2c2c',
+      borderRadius: 1,
+      mb: 1.25,
+      backgroundColor: '#0b0b0b',
+      overflow: 'hidden',
+    }}
+  >
+    <details open={defaultOpen} style={{ width: '100%' }}>
+      <summary
+        style={{
+          cursor: 'pointer',
+          listStyle: 'none',
+          padding: '10px 12px',
+          borderBottom: '1px solid #242424',
+          fontWeight: 600,
+          fontSize: '1.05rem',
+          userSelect: 'none',
+        }}
+      >
+        {title}
+      </summary>
+      <Box sx={{ p: 1.25 }}>{children}</Box>
+    </details>
+  </Box>
+);
 
 const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines, addHorizontalLines, clearHorizontalLines }) => {
   const [peaks, setPeaks] = useState([]);
   const [generalClassifications, setGeneralClassifications] = useState([]);
-  const [contextMenu, setContextMenu] = useState(null);
-  const [lastSelectedItem, setLastSelectedItem] = useState(null);
   const [signalStats, setSignalStats] = useState({ noise_floor: -255 });
-  const [markers, setMarkers] = useState({ verticalLines: [], horizontalLines: [] }); // State to store markers
-
-  const updateMarkers = (markerData) => {
-    setMarkers(markerData);
-  };
   const convertToHz = (valueInMHz) => valueInMHz * 1e6;
   const convertToMHz = (valueInHz) => valueInHz / 1e6;
 
@@ -55,88 +76,26 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     }
   };
 
-  const handleContextMenu = (event, item) => {
-    event.preventDefault();
-    setContextMenu(
-      contextMenu === null
-        ? { mouseX: event.clientX - 2, mouseY: event.clientY - 4 }
-        : null,
-    );
-  };
+  const handleTuneToClassification = async (classification, includeBandwidth = false) => {
+    const freq = Number(classification?.frequency);
+    if (!Number.isFinite(freq)) return;
+    const bw = Number(classification?.bandwidth);
 
-  const handleMenuClose = () => {
-    setContextMenu(null);
-  };
-
-  const handleTuneToFreq = () => {
-    if (lastSelectedItem) {
-      const [groupIndex, itemIndex] = lastSelectedItem.split('-').slice(1).map(Number);
-      const classification = generalClassifications[groupIndex];
-
-      if (classification) {
-        const frequency = classification.frequency;
-        if (frequency) {
-          const frequencyInHz = convertToHz(frequency);
-          const newSettings = { ...settings, frequency: parseFloat(frequency) };
-          setSettings(newSettings);
-          updateSettings(newSettings).then(() => {
-          });
-        } else {
-          console.warn('Could not find frequency for the selected item.');
-        }
-      } else {
-        console.warn('Could not find the selected item in generalClassifications.');
-      }
-    } else {
-      console.warn('No item selected for tuning.');
+    const newSettings = { ...settings, frequency: freq };
+    if (includeBandwidth && Number.isFinite(bw) && bw > 0) {
+      newSettings.sampleRate = bw;
+      newSettings.bandwidth = bw;
     }
-    handleMenuClose();
+    setSettings(newSettings);
+    await updateSettings(newSettings);
   };
 
-  const handleTuneToFreqBandwidth = () => {
-    if (lastSelectedItem) {
-      const [groupIndex, itemIndex] = lastSelectedItem.split('-').slice(1).map(Number);
-      const classification = generalClassifications[groupIndex];
-
-      if (classification) {
-        const frequency = classification.frequency;
-        const bandwidth = classification.bandwidth;
-        if (frequency && bandwidth) {
-          const newSettings = {
-            ...settings,
-            frequency: parseFloat(frequency),
-            sampleRate: parseFloat(bandwidth),
-            bandwidth: parseFloat(bandwidth)
-          };
-          setSettings(newSettings);
-          updateSettings(newSettings).then(() => {
-          });
-        } else {
-          console.warn('Could not find frequency or bandwidth for the selected item.');
-        }
-      } else {
-        console.warn('Could not find the selected item in generalClassifications.');
-      }
-    } else {
-      console.warn('No item selected for tuning.');
+  const handleMarkClassificationBounds = (classification) => {
+    const freq = Number(classification?.frequency);
+    const bw = Number(classification?.bandwidth);
+    if (Number.isFinite(freq) && Number.isFinite(bw) && bw > 0) {
+      addVerticalLines(freq, bw);
     }
-    handleMenuClose();
-  };
-
-  const handleAddVerticalLines = () => {
-    if (lastSelectedItem) {
-      const [groupIndex, itemIndex] = lastSelectedItem.split('-').slice(1).map(Number);
-      const classification = generalClassifications[groupIndex];
-
-      const frequency = classification.frequency;
-      const bandwidth = classification.bandwidth;
-      if (frequency && bandwidth) {
-        addVerticalLines(frequency, bandwidth);  // Call the function with frequency and bandwidth
-      } else {
-        console.warn('No frequency or bandwidth found for the selected item.');
-      }
-    }
-    handleMenuClose();
   };
 
   const handleAddLine = (key, value) => {
@@ -159,11 +118,8 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
       console.warn('Noise floor value is not available.');
     }
   };
-  // Function to handle adding markers
   const handleAddMarkers = (frequency, bandwidth) => {
-    // Logic to add vertical markers on the plot
     addVerticalLines(frequency, bandwidth);
-    // You can add your actual plotting logic here
   };
 
   const peakColumns = [
@@ -171,20 +127,35 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     { field: 'peak_power', headerName: 'Power Peak (dB)', width: 140 },
     { field: 'avg_power', headerName: 'Power Avg. (dB)', width: 140 },
     { field: 'bandwidth', headerName: 'Bandwidth (MHz)', width: 140 },
-    { field: 'classification', headerName: 'Classifications', width: 200 },
+    {
+      field: 'classification',
+      headerName: 'Classifications',
+      flex: 1,
+      minWidth: 180,
+      renderCell: (params) => (
+        <Typography variant="caption" noWrap title={params.value}>
+          {params.value}
+        </Typography>
+      ),
+    },
     // { field: 'freq_start', headerName: 'Frequency Start (MHz)', width: 180 },
     // { field: 'freq_end', headerName: 'Frequency End (MHz)', width: 180 },
     {
       field: 'actions',
-      headerName: 'Actions',
-      width: 150,
+      headerName: 'Action',
+      width: 104,
+      sortable: false,
+      filterable: false,
+      disableColumnMenu: true,
       renderCell: (params) => (
         <Button
+          size="small"
           variant="contained"
           color="primary"
           onClick={() => handleAddMarkers(params.row.frequency, params.row.bandwidth)}
+          sx={{ minWidth: 0, px: 0.9, py: 0.45, fontSize: '0.68rem', lineHeight: 1, whiteSpace: 'nowrap' }}
         >
-          Add Markers
+          ADD
         </Button>
       ),
     },
@@ -195,11 +166,25 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     frequency: peak.frequency !== undefined ? peak.frequency.toFixed(3) : 'N/A',
     peak_power: peak.peak_power !== undefined ? peak.peak_power.toFixed(3) : 'N/A',
     avg_power: peak.avg_power !== undefined ? peak.avg_power.toFixed(3) : 'N/A',
-    bandwidth: peak.bandwidth !== undefined ? peak.bandwidth.toFixed(3) : 'N/A',
+    bandwidth: peak.bandwidth !== undefined ? peak.bandwidth.toFixed(5) : 'N/A',
     classification: peak.classification?.map(c => `${c.label} (${c.channel})`).join(', ') || 'N/A',
     // freq_start: peak.freq_start !== undefined ? peak.freq_start.toFixed(3) : 'N/A',
     // freq_end: peak.freq_end !== undefined ? peak.freq_end.toFixed(3) : 'N/A',
   }));
+
+  const statEntries = Object.entries(signalStats || {});
+  const compactStatEntries = statEntries.filter(([key, value]) => {
+    if (key.toLowerCase().includes('error')) return false;
+    if (typeof value === 'string' && value.length > 120) return false;
+    return true;
+  });
+
+  const formatStatValue = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return Number(value.toFixed(5));
+    }
+    return value;
+  };
 
   useEffect(() => {
     const fetchAnalytics = async () => {
@@ -229,7 +214,6 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     }
   }, [settings, setSettings]);
 
-  // Group classifications by label
   const groupedClassifications = generalClassifications.reduce((acc, classification) => {
     if (!acc[classification.label]) {
       acc[classification.label] = [];
@@ -238,219 +222,213 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
     return acc;
   }, {});
 
-  // Convert grouped classifications to TreeViewBaseItem[]
-  const classificationItems = Object.entries(groupedClassifications).reduce((acc, [label, classifications], groupIndex) => {
-    const groupId = `group-${groupIndex}`;
-    const groupItem = {
-      id: groupId,
-      label: label,
-      children: classifications.map((classification, index) => {
-        // Sequentially define the item ID
-        const itemId = `item-${acc.nextId}`;
-        acc.nextId += 1;  // Increment the ID for the next item
-
-        // Build the label dynamically based on available fields
-        const labelParts = [];
-        if (classification.channel !== undefined) {
-          labelParts.push(`Channel: ${classification.channel}`);
-        }
-        if (classification.frequency !== undefined) {
-          labelParts.push(`Frequency: ${classification.frequency} MHz`);
-        }
-        if (classification.bandwidth !== undefined) {
-          labelParts.push(`Bandwidth: ${classification.bandwidth} MHz`);
-        }
-        if (classification.metadata !== undefined) {
-          labelParts.push(`Metadata: ${classification.metadata}`);
-        }
-
-        return {
-          id: itemId,
-          label: labelParts.join(', '),  // Join the parts with a comma
-        };
-      }),
-    };
-    acc.items.push(groupItem);
-    return acc;
-  }, { nextId: 0, items: [] }).items;
-
-  const handleItemSelectionToggle = (event, itemId, isSelected) => {
-    if (isSelected) {
-      setLastSelectedItem(itemId);
-    }
-  };
-
   return (
-    <Box>
-      <Box display="flex" flexDirection="column" alignItems="center">
-        <FormControlLabel
-          control={
-            <Switch
-              checked={settings.peakDetection ?? false} // Ensure this is always defined
-              onChange={handleChange}
-              name="peakDetection"
-              color="primary"
+    <Box sx={{ height: '100%', overflowY: 'auto', pr: 1 }}>
+      <FoldableSection title="Peak + Marker Controls" defaultOpen>
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', md: '1fr 1fr', xl: '220px minmax(250px, 1fr) minmax(250px, 1fr) 240px' },
+            gap: 0.9,
+            alignItems: 'center',
+          }}
+        >
+          <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={settings.peakDetection ?? false}
+                  onChange={handleChange}
+                  name="peakDetection"
+                  color="primary"
+                />
+              }
+              label="Annotate Peaks"
+              sx={{ m: 0 }}
             />
-          }
-          label="Annotate Peaks"
-        />
-        <>
-          <Box display="flex" justifyContent="space-between" width="100%">
-            <Box flex={1} mx={1}>
-              <Typography gutterBottom>Min Distance Between Peaks (MHz): {settings.minPeakDistance}</Typography>
-              <Slider
-                min={0.01}
-                max={1.0}
-                value={settings.minPeakDistance}
-                onChange={(e, value) => handleSliderChange(e, value, 'minPeakDistance')}
-                valueLabelDisplay="auto"
-                step={0.01}
-                marks={[
-                  { value: 0.01, label: '0.01 MHz' },
-                  { value: 0.5, label: '0.5 MHz' },
-                  { value: 1.0, label: '1 MHz' }
-                ]}
-              />
-            </Box>
-            <Box flex={1} mx={1}>
-              <Typography gutterBottom>Noise offset Peak Threshold (dB): {settings.peakThreshold}</Typography>
-              <Slider
-                min={0}
-                max={50}
-                value={settings.peakThreshold}
-                onChange={(e, value) => handleSliderChange(e, value, 'peakThreshold')}
-                valueLabelDisplay="auto"
-                step={1}
-                marks={[
-                  { value: 0, label: '0 dB' },
-                  { value: 25, label: '25 dB' },
-                  { value: 50, label: '50 dB' }
-                ]}
-              />
-            </Box>
           </Box>
-        </>
-      </Box>
-      <Box sx={{ height: 400, width: '100%', mt: 2 }}>
-        <Typography variant="h6" gutterBottom>Detected Peaks</Typography>
-        <DataGrid
-          rows={peakRows}
-          columns={peakColumns}
-          pageSize={5}
-        />
-      </Box>
-      <Box sx={{ mt: 4 }}>
-        <Typography variant="h6" gutterBottom>Signal Statistics</Typography>
-        <TableContainer component={Paper} style={{ maxWidth: '600px', margin: '0 auto' }}>
-          <Table aria-label="simple table" style={{ width: 'auto', tableLayout: 'auto' }}>
-            <TableHead>
-              <TableRow>
-                <TableCell style={{ padding: '8px 12px' }}>Statistic</TableCell>
-                <TableCell align="right" style={{ padding: '8px 12px' }}>Value</TableCell>
-                <TableCell align="right" style={{ padding: '8px 12px' }}>Action</TableCell> {/* New column for the button */}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {Object.entries(signalStats).map(([key, value]) => {
-                // Capitalize each word in the key
-                const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
 
-                // Add (MHz) if the key contains 'freq'
-                const formattedLabel = key.includes('freq')
-                  ? `${formattedKey} (MHz)`
-                  : key.includes('power') || key.includes('max') || key.includes('noise')
-                    ? `${formattedKey} (dB)`
-                    : formattedKey;
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ mb: 0.2, textAlign: 'center' }}>
+              Min Distance (MHz): {settings.minPeakDistance}
+            </Typography>
+            <Slider
+              size="small"
+              min={0.01}
+              max={1.0}
+              value={settings.minPeakDistance}
+              onChange={(e, value) => handleSliderChange(e, value, 'minPeakDistance')}
+              valueLabelDisplay="auto"
+              step={0.01}
+              marks={[
+                { value: 0.01, label: '0.01' },
+                { value: 0.5, label: '0.5' },
+                { value: 1.0, label: '1.0' }
+              ]}
+              sx={{ mt: 0, mb: 0, maxWidth: 320, mx: 'auto' }}
+            />
+          </Box>
 
-                return (
-                  <TableRow key={key}>
-                    <TableCell component="th" scope="row" style={{ padding: '8px 12px' }}>
-                      {formattedLabel}
-                    </TableCell>
-                    <TableCell align="right" style={{ padding: '8px 12px' }}>
-                      {value}
-                    </TableCell>
-                    <TableCell align="right" style={{ padding: '8px 12px' }}>
-                      {typeof value === 'number' && (
-                        <Button
-                          variant="contained"
-                          color="primary"
-                          onClick={() => handleAddLine(key, value)}
-                          style={{ padding: '4px 8px', fontSize: '0.75rem', minWidth: 'auto' }}
-                        >
-                          Add Line
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>
-        <Box sx={{ mt: 4 }}>
-          <Typography variant="h6" gutterBottom>Markers</Typography>
-          <Box display="flex" justifyContent="center" sx={{ mt: 2 }}>
-            <Button variant="contained" color="secondary" onClick={clearVerticalLines}>
-              Clear Vertical Markers
+          <Box sx={{ minWidth: 0 }}>
+            <Typography sx={{ mb: 0.2, textAlign: 'center' }}>
+              Noise Offset (dB): {settings.peakThreshold}
+            </Typography>
+            <Slider
+              size="small"
+              min={0}
+              max={50}
+              value={settings.peakThreshold}
+              onChange={(e, value) => handleSliderChange(e, value, 'peakThreshold')}
+              valueLabelDisplay="auto"
+              step={1}
+              marks={[
+                { value: 0, label: '0' },
+                { value: 25, label: '25' },
+                { value: 50, label: '50' }
+              ]}
+              sx={{ mt: 0, mb: 0, maxWidth: 320, mx: 'auto' }}
+            />
+          </Box>
+
+          <Box sx={{ display: 'flex', gap: 0.6, justifyContent: { xs: 'flex-start', xl: 'center' }, flexWrap: 'wrap' }}>
+            <Button size="small" variant="contained" color="secondary" onClick={clearVerticalLines} sx={{ minWidth: 0, px: 1.1 }}>
+              Clear Vertical
             </Button>
-            <Button variant="contained" color="secondary" onClick={clearHorizontalLines}>
-              Clear Horizontal Markers
+            <Button size="small" variant="contained" color="secondary" onClick={clearHorizontalLines} sx={{ minWidth: 0, px: 1.1 }}>
+              Clear Horizontal
             </Button>
           </Box>
-          {/* New section to display markers */}
-          <TableContainer component={Paper} sx={{ mt: 2 }}>
-            <Table aria-label="Markers Table">
-              <TableHead>
-                <TableRow>
-                  <TableCell>Marker Type</TableCell>
-                  <TableCell align="right">Value</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {markers.verticalLines.map((line, index) => (
-                  <TableRow key={`vertical-${index}`}>
-                    <TableCell component="th" scope="row">
-                      Vertical Marker
-                    </TableCell>
-                    <TableCell align="right">{line.label}</TableCell>
+        </Box>
+      </FoldableSection>
+
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', xl: 'minmax(0, 1.8fr) minmax(320px, 1fr)' },
+          gap: 1.5,
+          alignItems: 'start',
+        }}
+      >
+        <Box>
+          <FoldableSection title="Detected Peaks" defaultOpen>
+            <Box sx={{ width: '100%' }}>
+              <DataGrid
+                rows={peakRows}
+                columns={peakColumns}
+                pageSize={5}
+                autoHeight
+                rowHeight={36}
+                columnHeaderHeight={40}
+                density="compact"
+                disableRowSelectionOnClick
+                sx={{
+                  '& .MuiDataGrid-columnHeaderTitle': { fontSize: '0.86rem' },
+                  '& .MuiDataGrid-cell': { fontSize: '0.83rem' },
+                  '& .MuiDataGrid-cell:focus, & .MuiDataGrid-columnHeader:focus': { outline: 'none' },
+                }}
+              />
+            </Box>
+          </FoldableSection>
+        </Box>
+
+        <Box>
+          <FoldableSection title="Signal Statistics" defaultOpen>
+            <TableContainer component={Paper} sx={{ maxWidth: 460 }}>
+              <Table aria-label="signal statistics table">
+                <TableHead>
+                  <TableRow>
+                    <TableCell style={{ padding: '8px 12px' }}>Statistic</TableCell>
+                    <TableCell align="right" style={{ padding: '8px 12px' }}>Value</TableCell>
+                    <TableCell align="right" style={{ padding: '8px 12px' }}>Action</TableCell>
                   </TableRow>
-                ))}
-                {markers.horizontalLines.map((line, index) => (
-                  <TableRow key={`horizontal-${index}`}>
-                    <TableCell component="th" scope="row">
-                      Horizontal Marker
-                    </TableCell>
-                    <TableCell align="right">{line.label}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
+                </TableHead>
+                <TableBody>
+                  {compactStatEntries.map(([key, value]) => {
+                    const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, char => char.toUpperCase());
+                    const formattedLabel = key.includes('freq')
+                      ? `${formattedKey} (MHz)`
+                      : key.includes('power') || key.includes('max') || key.includes('noise')
+                        ? `${formattedKey} (dB)`
+                        : formattedKey;
+
+                    return (
+                      <TableRow key={key}>
+                        <TableCell component="th" scope="row" style={{ padding: '8px 12px' }}>
+                          {formattedLabel}
+                        </TableCell>
+                        <TableCell align="right" style={{ padding: '8px 12px' }}>
+                          {formatStatValue(value)}
+                        </TableCell>
+                        <TableCell align="right" style={{ padding: '8px 12px' }}>
+                          {typeof value === 'number' && (
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="primary"
+                              onClick={() => handleAddLine(key, value)}
+                              style={{ padding: '4px 8px', fontSize: '0.75rem', minWidth: 'auto' }}
+                            >
+                              Add Line
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </FoldableSection>
         </Box>
       </Box>
-      <Box sx={{ mt: 4 }}>
-        <Typography variant="h6" gutterBottom>General Classifications</Typography>
-        <RichTreeView
-          items={classificationItems}
-          onItemSelectionToggle={handleItemSelectionToggle}
-          onContextMenu={(event, item) => handleContextMenu(event, item)}
-        />
-        <Menu
-          open={contextMenu !== null}
-          onClose={handleMenuClose}
-          anchorReference="anchorPosition"
-          anchorPosition={
-            contextMenu !== null
-              ? { top: contextMenu.mouseY, left: contextMenu.mouseX }
-              : undefined
-          }
-        >
-          <MenuItem onClick={handleTuneToFreq}>Tune to Freq</MenuItem>
-          <MenuItem onClick={handleTuneToFreqBandwidth}>Tune to Freq, Bandwidth</MenuItem>
-          <MenuItem onClick={handleAddVerticalLines}>Mark Signal Bounds</MenuItem> {/* New menu item */}
-        </Menu>
-      </Box>
+
+      <FoldableSection title="Classifications" defaultOpen>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr', xl: '1fr 1fr 1fr' }, gap: 1.25 }}>
+          {Object.entries(groupedClassifications).map(([label, classifications]) => (
+            <Paper key={label} sx={{ p: 1, backgroundColor: '#121212' }}>
+              <details open={false}>
+                <summary style={{ cursor: 'pointer', userSelect: 'none', fontWeight: 600 }}>
+                  {label} ({classifications.length})
+                </summary>
+              {classifications.map((classification, idx) => (
+                <Box
+                  key={`${label}-${idx}`}
+                  sx={{
+                    p: 0.75,
+                    mb: 0.5,
+                    border: '1px solid #2e2e2e',
+                    borderRadius: 1,
+                    backgroundColor: '#101010',
+                  }}
+                >
+                  <Typography variant="caption">
+                    Freq: {formatStatValue(Number(classification.frequency))} MHz
+                    {classification.bandwidth !== undefined ? ` | BW: ${formatStatValue(Number(classification.bandwidth))} MHz` : ''}
+                    {classification.channel ? ` | Ch: ${classification.channel}` : ''}
+                  </Typography>
+                  {classification.metadata ? (
+                    <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.25 }}>
+                      {classification.metadata}
+                    </Typography>
+                  ) : null}
+                  <Box sx={{ display: 'flex', gap: 0.5, mt: 0.5, flexWrap: 'wrap' }}>
+                    <Button size="small" variant="contained" onClick={() => handleTuneToClassification(classification, false)}>
+                      Tune
+                    </Button>
+                    <Button size="small" variant="contained" onClick={() => handleTuneToClassification(classification, true)}>
+                      Tune + BW
+                    </Button>
+                    <Button size="small" variant="outlined" onClick={() => handleMarkClassificationBounds(classification)}>
+                      Mark Bounds
+                    </Button>
+                  </Box>
+                </Box>
+              ))}
+              </details>
+            </Paper>
+          ))}
+        </Box>
+      </FoldableSection>
     </Box>
   );
 };
