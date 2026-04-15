@@ -41,7 +41,7 @@ const ChartComponent = ({
   const [waterfallLevelOffset, setWaterfallLevelOffset] = useState(0);
   const [quickCenterMHz, setQuickCenterMHz] = useState(0);
   const [quickSpanMHz, setQuickSpanMHz] = useState(0);
-  const [showWaterfallToolbar, setShowWaterfallToolbar] = useState(true);
+  const [showWaterfallToolbar, setShowWaterfallToolbar] = useState(false);
   const [autoscaleMode, setAutoscaleMode] = useState('manual');
   const [markerPrimary, setMarkerPrimary] = useState(null);
   const [markerSecondary, setMarkerSecondary] = useState(null);
@@ -54,6 +54,11 @@ const ChartComponent = ({
   const lastDataTsRef = useRef(Date.now());
   const droppedFramesRef = useRef(0);
   const spectrumPlotRef = useRef(null);
+  const lastTuneRef = useRef({
+    frequency: Number(settings.frequency),
+    sampleRate: Number(settings.sampleRate),
+    bandwidth: Number(settings.bandwidth),
+  });
 
   useEffect(() => {
     const adjustPlotHeight = () => {
@@ -121,7 +126,33 @@ const ChartComponent = ({
           setWaterfallData((prev) => [...prev, row].slice(-safeWaterfallSamples));
         }
         setTime(data.time);
-        setPeaks(Array.isArray(data.peaks) ? data.peaks : []);
+        const backendPeaks = Array.isArray(data.peaks) ? data.peaks : [];
+        let telemetryPeaks = backendPeaks;
+        if (backendPeaks.length === 0 && sanitizedFftData.length > 0) {
+          const bins = sanitizedFftData.length;
+          let maxIdx = 0;
+          let maxVal = sanitizedFftData[0];
+          for (let i = 1; i < bins; i += 1) {
+            if (sanitizedFftData[i] > maxVal) {
+              maxVal = sanitizedFftData[i];
+              maxIdx = i;
+            }
+          }
+          const centerMHz = Number(data?.settings?.frequency ?? settings.frequency ?? 0);
+          const sampleRateMHz = Math.max(0.1, Number(data?.settings?.sample_rate ?? settings.sampleRate ?? 1));
+          const binBwMHz = sampleRateMHz / Math.max(1, bins);
+          const absFreqMHz = (centerMHz - (sampleRateMHz / 2)) + (maxIdx * binBwMHz);
+          telemetryPeaks = [{
+            index: 0,
+            frequency: absFreqMHz - centerMHz,
+            absolute_frequency: absFreqMHz,
+            bandwidth: binBwMHz,
+            peak_power: maxVal,
+            avg_power: maxVal,
+            classification: [],
+          }];
+        }
+        setPeaks(telemetryPeaks);
         if (data.settings.sweeping_enabled) {
           setSweepSettings({
             frequency_start: data.settings.sweep_settings.frequency_start,
@@ -150,6 +181,7 @@ const ChartComponent = ({
           onTelemetryUpdate({
             sdr: safeSdr,
             hzPerBin: safeSampleRateHz / safeBinsTelemetry,
+            frameTime: data?.time || '',
             fps: Number.isFinite(fps) ? fps : 0,
             latencyMs: Number.isFinite(latencyMs) ? latencyMs : 0,
             droppedFrames: droppedFramesRef.current,
@@ -161,6 +193,7 @@ const ChartComponent = ({
             fftError: data?.fftError || null,
             scannerError: data?.scannerError || null,
             waterfallRows: Number(data?.waterfallRows || 0),
+            peaks: telemetryPeaks.slice(0, 16),
           });
         }
       } catch (error) {
@@ -247,14 +280,25 @@ const ChartComponent = ({
     const endFreq = baseFreq + freqStep * (fftData.length - 1);
     if (!settings.peakDetection) return [];
     return peaks
-      .filter((peak) => (peak.frequency*1e6) >= startFreq && (peak.frequency*1e6) <= endFreq)
+      .filter((peak) => {
+        const absFreq = Number(peak?.absolute_frequency);
+        const relFreq = Number(peak?.frequency);
+        const freqHz = Number.isFinite(absFreq)
+          ? absFreq * 1e6
+          : (Number.isFinite(relFreq) ? relFreq * 1e6 : NaN);
+        return Number.isFinite(freqHz) && freqHz >= startFreq && freqHz <= endFreq;
+      })
       .map((peak) => {
-        // Correct the frequency calculation here
-        const freq = startFreq + ((peak.frequency*1e6 - startFreq) / freqStep) * freqStep;
+        const absFreq = Number(peak?.absolute_frequency);
+        const relFreq = Number(peak?.frequency);
+        const freqMHz = Number.isFinite(absFreq)
+          ? absFreq
+          : (safeFrequencyMHz + relFreq);
+        const freq = freqMHz * 1e6;
         const power = peak.peak_power.toFixed(2);
         const powerColor = generateColor(power);
         return {
-          x: freq.toFixed(2),
+          x: freq,
           y: parseFloat(power),
           xref: 'x',
           yref: 'y',
@@ -270,6 +314,50 @@ const ChartComponent = ({
           align: 'center',
         };
       });
+  };
+
+  const generateSignalNameAnnotations = (peaks) => {
+    if (!settings.peakDetection) return [];
+    if (!Array.isArray(peaks) || peaks.length === 0) return [];
+
+    return peaks
+      .map((peak, idx) => {
+        const absFreq = Number(peak?.absolute_frequency);
+        const relFreq = Number(peak?.frequency);
+        const freqMHz = Number.isFinite(absFreq)
+          ? absFreq
+          : (Number.isFinite(relFreq) ? safeFrequencyMHz + relFreq : NaN);
+        const power = Number(peak?.peak_power);
+        if (!Number.isFinite(freqMHz) || !Number.isFinite(power)) return null;
+
+        const classes = Array.isArray(peak?.classification) ? peak.classification : [];
+        if (!classes.length) return null;
+
+        const top = classes[0] || {};
+        const label = String(top.label || 'Signal');
+        const channel = String(top.channel || '').trim();
+        const tag = channel && channel !== 'N/A' ? `${label} ${channel}` : label;
+
+        return {
+          x: freqMHz * 1e6,
+          y: power + 4 + (idx % 2) * 2,
+          xref: 'x',
+          yref: 'y',
+          text: tag,
+          showarrow: false,
+          bgcolor: 'rgba(8, 16, 24, 0.82)',
+          bordercolor: '#7ec8ff',
+          borderwidth: 1,
+          borderpad: 2,
+          font: {
+            size: 10,
+            color: '#cfefff',
+          },
+          align: 'center',
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 4);
   };
 
   const safeFrequencyMHz = toFinite(settings.frequency, 751);
@@ -311,6 +399,7 @@ const ChartComponent = ({
     ? waterfallData.filter((_, idx) => idx % rowStride === 0)
     : waterfallData;
   const peakAnnotations = generateAnnotations(peaks, baseFreq, freqStep);
+  const peakNameAnnotations = generateSignalNameAnnotations(peaks);
   const waterfallCenterDb = ((Number(minY) + Number(maxY)) / 2) + waterfallLevelOffset;
   const waterfallZMin = waterfallCenterDb - (waterfallDbWindow / 2);
   const waterfallZMax = waterfallCenterDb + (waterfallDbWindow / 2);
@@ -350,8 +439,6 @@ const ChartComponent = ({
       tickVals.push(freq);
       tickText.push((freq / 1e6).toFixed(2)); // Convert to MHz
     }
-    tickVals.push(stopFreq * 0.999);
-    tickText.push((stopFreq / 1e6).toFixed(2)); // Convert to MHz
     return { tickVals, tickText };
   };
 
@@ -504,6 +591,20 @@ const ChartComponent = ({
     }
   };
 
+  const clearTraceDataSilent = async (trace) => {
+    try {
+      await axios.post('/api/reset_fft_trace', { trace });
+      if (trace === 'max' || trace === 'all') {
+        setFftMaxData([]);
+      }
+      if (trace === 'persist' || trace === 'persistence' || trace === 'all') {
+        setPersistanceData([]);
+      }
+    } catch (error) {
+      console.error('Error clearing FFT trace:', error);
+    }
+  };
+
   const pushSettings = async (patch) => {
     const nextSettings = { ...settings, ...patch };
     if (typeof setSettings === 'function') {
@@ -529,8 +630,32 @@ const ChartComponent = ({
     };
     setQuickCenterMHz(safeCenterMHz);
     setQuickSpanMHz(safeSpanMHz);
+    await clearTraceDataSilent('all');
     await pushSettings(patch);
   };
+
+  useEffect(() => {
+    const prev = lastTuneRef.current;
+    const curr = {
+      frequency: Number(settings.frequency),
+      sampleRate: Number(settings.sampleRate),
+      bandwidth: Number(settings.bandwidth),
+    };
+    if (
+      Number.isFinite(prev.frequency) &&
+      Number.isFinite(prev.sampleRate) &&
+      Number.isFinite(curr.frequency) &&
+      Number.isFinite(curr.sampleRate) &&
+      (
+        Math.abs(curr.frequency - prev.frequency) > 1e-9 ||
+        Math.abs(curr.sampleRate - prev.sampleRate) > 1e-9 ||
+        Math.abs((curr.bandwidth || 0) - (prev.bandwidth || 0)) > 1e-9
+      )
+    ) {
+      clearTraceDataSilent('all');
+    }
+    lastTuneRef.current = curr;
+  }, [settings.frequency, settings.sampleRate, settings.bandwidth]);
 
   const nudgeFrequency = (deltaMHz) => {
     applyQuickTune(quickCenterMHz + deltaMHz, quickSpanMHz);
@@ -547,6 +672,11 @@ const ChartComponent = ({
   const clearMarkers = () => {
     setMarkerPrimary(null);
     setMarkerSecondary(null);
+  };
+
+  const clearMarkersFromMenu = () => {
+    clearMarkers();
+    closeContextMenu();
   };
 
   const handlePlotClick = (event) => {
@@ -694,6 +824,17 @@ const ChartComponent = ({
             />
             Persist
           </label>
+          <label style={quickTuneLabelStyle}>
+            <input
+              type="checkbox"
+              checked={Boolean(showWaterfall)}
+              onChange={(e) => {
+                const checked = Boolean(e.target.checked);
+                pushSettings({ showWaterfall: checked });
+              }}
+            />
+            WF
+          </label>
           <label style={quickTuneLabelStyle}>W</label>
           <input
             type="range"
@@ -802,7 +943,7 @@ const ChartComponent = ({
           })),
         ].filter(Boolean)} // Filter out false/null traces
           layout={{
-          title: `Spectrum Viewer (Time: ${time}) (Freq: ${(currentFrequency / 1e6).toFixed(2)})`,
+          title: '',
           xaxis: {
             title: 'Frequency (MHz)',
             color: 'white',
@@ -825,14 +966,14 @@ const ChartComponent = ({
             pad: 4
           },
           autosize: true,  // Let Plotly auto size
-          paper_bgcolor: '#000',
-          plot_bgcolor: '#000',
-          font: {
-            color: 'white',
-          },
-          annotations: [...peakAnnotations].filter(Boolean),
+            paper_bgcolor: '#000',
+            plot_bgcolor: '#000',
+            font: {
+              color: 'white',
+            },
+            annotations: [...peakAnnotations, ...peakNameAnnotations].filter(Boolean),
           }}
-          style={{ width: `${plotWidth}vw` }}
+          style={{ width: `${plotWidth}vw`, height: showWaterfall ? '42vh' : '78vh' }}
           onClick={handlePlotClick}
           onInitialized={(figure, graphDiv) => {
             spectrumPlotRef.current = graphDiv;
@@ -1011,6 +1152,13 @@ const ChartComponent = ({
             onClick={() => clearTraceData('all')}
           >
             Clear All FFT Traces
+          </button>
+          <button
+            type="button"
+            style={menuButtonStyle}
+            onClick={clearMarkersFromMenu}
+          >
+            Clear Markers
           </button>
         </div>
       )}

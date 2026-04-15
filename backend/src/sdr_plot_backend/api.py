@@ -234,6 +234,8 @@ def generate_fft_data():
                     )
                     main_fft_updated_at = time.time()
                     main_frame_seq += 1
+            # Clear stale FFT error once a frame processes successfully.
+            vars.signal_stats.pop("fft_error", None)
         except Exception as e:
             vars.signal_stats["fft_error"] = str(e)
             time.sleep(0.05)
@@ -265,6 +267,8 @@ def radio_scanner():
                         )
                     scanner_fft_updated_at = time.time()
                     scanner_frame_seq += 1
+            # Clear stale scanner error once scanner loop succeeds.
+            vars.signal_stats.pop("scanner_error", None)
         except Exception as e:
             vars.signal_stats["scanner_error"] = str(e)
             time.sleep(0.1)
