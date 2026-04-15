@@ -44,6 +44,18 @@ def _quantize_mhz(value, step_mhz=0.05):
     step = max(0.001, float(step_mhz))
     return round(round(n / step) * step, 3)
 
+
+def _effective_peak_bw_mhz(raw_bw_mhz):
+    """Enforce a floor for peak bandwidth based on configured min peak distance."""
+    min_bw = max(0.001, float(getattr(vars, "minPeakDistance", 0.1)))
+    try:
+        bw = float(raw_bw_mhz)
+    except Exception:
+        bw = min_bw
+    if not np.isfinite(bw):
+        bw = min_bw
+    return max(min_bw, bw)
+
 def _safe_int(value, default, min_value=None, max_value=None):
     try:
         n = int(float(value))
@@ -236,8 +248,10 @@ def generate_fft_data():
                     main_frame_seq += 1
             # Clear stale FFT error once a frame processes successfully.
             vars.signal_stats.pop("fft_error", None)
+            vars.signal_stats.pop("fft_error_ts", None)
         except Exception as e:
             vars.signal_stats["fft_error"] = str(e)
+            vars.signal_stats["fft_error_ts"] = time.time()
             time.sleep(0.05)
 
 def radio_scanner():
@@ -269,8 +283,10 @@ def radio_scanner():
                     scanner_frame_seq += 1
             # Clear stale scanner error once scanner loop succeeds.
             vars.signal_stats.pop("scanner_error", None)
+            vars.signal_stats.pop("scanner_error_ts", None)
         except Exception as e:
             vars.signal_stats["scanner_error"] = str(e)
+            vars.signal_stats["scanner_error_ts"] = time.time()
             time.sleep(0.1)
                     
     
@@ -362,7 +378,7 @@ def get_data():
         rel_center = float(peak['center_freq'])
         rel_start = float(peak['start_freq'])
         rel_end = float(peak['end_freq'])
-        bw_mhz = float(peak.get('bandwidth', 0.0))
+        bw_mhz = _effective_peak_bw_mhz(peak.get('bandwidth', 0.0))
         abs_center = center_freq_mhz + rel_center
         abs_start = center_freq_mhz + rel_start
         abs_end = center_freq_mhz + rel_end
@@ -390,6 +406,16 @@ def get_data():
 
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
+    fft_error = vars.signal_stats.get("fft_error")
+    scanner_error = vars.signal_stats.get("scanner_error")
+    now_ts = time.time()
+    fft_err_ts = float(vars.signal_stats.get("fft_error_ts", 0.0) or 0.0)
+    scanner_err_ts = float(vars.signal_stats.get("scanner_error_ts", 0.0) or 0.0)
+    if not fft_err_ts or (now_ts - fft_err_ts) > 3.0:
+        fft_error = None
+    if not scanner_err_ts or (now_ts - scanner_err_ts) > 3.0:
+        scanner_error = None
+
     response = {
         'fft': fft_response,
         'peaks': peaks_response,
@@ -400,8 +426,8 @@ def get_data():
         'mainFrameSeq': int(main_seq_snapshot),
         'scannerFrameSeq': int(scanner_seq_snapshot),
         'scannerFresh': bool(scanner_available),
-        'fftError': vars.signal_stats.get("fft_error"),
-        'scannerError': vars.signal_stats.get("scanner_error"),
+        'fftError': fft_error,
+        'scannerError': scanner_error,
     }
 
     # Convert all settings values to native Python types
@@ -446,7 +472,7 @@ def get_analytics():
             freq_start = round(float(peak['start_freq'] + vars.sdr_frequency()/1e6), num_digits)
             freq_end = round(float(peak['end_freq'] + vars.sdr_frequency()/1e6), num_digits)
             peak_power = float(peak['peak_power'])
-            bandwidth = round(float(peak.get('bandwidth', 0.0)), num_digits)
+            bandwidth = round(_effective_peak_bw_mhz(peak.get('bandwidth', 0.0)), num_digits)
             avg_power = float(peak.get('avg_power', 0.0))
 
             classifications = vars.classifier.classify_signal(freq, bandwidth)
@@ -654,18 +680,40 @@ def upload_classifier():
 @api_blueprint.route('/api/select_sdr', methods=['POST'])
 def select_sdr():
     sdr_name = request.json.get('sdr_name', 'hackrf')
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+    driver = str(sdr_name).split(':', 1)[0]
+    if driver not in supported_drivers:
+        return jsonify({
+            'status': 'error',
+            'result': 0,
+            'message': f"SDR '{sdr_name}' is discovered but not stream-capable in SDR Shark yet."
+        }), 400
     result = vars.reselect_radio(sdr_name)
-    return jsonify({'status': 'success', 'result': result})
+    if result:
+        return jsonify({'status': 'success', 'result': result})
+    return jsonify({'status': 'error', 'result': result, 'message': f'Failed to switch SDR to {sdr_name}'}), 400
 
 
 @api_blueprint.route('/api/sdr_devices', methods=['GET'])
 def get_sdr_devices():
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+
+    def _filter_supported(devices):
+        return [d for d in devices if str(d.get('driver', '')).lower() in supported_drivers]
+
     try:
-        devices = vars.sdr0.list_devices()
+        all_devices = vars.sdr0.list_devices()
+        devices = _filter_supported(all_devices)
         selected = vars.sdr0.device_id
+        if selected and str(selected).split(':', 1)[0] not in supported_drivers:
+            selected = devices[0]['id'] if devices else None
         return jsonify(_to_builtin({'devices': devices, 'selected': selected}))
     except Exception as e:
-        return jsonify({'devices': [], 'selected': None, 'error': str(e)}), 200
+        cached = _filter_supported(getattr(vars.sdr0, "_devices_cache", []) or [])
+        selected = vars.sdr0.device_id if getattr(vars, "sdr0", None) else None
+        if selected and str(selected).split(':', 1)[0] not in supported_drivers:
+            selected = cached[0]['id'] if cached else None
+        return jsonify({'devices': _to_builtin(cached), 'selected': selected, 'error': str(e)}), 200
 
 @api_blueprint.route('/api/get_settings', methods=['GET'])
 def get_settings():

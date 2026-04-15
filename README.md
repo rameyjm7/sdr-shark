@@ -53,9 +53,22 @@ yarn install
 
 # How to run
 
-**Option 1:** (Recommended for speed): Gunicorn using start.sh script
+**Option 1:** (Recommended for speed): Gunicorn using scripts/start.sh
 
-From the repository root after installing the dependencies (backend and frontend), run ./start.sh to run the gunicorn server
+From the repository root after installing the dependencies (backend and frontend), run ./scripts/start.sh to run the gunicorn server.
+
+Systemd service helper:
+
+Use ./scripts/sdr-shark-service.sh to install/manage a service:
+
+- install
+- enable
+- disable
+- start
+- stop
+- restart
+- status
+- logs
 
 
 **Option 2:** If you want to make changes and develop
@@ -67,5 +80,4 @@ yarn start
 python3 -m sdr_plot_backend
 
 Then, Browse to the IP Address of your PC, port 3000. i.e. 10.139.1.86:3000
-
 

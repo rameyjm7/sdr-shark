@@ -111,6 +111,19 @@ class sdr_scheduler_config:
             "max" : -255
         }
 
+    def _ensure_radio_settings(self, key: str):
+        """Ensure we have a settings bucket for a discovered radio driver."""
+        if key in self.sdr_settings:
+            return
+        seed = self.sdr_settings.get(self.sdr_name, next(iter(self.sdr_settings.values())))
+        s = SdrSettings(key)
+        s.frequency = float(seed.frequency)
+        s.sampleRate = float(seed.sampleRate)
+        s.bandwidth = float(seed.bandwidth)
+        s.gain = float(seed.gain)
+        s.averagingCount = int(seed.averagingCount)
+        self.sdr_settings[key] = s
+
     def load_settings(self):
         """Load settings from a JSON file. If the file doesn't exist, create it with default values."""
         if os.path.exists(self.settings_file):
@@ -234,18 +247,12 @@ class sdr_scheduler_config:
             self.validate_settings()
 
 
-            if self.sdr_name in 'hackrf':
-                self.sdr1.set_frequency(self.sdr_frequency())
-                sr = self.sdr_sampleRate()
-                self.sdr1.set_sample_rate(20e6 if sr > 20e6 else sr)
-                self.sdr1.set_bandwidth(20e6 if sr > 20e6 else sr)
-                self.sdr1.set_gain(self.sdr_settings[self.sdr_name].gain)
-            else:
-                self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
-                sr = self.sdr_sampleRate()
-                self.sdr0.set_sample_rate(sr)
-                self.sdr0.set_bandwidth(sr)
-                self.sdr0.set_gain(self.sdr_gain())
+            # Always drive the active gateway-backed SDR instance.
+            self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
+            sr = self.sdr_sampleRate()
+            self.sdr0.set_sample_rate(sr)
+            self.sdr0.set_bandwidth(sr)
+            self.sdr0.set_gain(self.sdr_gain())
         except Exception as e:
             print(e)
             pass
@@ -263,9 +270,32 @@ class sdr_scheduler_config:
 
     def reselect_radio(self, name: str) -> int:
         try:
+            driver = str(name).split(":", 1)[0].lower()
+            self._ensure_radio_settings(driver)
             selected = self.sdr0.select_device(name)
             if selected:
+                self.sdr_name = driver
                 self.radio_name = name
+                # Apply sensible per-radio defaults, then clamp to device limits.
+                preferred_sr = {
+                    "hackrf": 20e6,
+                    "sidekiq": 60e6,
+                    "airspy": 10e6,
+                    "bladerf": 20e6,
+                    "rtlsdr": 2.4e6,
+                }.get(driver, self.sdr_settings[self.sdr_name].sampleRate)
+                max_sr = float(getattr(self.sdr0, "max_sample_rate", self.sdr_sampleRate()) or self.sdr_sampleRate())
+                sr = min(float(preferred_sr), max_sr)
+                self.sdr_settings[self.sdr_name].sampleRate = sr
+                self.sdr_settings[self.sdr_name].bandwidth = sr
+                self.sdr_settings[self.sdr_name].frequency = min(
+                    max(self.sdr_settings[self.sdr_name].frequency, float(getattr(self.sdr0, "min_frequency", 1e6))),
+                    float(getattr(self.sdr0, "max_frequency", 6e9)),
+                )
+                self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
+                self.sdr0.set_sample_rate(self.sdr_settings[self.sdr_name].sampleRate)
+                self.sdr0.set_bandwidth(self.sdr_settings[self.sdr_name].bandwidth)
+                self.sdr0.set_gain(self.sdr_settings[self.sdr_name].gain)
                 return 1
             return 0
         except Exception as e:

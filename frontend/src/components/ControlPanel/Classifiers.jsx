@@ -2,13 +2,13 @@ import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import Box from '@mui/material/Box';
 import { RichTreeView } from '@mui/x-tree-view/RichTreeView';
-import { Typography, Menu, MenuItem } from '@mui/material';
+import { Typography, Menu, MenuItem, Paper, Button, Stack } from '@mui/material';
 import ClassifierUploader from './ClassifierUploader';  // Import your new component
 
 const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLines }) => {
   const [classifiers, setClassifiers] = useState([]);
   const [contextMenu, setContextMenu] = useState(null);
-  const [lastSelectedItem, setLastSelectedItem] = useState(null);
+  const [selectedItemId, setSelectedItemId] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -33,36 +33,47 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
     return acc;
   }, {});
 
-  // Convert grouped classifications to TreeViewBaseItem[]
-  const classificationItems = Object.entries(groupedClassifications).reduce((acc, [label, classifications], groupIndex) => {
-    const groupId = `group-${groupIndex}`;
-    const groupItem = {
-      id: groupId,
-      label: label,
-      children: classifications.map((classification, index) => {
-        // Sequentially define the item ID
-        const itemId = `item-${acc.nextId}`;
-        acc.nextId += 1;  // Increment the ID for the next item
-        return {
-          id: itemId,
-          label: `Channel: ${classification.channel}, Frequency: ${classification.frequency} MHz, Bandwidth: ${classification.bandwidth} MHz, Metadata: ${classification.metadata}`,
-          frequency: classification.frequency,
-          bandwidth: classification.bandwidth,
-        };
-      }),
-    };
-    acc.items.push(groupItem);
-    return acc;
-  }, { nextId: 0, items: [] }).items;
+  const itemToClassification = {};
+  const classificationItems = Object.entries(groupedClassifications)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([label, group], groupIndex) => {
+      const groupId = `group-${groupIndex}`;
+      return {
+        id: groupId,
+        label: `${label} (${group.length})`,
+        children: group.map((classification, index) => {
+          const itemId = `item-${groupIndex}-${index}`;
+          itemToClassification[itemId] = classification;
+          const freq = Number(classification.frequency);
+          const bw = Number(classification.bandwidth);
+          const freqText = Number.isFinite(freq) ? freq.toFixed(3) : classification.frequency;
+          const bwText = Number.isFinite(bw) ? bw.toFixed(3) : classification.bandwidth;
+          const channel = classification.channel || 'n/a';
+          const metadata = classification.metadata ? ` | ${classification.metadata}` : '';
+          return {
+            id: itemId,
+            label: `Ch ${channel} | ${freqText} MHz | BW ${bwText} MHz${metadata}`,
+          };
+        }),
+      };
+    });
+
+  const getSelectedClassification = () => {
+    if (!selectedItemId) return null;
+    return itemToClassification[selectedItemId] || null;
+  };
 
   const handleItemSelectionToggle = (event, itemId, isSelected) => {
-    if (isSelected) {
-      setLastSelectedItem(itemId);
+    if (isSelected && itemId.startsWith('item-')) {
+      setSelectedItemId(itemId);
     }
   };
 
   const handleContextMenu = (event, item) => {
     event.preventDefault();
+    if (item?.id?.startsWith('item-')) {
+      setSelectedItemId(item.id);
+    }
     setContextMenu(
       contextMenu === null
         ? { mouseX: event.clientX - 2, mouseY: event.clientY - 4, item }
@@ -74,13 +85,10 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
     setContextMenu(null);
   };
 
-  const convertToHz = (valueInMHz) => valueInMHz * 1e6;
-
   const handleTuneToFreq = () => {
-    if (lastSelectedItem) {
+    const classification = getSelectedClassification();
+    if (classification) {
       clearVerticalLines();
-      const itemIndex = lastSelectedItem.split('-').slice(1).map(Number);
-      const classification = classifiers[itemIndex];
       const frequency = classification.frequency;
       if (frequency) {
         const newSettings = { ...settings, frequency: parseFloat(frequency) };
@@ -96,9 +104,8 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
   };
 
   const handleTuneToFreqBandwidth = () => {
-    if (lastSelectedItem) {
-      const itemIndex = lastSelectedItem.split('-').slice(1).map(Number);
-      const classification = classifiers[itemIndex];
+    const classification = getSelectedClassification();
+    if (classification) {
       const frequency = classification.frequency;
       const bandwidth = classification.bandwidth;
       if (frequency && bandwidth) {
@@ -120,14 +127,10 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
   };
 
   const handleAddVerticalLines = () => {
-    if (lastSelectedItem) {
-      const itemIndex = lastSelectedItem.split('-').slice(1).map(Number);
-      const classification = classifiers[itemIndex];
+    const classification = getSelectedClassification();
+    if (classification) {
       const frequency = classification.frequency;
       const bandwidth = classification.bandwidth;
-      console.log(classification);
-      console.log(frequency);
-      console.log(bandwidth);
       if (frequency && bandwidth) {
         addVerticalLines(frequency, bandwidth);  // Call the function with frequency and bandwidth
         console.log(`Vertical lines added at ${frequency} MHz ± ${bandwidth / 2} MHz`);
@@ -156,11 +159,35 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
   return (
     <Box>
       <Typography variant="h6" gutterBottom>Signal Classifiers</Typography>
-      <RichTreeView
-        items={classificationItems}
-        onItemSelectionToggle={handleItemSelectionToggle}
-        onContextMenu={(event, item) => handleContextMenu(event, item)}
-      />
+
+      <Paper sx={{ p: 1, mb: 1 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={1} alignItems={{ xs: 'stretch', md: 'center' }}>
+          <Typography variant="body2" sx={{ flex: 1, color: 'text.secondary' }}>
+            {selectedItemId
+              ? `Selected: ${itemToClassification[selectedItemId]?.label || 'Classifier'}`
+              : 'Select a classifier entry to tune or mark bounds'}
+          </Typography>
+          <Stack direction="row" spacing={1}>
+            <Button size="small" variant="contained" onClick={handleTuneToFreq} disabled={!selectedItemId}>Tune</Button>
+            <Button size="small" variant="contained" onClick={handleTuneToFreqBandwidth} disabled={!selectedItemId}>Tune + BW</Button>
+            <Button size="small" variant="outlined" onClick={handleAddVerticalLines} disabled={!selectedItemId}>Mark Bounds</Button>
+          </Stack>
+        </Stack>
+      </Paper>
+
+      <Paper sx={{ p: 0.5, maxHeight: 420, overflowY: 'auto' }}>
+        <RichTreeView
+          items={classificationItems}
+          onItemSelectionToggle={handleItemSelectionToggle}
+          onContextMenu={(event, item) => handleContextMenu(event, item)}
+          sx={{
+            '& .MuiTreeItem-content': { py: 0.25, borderRadius: 1 },
+            '& .MuiTreeItem-label': { fontSize: '0.9rem' },
+            '& .MuiTreeItem-groupTransition': { ml: 1.5 },
+          }}
+        />
+      </Paper>
+
       <Menu
         open={contextMenu !== null}
         onClose={handleMenuClose}
@@ -177,7 +204,7 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
       </Menu>
 
       {/* File upload section */}
-      <Box mt={3}>
+      <Box mt={2}>
         <ClassifierUploader onUploadSuccess={handleUploadSuccess} />
       </Box>
     </Box>

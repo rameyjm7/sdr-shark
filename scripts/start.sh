@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 # Optional token loading for sdr-gateway auth.
@@ -47,4 +47,26 @@ if [[ -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
   echo "Warning: SDR_GATEWAY_API_TOKEN is not set; backend may fail against authenticated sdr-gateway."
 fi
 
-exec gunicorn -w 1 --threads 10 -b 0.0.0.0:5000 sdr_plot_backend.__main__:app
+if [[ -n "${SDR_SHARK_GUNICORN:-}" ]]; then
+  GUNICORN_BIN="${SDR_SHARK_GUNICORN}"
+elif [[ -x "${REPO_ROOT}/backend/.venv/bin/gunicorn" ]]; then
+  GUNICORN_BIN="${REPO_ROOT}/backend/.venv/bin/gunicorn"
+elif [[ -x "${REPO_ROOT}/.venv/bin/gunicorn" ]]; then
+  GUNICORN_BIN="${REPO_ROOT}/.venv/bin/gunicorn"
+elif command -v gunicorn >/dev/null 2>&1; then
+  GUNICORN_BIN="$(command -v gunicorn)"
+else
+  echo "gunicorn not found. Install backend dependencies or set SDR_SHARK_GUNICORN." >&2
+  exit 1
+fi
+
+WORKERS="${SDR_SHARK_WORKERS:-1}"
+THREADS="${SDR_SHARK_THREADS:-10}"
+HOST="${SDR_SHARK_HOST:-0.0.0.0}"
+PORT="${SDR_SHARK_PORT:-5000}"
+
+exec "${GUNICORN_BIN}" \
+  -w "${WORKERS}" \
+  --threads "${THREADS}" \
+  -b "${HOST}:${PORT}" \
+  sdr_plot_backend.__main__:app

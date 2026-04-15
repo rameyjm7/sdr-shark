@@ -47,6 +47,7 @@ class SDRGeneric:
         self.stream_id: str | None = None
         self._ws: WebSocket | None = None
         self._rx_thread: threading.Thread | None = None
+        self._should_run = False
         self._running = False
         self._lock = threading.Lock()
         self._latest_samples = np.zeros(self.size, dtype=np.complex64)
@@ -57,10 +58,12 @@ class SDRGeneric:
         return {}
 
     def start(self) -> None:
+        self._should_run = True
         self._ensure_device()
         self._start_stream()
 
     def stop(self) -> None:
+        self._should_run = False
         self._running = False
         if self._ws is not None:
             try:
@@ -104,6 +107,11 @@ class SDRGeneric:
         if not devices:
             return False
 
+        previous_hint = self._selected_device_hint
+        previous_device_id = self.device_id
+        previous_limits = (self.min_frequency, self.max_frequency, self.max_sample_rate)
+        was_running = self._running
+
         selected = None
         for d in devices:
             if selector == d.get("id"):
@@ -118,25 +126,44 @@ class SDRGeneric:
             return False
 
         self._selected_device_hint = selected.get("id")
-        if self._running:
-            self._restart_stream()
-        else:
-            self._apply_device_limits(selected)
-            self.device_id = selected.get("id")
-        return True
+        self._apply_device_limits(selected)
+        self.device_id = selected.get("id")
+
+        # Changing devices must be atomic from the caller perspective.
+        # If new stream startup fails (e.g. discovery-only backend), roll back.
+        try:
+            if was_running:
+                self._restart_stream()
+            return True
+        except Exception:
+            self._selected_device_hint = previous_hint
+            self.device_id = previous_device_id
+            self.min_frequency, self.max_frequency, self.max_sample_rate = previous_limits
+            if was_running and previous_device_id is not None:
+                try:
+                    self._restart_stream()
+                except Exception:
+                    pass
+            raise
 
     def _fetch_devices(self) -> list[dict[str, Any]]:
-        r = requests.get(
-            f"{self.api_base}/devices",
-            headers=self._auth_headers(),
-            timeout=5,
-        )
-        r.raise_for_status()
-        devices = r.json()
-        if not isinstance(devices, list):
-            return []
-        self._devices_cache = devices
-        return devices
+        try:
+            r = requests.get(
+                f"{self.api_base}/devices",
+                headers=self._auth_headers(),
+                timeout=5,
+            )
+            r.raise_for_status()
+            devices = r.json()
+            if not isinstance(devices, list):
+                return list(self._devices_cache)
+            self._devices_cache = devices
+            return devices
+        except Exception:
+            # Keep UI usable during gateway restarts/auth race by serving last known list.
+            if self._devices_cache:
+                return list(self._devices_cache)
+            raise
 
     def _apply_device_limits(self, device: dict[str, Any]) -> None:
         self.min_frequency = float(device.get("freq_min_hz", self.min_frequency))
@@ -221,15 +248,23 @@ class SDRGeneric:
         self.stream_id = None
 
     def _restart_stream(self) -> None:
-        if not self._running and self.stream_id is None:
+        if not self._should_run:
             return
-        self.stop()
+        # Keep desired running state true during automatic reconnect attempts.
+        self._running = False
+        if self._ws is not None:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+        self._stop_stream()
         time.sleep(0.05)
         self.start()
 
     def _rx_loop(self) -> None:
         assert self._ws is not None
-        while self._running:
+        while self._running and self._should_run:
             try:
                 frame = self._ws.recv()
                 if not isinstance(frame, (bytes, bytearray)):
@@ -251,11 +286,15 @@ class SDRGeneric:
                 with self._lock:
                     self._latest_samples = out.astype(np.complex64, copy=False)
             except Exception:
-                if not self._running:
+                if not self._should_run:
                     break
-                # Recover automatically when websocket stalls/drops.
-                try:
-                    self._restart_stream()
-                except Exception:
-                    time.sleep(0.25)
+                # Recover automatically when websocket stalls/drops or gateway restarts.
+                while self._should_run:
+                    try:
+                        self._restart_stream()
+                        break
+                    except Exception:
+                        time.sleep(0.5)
+                # A new stream spawns a new RX thread; exit this one.
+                return
                 break

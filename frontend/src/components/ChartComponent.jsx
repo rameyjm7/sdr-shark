@@ -28,6 +28,8 @@ const ChartComponent = ({
   const [fftMaxData, setFftMaxData] = useState([]);
   const [persistanceData, setPersistanceData] = useState([]);
   const [waterfallData, setWaterfallData] = useState([]);
+  const [waterfallNoSignal, setWaterfallNoSignal] = useState(false);
+  const [spectrumNoSignal, setSpectrumNoSignal] = useState(false);
   const [time, setTime] = useState('');
   const [peaks, setPeaks] = useState([]);
   const prevTickValsRef = useRef([]);
@@ -53,12 +55,30 @@ const ChartComponent = ({
   const lastFrameTsRef = useRef(null);
   const lastDataTsRef = useRef(Date.now());
   const droppedFramesRef = useRef(0);
+  const lastMainSeqRef = useRef(null);
+  const staleSeqCountRef = useRef(0);
+  const lastFftSnapshotRef = useRef([]);
   const spectrumPlotRef = useRef(null);
   const lastTuneRef = useRef({
     frequency: Number(settings.frequency),
     sampleRate: Number(settings.sampleRate),
     bandwidth: Number(settings.bandwidth),
   });
+
+  const hasMeaningfulFftChange = (next, prev) => {
+    if (!Array.isArray(next) || next.length === 0) return false;
+    if (!Array.isArray(prev) || prev.length !== next.length) return true;
+    const samplePoints = 32;
+    const step = Math.max(1, Math.floor(next.length / samplePoints));
+    let diffSum = 0;
+    let count = 0;
+    for (let i = 0; i < next.length; i += step) {
+      diffSum += Math.abs((Number(next[i]) || 0) - (Number(prev[i]) || 0));
+      count += 1;
+    }
+    const avgDiff = count > 0 ? diffSum / count : 0;
+    return avgDiff > 0.15;
+  };
 
   useEffect(() => {
     const adjustPlotHeight = () => {
@@ -87,11 +107,28 @@ const ChartComponent = ({
           },
         });
         const data = response.data;
+        const mainSeq = Number(data?.mainFrameSeq || 0);
+        const prevSeq = lastMainSeqRef.current;
+        const frameAdvanced = prevSeq === null ? true : mainSeq !== prevSeq;
+        lastMainSeqRef.current = mainSeq;
         const rawFft = Array.isArray(data.fft) ? data.fft : [];
         const rawWaterfall = Array.isArray(data.waterfall) ? data.waterfall : [];
         // Replace NaN values in FFT data
         const sanitizedFftData = rawFft.map(value => isNaN(value) ? -255 : value);
+        const fftChanged = hasMeaningfulFftChange(sanitizedFftData, lastFftSnapshotRef.current);
+        lastFftSnapshotRef.current = sanitizedFftData;
         setFftData(sanitizedFftData);
+        if (frameAdvanced || fftChanged) {
+          staleSeqCountRef.current = 0;
+          setWaterfallNoSignal(false);
+          setSpectrumNoSignal(false);
+        } else {
+          staleSeqCountRef.current += 1;
+          if (staleSeqCountRef.current >= 4) {
+            setWaterfallNoSignal(true);
+            setSpectrumNoSignal(true);
+          }
+        }
         const resampleRow = (arr, targetBins) => {
           if (!Array.isArray(arr) || arr.length === 0) return [];
           if (arr.length === targetBins) return arr;
@@ -118,12 +155,25 @@ const ChartComponent = ({
             row.map(value => isNaN(value) ? -255 : value)
         );
         const safeWaterfallSamples = Math.max(1, Math.min(2000, toFinite(settings.waterfallSamples, 100)));
-        if (sanitizedWaterfallData.length > 0) {
+        const noSignalRow = (bins) => Array.from({ length: bins }, () => -255);
+        if (sanitizedWaterfallData.length > 0 && (frameAdvanced || fftChanged)) {
           setWaterfallData(sanitizedWaterfallData.slice(-safeWaterfallSamples));
-        } else if (sanitizedFftData.length > 0) {
+        } else if (sanitizedFftData.length > 0 && (frameAdvanced || fftChanged)) {
           const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, sanitizedFftData.length)));
           const row = resampleRow(sanitizedFftData, targetBins);
           setWaterfallData((prev) => [...prev, row].slice(-safeWaterfallSamples));
+        } else if (!frameAdvanced && !fftChanged && staleSeqCountRef.current >= 4) {
+          const targetBins = Math.max(
+            64,
+            Math.min(
+              8192,
+              toFinite(settings.waterfallBinCount, (waterfallData[0] && waterfallData[0].length) || sanitizedFftData.length || 2048),
+            ),
+          );
+          setWaterfallData((prev) => {
+            const bins = (Array.isArray(prev[0]) && prev[0].length > 0) ? prev[0].length : targetBins;
+            return [...prev, noSignalRow(bins)].slice(-safeWaterfallSamples);
+          });
         }
         setTime(data.time);
         const backendPeaks = Array.isArray(data.peaks) ? data.peaks : [];
@@ -199,6 +249,19 @@ const ChartComponent = ({
       } catch (error) {
         console.error('Error fetching data:', error);
         droppedFramesRef.current += 1;
+        staleSeqCountRef.current += 1;
+        if (staleSeqCountRef.current >= 2) {
+          setWaterfallNoSignal(true);
+          setSpectrumNoSignal(true);
+        }
+        const safeWaterfallSamples = Math.max(1, Math.min(2000, toFinite(settings.waterfallSamples, 100)));
+        setWaterfallData((prev) => {
+          const bins = (Array.isArray(prev[0]) && prev[0].length > 0)
+            ? prev[0].length
+            : Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, 2048)));
+          const row = Array.from({ length: bins }, () => -255);
+          return [...prev, row].slice(-safeWaterfallSamples);
+        });
         if (typeof onTelemetryUpdate === 'function') {
           onTelemetryUpdate((prev) => ({
             ...(prev || {}),
@@ -971,7 +1034,23 @@ const ChartComponent = ({
             font: {
               color: 'white',
             },
-            annotations: [...peakAnnotations, ...peakNameAnnotations].filter(Boolean),
+            annotations: [
+              ...peakAnnotations,
+              ...peakNameAnnotations,
+              ...(spectrumNoSignal ? [{
+                xref: 'paper',
+                yref: 'paper',
+                x: 0.5,
+                y: 0.5,
+                text: '[NO SIGNAL]',
+                showarrow: false,
+                font: { size: 20, color: '#ff8080' },
+                bgcolor: 'rgba(0,0,0,0.55)',
+                bordercolor: 'rgba(255,128,128,0.75)',
+                borderwidth: 1,
+                borderpad: 5,
+              }] : []),
+            ].filter(Boolean),
           }}
           style={{ width: `${plotWidth}vw`, height: showWaterfall ? '42vh' : '78vh' }}
           onClick={handlePlotClick}
@@ -1107,6 +1186,21 @@ const ChartComponent = ({
               font: {
                 color: 'white',
               },
+              annotations: waterfallNoSignal
+                ? [{
+                  xref: 'paper',
+                  yref: 'paper',
+                  x: 0.5,
+                  y: 0.5,
+                  text: '[NO SIGNAL]',
+                  showarrow: false,
+                  font: { size: 18, color: '#ff8080' },
+                  bgcolor: 'rgba(0,0,0,0.45)',
+                  bordercolor: 'rgba(255,128,128,0.75)',
+                  borderwidth: 1,
+                  borderpad: 4,
+                }]
+                : [],
             }}
             config={{
               displayModeBar: false, // Hide the mode bar

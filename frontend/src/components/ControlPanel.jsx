@@ -5,8 +5,6 @@ import SaveIcon from '@mui/icons-material/Save';
 import axios from 'axios';
 import SDRSettings from './ControlPanel/SDRSettings';
 import PlotSettings from './ControlPanel/PlotSettings';
-import Analysis from './Analysis';
-import Classifiers from './ControlPanel/Classifiers';
 import debounce from 'lodash/debounce';
 import '../App.css';
 import Actions from './Actions';
@@ -242,8 +240,10 @@ const ControlPanel = ({
   };
 
   const handleSliderChangeCommitted = (e, value, name) => {
+    const sliderValue = Array.isArray(value) ? value[0] : value;
+    const safeValue = Number.isFinite(sliderValue) ? sliderValue : settings[name];
     if (name === 'averagingCount') {
-      applySettings({ ...settings, [name]: value });
+      applySettings({ ...settings, [name]: safeValue });
     }
   };
 
@@ -257,8 +257,10 @@ const ControlPanel = ({
     }
   };
 
-  const handleSdrChange = (e) => {
+  const handleSdrChange = async (e) => {
     const newSdr = e.target.value;
+    const prevSdr = sdr;
+    const prevSettings = { ...settings };
     setSdr(newSdr);
     updateStatus(`Changing SDR to ${newSdr}...`, 'info');
 
@@ -269,15 +271,19 @@ const ControlPanel = ({
     };
     setSettings(updatedSettings);
 
-    axios.post('/api/select_sdr', { sdr_name: newSdr })
-      .then(response => {
-        applySettings(updatedSettings);
-        updateStatus(`SDR changed to ${newSdr}`, 'success');
-      })
-      .catch(error => {
-        console.error('Error changing SDR:', error);
-        updateStatus('Error changing SDR', 'error');
-      });
+    try {
+      const response = await axios.post('/api/select_sdr', { sdr_name: newSdr });
+      if (!response?.data?.result) {
+        throw new Error(response?.data?.message || `Failed to switch SDR to ${newSdr}`);
+      }
+      await applySettings(updatedSettings);
+      updateStatus(`SDR changed to ${newSdr}`, 'success');
+    } catch (error) {
+      console.error('Error changing SDR:', error);
+      setSdr(prevSdr);
+      setSettings(prevSettings);
+      updateStatus(`Error changing SDR to ${newSdr}`, 'error');
+    }
   };
 
   const enforceLimits = (settings) => {
@@ -304,11 +310,11 @@ const ControlPanel = ({
 
   const applySettings = async (newSettings) => {
     const enforcedSettings = enforceLimits(newSettings);
+    const preservedInterval = toFinite(settings.updateInterval, toFinite(updateInterval, 500));
+    if (!Number.isFinite(enforcedSettings.updateInterval)) {
+      enforcedSettings.updateInterval = preservedInterval;
+    }
     updateStatus('Updating settings...', 'info');
-
-    const interval = settings.updateInterval;
-    // Temporarily set updateInterval to 5000
-    setUpdateInterval(5000);
 
     try {
       await axios.post('/api/update_settings', enforcedSettings, {
@@ -317,8 +323,7 @@ const ControlPanel = ({
         },
       });
       setSettings(enforcedSettings);
-      // After settings are applied, revert updateInterval to the original value
-      setUpdateInterval(interval);
+      setUpdateInterval(toFinite(enforcedSettings.updateInterval, preservedInterval));
 
       updateStatus('Settings updated', 'success');
     } catch (error) {
@@ -422,8 +427,6 @@ const ControlPanel = ({
       >
         <Tab label="SDR" />
         <Tab label="Plot" />
-        <Tab label="Analysis" />
-        <Tab label="Classifiers" />
         <Tab label="Actions" />
       </Tabs>
       <Box className="control-panel-tab-content">
@@ -572,26 +575,6 @@ const ControlPanel = ({
           </>
         )}
         {tabIndex === 2 && (
-          <Analysis
-            settings={settings}
-            setSettings={setSettings}
-            addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
-            clearVerticalLines={clearVerticalLines}
-            addHorizontalLines={addHorizontalLines}
-            clearHorizontalLines={clearHorizontalLines}
-          />
-        )}
-        {tabIndex === 3 && (
-          <Classifiers
-            settings={settings}
-            setSettings={setSettings}
-            addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
-            clearVerticalLines={clearVerticalLines}
-            addHorizontalLines={addHorizontalLines}
-            clearHorizontalLines={clearHorizontalLines}
-          />
-        )}
-        {tabIndex === 4 && (
           <Actions
             settings={settings}
             setSettings={setSettings}
