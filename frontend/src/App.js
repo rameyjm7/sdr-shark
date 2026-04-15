@@ -1,7 +1,7 @@
 // Author: Jacob M. Ramey
 
 import React, { useState, useEffect } from 'react';
-import { Typography, CssBaseline, Tabs, Tab, Box } from '@mui/material';
+import { Typography, CssBaseline, Tabs, Tab, Box, Chip } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import Split from 'split.js';
 import ControlPanel from './components/ControlPanel';
@@ -63,6 +63,7 @@ const App = () => {
     numberOfPeaks: 5,
     showWaterfall: true,
     waterfallSamples: 100,
+    waterfallBinCount: 2048,
     updateInterval: 500
   });
   const [showSecondTrace, setShowSecondTrace] = useState(false);
@@ -78,6 +79,21 @@ const App = () => {
   const [plotWidth, setPlotWidth] = useState(60); // Initial plot width in percentage
   const [verticalLines, setVerticalLines] = useState([]);  // State for vertical lines
   const [horizontalLines, setHorizontalLines] = useState([]);  // State for horizontal lines
+  const [telemetry, setTelemetry] = useState({
+    sdr: 'n/a',
+    hzPerBin: 0,
+    fps: 0,
+    latencyMs: 0,
+    droppedFrames: 0,
+    staleMs: 0,
+    sweepEnabled: false,
+    mainFrameSeq: 0,
+    scannerFrameSeq: 0,
+    scannerFresh: false,
+    fftError: null,
+    scannerError: null,
+    waterfallRows: 0,
+  });
 
 
   const setUpdateInterval = (interval) => {
@@ -268,6 +284,34 @@ const App = () => {
           </Box>
         </Box>
 
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            px: 1.5,
+            py: 0.75,
+            borderTop: '1px solid #222',
+            borderBottom: '1px solid #222',
+            bgcolor: '#0b0b0b',
+            overflowX: 'auto',
+          }}
+        >
+          <Chip size="small" label={`SDR: ${telemetry.sdr || 'n/a'}`} />
+          <Chip size="small" label={`Hz/bin: ${Number.isFinite(telemetry.hzPerBin) ? Math.round(telemetry.hzPerBin).toLocaleString() : 'n/a'}`} />
+          <Chip size="small" label={`FPS: ${Number.isFinite(telemetry.fps) ? telemetry.fps.toFixed(1) : '0.0'}`} />
+          <Chip size="small" label={`Latency: ${Math.round(telemetry.latencyMs || 0)} ms`} />
+          <Chip size="small" color={telemetry.droppedFrames > 0 ? 'warning' : 'default'} label={`Drops: ${telemetry.droppedFrames || 0}`} />
+          <Chip size="small" color={(telemetry.staleMs || 0) > 3000 ? 'error' : 'default'} label={`Last data age: ${Math.round(telemetry.staleMs || 0)} ms`} />
+          <Chip size="small" label={`Sweep: ${telemetry.sweepEnabled ? 'On' : 'Off'}`} />
+          <Chip size="small" label={`Main seq: ${telemetry.mainFrameSeq || 0}`} />
+          <Chip size="small" label={`Scanner seq: ${telemetry.scannerFrameSeq || 0}`} />
+          <Chip size="small" color={telemetry.scannerFresh ? 'success' : 'default'} label={`Scanner fresh: ${telemetry.scannerFresh ? 'yes' : 'no'}`} />
+          <Chip size="small" label={`WF rows: ${telemetry.waterfallRows || 0}`} />
+          {telemetry.fftError ? <Chip size="small" color="error" label={`FFT err`} /> : null}
+          {telemetry.scannerError ? <Chip size="small" color="error" label={`Scanner err`} /> : null}
+        </Box>
+
 
         <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <Box
@@ -284,6 +328,7 @@ const App = () => {
             <TabPanel value={tabValue} index={0}>
               <Plots
                 settings={settings}
+                setSettings={setSettings}
                 minY={minY}
                 maxY={maxY}
                 setMinY={setMinY}
@@ -297,6 +342,7 @@ const App = () => {
                 verticalLines={verticalLines}
                 addHorizontalLines={addHorizontalLines}
                 horizontalLines={horizontalLines}
+                onTelemetryUpdate={setTelemetry}
               />
             </TabPanel>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 0, textAlign: 'center', overflow: 'hidden' }}>

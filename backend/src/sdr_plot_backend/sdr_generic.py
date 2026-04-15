@@ -15,7 +15,7 @@ except Exception:
 
 
 class SDRGeneric:
-    """Minimal SDR adapter backed by the local sdr-server API."""
+    """Minimal SDR adapter backed by the local sdr-gateway API."""
 
     def __init__(
         self,
@@ -136,7 +136,7 @@ class SDRGeneric:
     def _ensure_device(self) -> None:
         devices = self._fetch_devices()
         if not devices:
-            raise RuntimeError("No SDR devices found from sdr-server /devices")
+            raise RuntimeError("No SDR devices found from sdr-gateway /devices")
 
         device = None
         if self._selected_device_hint:

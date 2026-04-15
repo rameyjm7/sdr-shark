@@ -57,6 +57,7 @@ class sdr_scheduler_config:
         self.dc_suppress = True
         self.show_waterfall = True
         self.waterfall_samples = 100
+        self.waterfall_bin_count = 2048
         self.persistence_decay  = 0.5
         self.number_of_peaks = 5
         self.showFirstTrace = True
@@ -179,6 +180,7 @@ class sdr_scheduler_config:
             "dc_suppress": self.dc_suppress,
             "show_waterfall": self.show_waterfall,
             "waterfall_samples": self.waterfall_samples,
+            "waterfall_bin_count": self.waterfall_bin_count,
             "number_of_peaks": self.number_of_peaks,
             "recordings_dir": self.recordings_dir,
             "lockBandwidthSampleRate": self.lockBandwidthSampleRate,
@@ -209,6 +211,7 @@ class sdr_scheduler_config:
             self.dc_suppress = settings.get("dcSuppress", self.dc_suppress)
             self.show_waterfall = settings.get("showWaterfall", self.show_waterfall)
             self.waterfall_samples = settings.get("waterfallSamples", self.waterfall_samples)
+            self.waterfall_bin_count = settings.get("waterfallBinCount", self.waterfall_bin_count)
             self.number_of_peaks = settings.get("number_of_peaks", self.number_of_peaks)
             self.recordings_dir = settings.get("recordings_dir", self.recordings_dir)
             self.lockBandwidthSampleRate = settings.get("lockBandwidthSampleRate", self.lockBandwidthSampleRate)
@@ -278,6 +281,7 @@ class sdr_scheduler_config:
             "dcSuppress": True,
             "showWaterfall": True,
             "waterfallSamples": 100,
+            "waterfallBinCount": 2048,
             "number_of_peaks": 5,
             "recordings_dir": self.recordings_dir,
             "lockBandwidthSampleRate": True,

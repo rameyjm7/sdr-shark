@@ -56,13 +56,14 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
 
   return (
     <Box>
-      <Accordion defaultExpanded disableGutters sx={{ mt: 2, borderRadius: 2, overflow: 'hidden' }}>
+      <Accordion defaultExpanded disableGutters sx={{ mt: 1, borderRadius: 2, overflow: 'hidden' }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 2 }}>
           <Typography variant="h6">SDR Settings</Typography>
         </AccordionSummary>
-        <AccordionDetails sx={{ px: 2, pb: 2 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+        <AccordionDetails sx={{ px: 1.5, pb: 1.5 }}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
             <TextField
+              size="small"
               margin="dense"
               label="Frequency (MHz)"
               name="frequency"
@@ -77,6 +78,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               sx={{ flex: 1, mr: 2 }}
             />
             <TextField
+              size="small"
               margin="dense"
               label="Gain (dB)"
               name="gain"
@@ -90,8 +92,9 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               sx={{ flex: 1, ml: 2 }}
             />
           </Box>
-          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
             <TextField
+              size="small"
               margin="dense"
               label="Sample Rate (MHz)"
               name="sampleRate"
@@ -106,6 +109,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               sx={{ flex: 1, mr: 2 }}
             />
             <TextField
+              size="small"
               margin="dense"
               label="Bandwidth (MHz)"
               name="bandwidth"
@@ -147,11 +151,11 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
         </AccordionDetails>
       </Accordion>
 
-      <Accordion defaultExpanded disableGutters sx={{ mt: 2, borderRadius: 2, overflow: 'hidden' }}>
+      <Accordion defaultExpanded disableGutters sx={{ mt: 1, borderRadius: 2, overflow: 'hidden' }}>
         <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 2 }}>
           <Typography variant="h6">Sweep Settings</Typography>
         </AccordionSummary>
-        <AccordionDetails sx={{ px: 2, pb: 2 }}>
+        <AccordionDetails sx={{ px: 1.5, pb: 1.5 }}>
           <FormControlLabel
             control={
               <Switch
@@ -163,8 +167,9 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
             }
             label="Enable Sweep"
           />
-          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
             <TextField
+              size="small"
               margin="dense"
               label="Start Frequency (MHz)"
               name="frequency_start"
@@ -178,6 +183,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               sx={{ flex: 1, mr: 2 }}
             />
             <TextField
+              size="small"
               margin="dense"
               label="Stop Frequency (MHz)"
               name="frequency_stop"
@@ -191,8 +197,9 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               sx={{ flex: 1, ml: 2 }}
             />
           </Box>
-          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
             <TextField
+              size="small"
               margin="dense"
               label="Total Bandwidth (MHz)"
               name="total_bandwidth"
@@ -207,6 +214,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               disabled
             />
             <TextField
+              size="small"
               margin="dense"
               label="Sweep Steps"
               name="sweep_steps"

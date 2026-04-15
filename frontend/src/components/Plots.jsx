@@ -4,7 +4,22 @@ import axios from 'axios';
 import ChartComponent from './ChartComponent';
 import '../App.css';
 
-const Plots = ({ settings, updateInterval, showSecondTrace, showWaterfall, minY, maxY, setMinY, setMaxY, addVerticalLines, verticalLines, addHorizontalLines, horizontalLines }) => {
+const Plots = ({
+  settings,
+  setSettings,
+  updateInterval,
+  showSecondTrace,
+  showWaterfall,
+  minY,
+  maxY,
+  setMinY,
+  setMaxY,
+  addVerticalLines,
+  verticalLines,
+  addHorizontalLines,
+  horizontalLines,
+  onTelemetryUpdate,
+}) => {
   const [sweepSettings, setSweepSettings] = useState({
     frequency_start: 100,
     frequency_stop: 200,
@@ -54,15 +69,19 @@ const Plots = ({ settings, updateInterval, showSecondTrace, showWaterfall, minY,
       <Box className="plots">
         <ChartComponent
           settings={settings}
+          setSettings={setSettings}
           sweepSettings={sweepSettings}
           setSweepSettings={setSweepSettings}
           minY={minY}
           maxY={maxY}
+          setMinY={setMinY}
+          setMaxY={setMaxY}
           updateInterval={updateInterval}
           showWaterfall={showWaterfall}
           showSecondTrace={showSecondTrace}
           verticalLines={verticalLines}  // Pass verticalLines to ChartComponent
           horizontalLines={horizontalLines}
+          onTelemetryUpdate={onTelemetryUpdate}
         />
       </Box>
     </div>
