@@ -225,6 +225,23 @@ const App = () => {
     };
   }, []);
 
+  const telemetryChipSx = {
+    width: 132,
+    justifyContent: 'center',
+    '& .MuiChip-label': {
+      width: '100%',
+      px: 1,
+      textAlign: 'center',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      fontVariantNumeric: 'tabular-nums',
+      fontFeatureSettings: '"tnum"',
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+    },
+  };
+  const telemetryWideChipSx = { ...telemetryChipSx, width: 170 };
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -297,19 +314,19 @@ const App = () => {
             overflowX: 'auto',
           }}
         >
-          <Chip size="small" label={`SDR: ${telemetry.sdr || 'n/a'}`} />
-          <Chip size="small" label={`Hz/bin: ${Number.isFinite(telemetry.hzPerBin) ? Math.round(telemetry.hzPerBin).toLocaleString() : 'n/a'}`} />
-          <Chip size="small" label={`FPS: ${Number.isFinite(telemetry.fps) ? telemetry.fps.toFixed(1) : '0.0'}`} />
-          <Chip size="small" label={`Latency: ${Math.round(telemetry.latencyMs || 0)} ms`} />
-          <Chip size="small" color={telemetry.droppedFrames > 0 ? 'warning' : 'default'} label={`Drops: ${telemetry.droppedFrames || 0}`} />
-          <Chip size="small" color={(telemetry.staleMs || 0) > 3000 ? 'error' : 'default'} label={`Last data age: ${Math.round(telemetry.staleMs || 0)} ms`} />
-          <Chip size="small" label={`Sweep: ${telemetry.sweepEnabled ? 'On' : 'Off'}`} />
-          <Chip size="small" label={`Main seq: ${telemetry.mainFrameSeq || 0}`} />
-          <Chip size="small" label={`Scanner seq: ${telemetry.scannerFrameSeq || 0}`} />
-          <Chip size="small" color={telemetry.scannerFresh ? 'success' : 'default'} label={`Scanner fresh: ${telemetry.scannerFresh ? 'yes' : 'no'}`} />
-          <Chip size="small" label={`WF rows: ${telemetry.waterfallRows || 0}`} />
-          {telemetry.fftError ? <Chip size="small" color="error" label={`FFT err`} /> : null}
-          {telemetry.scannerError ? <Chip size="small" color="error" label={`Scanner err`} /> : null}
+          <Chip size="small" sx={telemetryWideChipSx} label={`SDR: ${telemetry.sdr || 'n/a'}`} />
+          <Chip size="small" sx={telemetryWideChipSx} label={`Hz/bin: ${Number.isFinite(telemetry.hzPerBin) ? Math.round(telemetry.hzPerBin).toLocaleString() : 'n/a'}`} />
+          <Chip size="small" sx={telemetryChipSx} label={`FPS: ${Number.isFinite(telemetry.fps) ? telemetry.fps.toFixed(1) : '0.0'}`} />
+          <Chip size="small" sx={telemetryChipSx} label={`Latency: ${Math.round(telemetry.latencyMs || 0)} ms`} />
+          <Chip size="small" sx={telemetryChipSx} color={telemetry.droppedFrames > 0 ? 'warning' : 'default'} label={`Drops: ${telemetry.droppedFrames || 0}`} />
+          <Chip size="small" sx={telemetryWideChipSx} color={(telemetry.staleMs || 0) > 3000 ? 'error' : 'default'} label={`Last data age: ${Math.round(telemetry.staleMs || 0)} ms`} />
+          <Chip size="small" sx={telemetryChipSx} label={`Sweep: ${telemetry.sweepEnabled ? 'On' : 'Off'}`} />
+          <Chip size="small" sx={telemetryChipSx} label={`Main seq: ${telemetry.mainFrameSeq || 0}`} />
+          <Chip size="small" sx={telemetryChipSx} label={`Scanner seq: ${telemetry.scannerFrameSeq || 0}`} />
+          <Chip size="small" sx={telemetryWideChipSx} color={telemetry.scannerFresh ? 'success' : 'default'} label={`Scanner fresh: ${telemetry.scannerFresh ? 'yes' : 'no'}`} />
+          <Chip size="small" sx={telemetryChipSx} label={`WF rows: ${telemetry.waterfallRows || 0}`} />
+          {telemetry.fftError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`FFT err`} /> : null}
+          {telemetry.scannerError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`Scanner err`} /> : null}
         </Box>
 
 

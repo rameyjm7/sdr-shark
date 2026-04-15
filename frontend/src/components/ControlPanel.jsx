@@ -505,46 +505,54 @@ const ControlPanel = ({
             /> */}
 
             <Box>
-              <Typography variant="h6" sx={{ mt: 2 }}>Waterfall Settings</Typography>
+              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Waterfall Settings</Typography>
 
-              <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-
-                <Box sx={{ flex: 1, ml: 2 }}>
-                  <Typography gutterBottom>Waterfall Samples: {settings.waterfallSamples}</Typography>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+                  gap: 2,
+                  alignItems: 'start',
+                }}
+              >
+                <Box>
+                  <Typography variant="body2" gutterBottom>Waterfall Samples: {toFinite(settings.waterfallSamples, 100)}</Typography>
                   <Slider
                     min={25}
-                    max={1000}
-                    value={settings.waterfallSamples}
+                    max={2000}
+                    value={toFinite(settings.waterfallSamples, 100)}
                     onChange={(e, value) => setSettings({ ...settings, waterfallSamples: value })}
                     valueLabelDisplay="auto"
                     step={25}
-                    marks={[
-                      { value: 25, label: '25' },
-                      { value: 500, label: '500' },
-                      { value: 1000, label: '1000' },
-                    ]}
+                    sx={{ '& .MuiSlider-thumb': { width: 18, height: 18 }, '& .MuiSlider-rail': { opacity: 0.35 } }}
                   />
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.25, px: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary">25</Typography>
+                    <Typography variant="caption" color="text.secondary">1000</Typography>
+                    <Typography variant="caption" color="text.secondary">2000</Typography>
+                  </Box>
                 </Box>
-                <Box sx={{ flex: 1, ml: 2 }}>
-                  <Typography gutterBottom>Waterfall Bin Count: {settings.waterfallBinCount}</Typography>
+                <Box>
+                  <Typography variant="body2" gutterBottom>Waterfall Bin Count: {toFinite(settings.waterfallBinCount, 2048)}</Typography>
                   <Slider
                     min={256}
                     max={4096}
-                    value={settings.waterfallBinCount || 2048}
+                    value={toFinite(settings.waterfallBinCount, 2048)}
                     onChange={(e, value) => setSettings({ ...settings, waterfallBinCount: value })}
                     valueLabelDisplay="auto"
                     step={128}
-                    marks={[
-                      { value: 256, label: '256' },
-                      { value: 1024, label: '1024' },
-                      { value: 2048, label: '2048' },
-                      { value: 4096, label: '4096' },
-                    ]}
+                    sx={{ '& .MuiSlider-thumb': { width: 18, height: 18 }, '& .MuiSlider-rail': { opacity: 0.35 } }}
                   />
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.25, px: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary">256</Typography>
+                    <Typography variant="caption" color="text.secondary">2048</Typography>
+                    <Typography variant="caption" color="text.secondary">4096</Typography>
+                  </Box>
                 </Box>
               </Box>
 
               <FormControlLabel
+                sx={{ mt: 0.5 }}
                 control={
                   <Switch
                     checked={showWaterfall}
