@@ -87,7 +87,12 @@ class sdr_scheduler_config:
                                bandwidth=self.sdr_settings['sidekiq'].bandwidth,
                                gain=self.sdr_settings['sidekiq'].gain,
                                size=self.sample_size)
-        self.sdr0.start()
+        try:
+            self.sdr0.start()
+        except Exception as exc:
+            # Do not crash backend startup when gateway has no currently available SDR.
+            # The app can still start and recover once a device becomes available.
+            print(f"Warning: SDR init failed at startup: {exc}")
         # self.sdr1 = SDRGeneric("hackrf",
         #                        center_freq=self.sdr_settings['hackrf'].frequency,
         #                        sample_rate=self.sdr_settings['hackrf'].sampleRate,

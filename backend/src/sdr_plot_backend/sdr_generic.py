@@ -39,6 +39,7 @@ class SDRGeneric:
         base = os.getenv("SDR_SERVER_URL", "http://127.0.0.1:8080").rstrip("/")
         self.api_base = base
         self.ws_base = base.replace("http://", "ws://").replace("https://", "wss://")
+        self.gateway_token = (os.getenv("SDR_GATEWAY_API_TOKEN", "") or "").strip()
 
         self._devices_cache: list[dict[str, Any]] = []
         self._selected_device_hint: str | None = None
@@ -49,6 +50,11 @@ class SDRGeneric:
         self._running = False
         self._lock = threading.Lock()
         self._latest_samples = np.zeros(self.size, dtype=np.complex64)
+
+    def _auth_headers(self) -> dict[str, str]:
+        if self.gateway_token:
+            return {"Authorization": f"Bearer {self.gateway_token}"}
+        return {}
 
     def start(self) -> None:
         self._ensure_device()
@@ -120,7 +126,11 @@ class SDRGeneric:
         return True
 
     def _fetch_devices(self) -> list[dict[str, Any]]:
-        r = requests.get(f"{self.api_base}/devices", timeout=5)
+        r = requests.get(
+            f"{self.api_base}/devices",
+            headers=self._auth_headers(),
+            timeout=5,
+        )
         r.raise_for_status()
         devices = r.json()
         if not isinstance(devices, list):
@@ -174,12 +184,21 @@ class SDRGeneric:
         if self.device_id is None:
             self._ensure_device()
 
-        r = requests.post(f"{self.api_base}/streams/start", json=self._stream_payload(), timeout=10)
+        r = requests.post(
+            f"{self.api_base}/streams/start",
+            json=self._stream_payload(),
+            headers=self._auth_headers(),
+            timeout=10,
+        )
         r.raise_for_status()
         self.stream_id = r.json()["stream_id"]
 
+        ws_headers = None
+        if self.gateway_token:
+            ws_headers = [f"Authorization: Bearer {self.gateway_token}"]
         self._ws = create_connection(
             f"{self.ws_base}/ws/iq/{self.stream_id}",
+            header=ws_headers,
             timeout=5,
             enable_multithread=True,
         )
@@ -191,7 +210,12 @@ class SDRGeneric:
         if not self.stream_id:
             return
         try:
-            requests.post(f"{self.api_base}/streams/{self.stream_id}/stop", json={}, timeout=5)
+            requests.post(
+                f"{self.api_base}/streams/{self.stream_id}/stop",
+                json={},
+                headers=self._auth_headers(),
+                timeout=5,
+            )
         except Exception:
             pass
         self.stream_id = None
