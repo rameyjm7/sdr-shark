@@ -844,16 +844,16 @@ const ChartComponent = ({
       </div>
       {showWaterfall && (
         <div style={{ position: 'relative' }}>
-          <button
-            type="button"
-            style={waterfallToggleButtonStyle}
-            onClick={() => setShowWaterfallToolbar((prev) => !prev)}
-            title={showWaterfallToolbar ? 'Hide waterfall tools' : 'Show waterfall tools'}
-          >
-            {showWaterfallToolbar ? 'WF <' : 'WF >'}
-          </button>
-          {showWaterfallToolbar && (
-            <div style={waterfallToolbarStyle}>
+          <div style={waterfallDrawerContainerStyle}>
+            <button
+              type="button"
+              style={waterfallToggleButtonStyle(showWaterfallToolbar)}
+              onClick={() => setShowWaterfallToolbar((prev) => !prev)}
+              title={showWaterfallToolbar ? 'Hide waterfall tools' : 'Show waterfall tools'}
+            >
+              {showWaterfallToolbar ? '>' : '< WF'}
+            </button>
+            <div style={waterfallToolbarStyle(showWaterfallToolbar)}>
               <label style={quickTuneLabelStyle}>Palette</label>
               <select
                 value={waterfallColorScale}
@@ -924,7 +924,7 @@ const ChartComponent = ({
               </select>
               <button type="button" style={quickTuneButtonStyle} onClick={() => setWaterfallData([])}>Clear</button>
             </div>
-          )}
+          </div>
           <Plot
             data={[
               {
@@ -1043,37 +1043,48 @@ const quickTuneBarStyle = {
   flexWrap: 'wrap',
 };
 
-const waterfallToolbarStyle = {
+const waterfallDrawerContainerStyle = {
   position: 'absolute',
   top: '50%',
-  right: 12,
+  right: 0,
   transform: 'translateY(-50%)',
-  zIndex: 10,
+  zIndex: 11,
+  display: 'flex',
+  alignItems: 'stretch',
+  gap: 0,
+};
+
+const waterfallToolbarStyle = (open) => ({
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'stretch',
   gap: 6,
-  padding: '6px 8px',
+  padding: open ? '6px 8px' : '0',
   borderRadius: 8,
-  border: '1px solid #333',
+  border: open ? '1px solid #333' : '1px solid transparent',
   background: 'rgba(12, 12, 12, 0.92)',
   backdropFilter: 'blur(2px)',
-  minWidth: 180,
-};
+  minWidth: open ? 180 : 0,
+  maxWidth: open ? 180 : 0,
+  width: open ? 180 : 0,
+  opacity: open ? 1 : 0,
+  overflow: 'hidden',
+  transition: 'max-width 180ms ease, width 180ms ease, opacity 120ms ease, padding 180ms ease, border-color 180ms ease',
+});
 
-const waterfallToggleButtonStyle = {
-  position: 'absolute',
-  top: '50%',
-  right: 6,
-  transform: 'translateY(-50%)',
-  zIndex: 11,
+const waterfallToggleButtonStyle = (open) => ({
   background: '#1b1b1b',
   color: '#f0f0f0',
   border: '1px solid #333',
-  borderRadius: 6,
-  padding: '8px 6px',
+  borderRight: open ? '1px solid #333' : '1px solid #444',
+  borderRadius: open ? '6px 0 0 6px' : '6px 0 0 6px',
+  minWidth: 42,
+  width: 42,
+  padding: '8px 4px',
   cursor: 'pointer',
-};
+  alignSelf: 'center',
+  height: 40,
+});
 
 const quickTuneLabelStyle = {
   color: '#ddd',
