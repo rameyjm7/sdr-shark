@@ -160,13 +160,28 @@ const ChartComponent = ({
             row.map(value => isNaN(value) ? -255 : value)
         );
         const safeWaterfallSamples = Math.max(1, Math.min(2000, toFinite(settings.waterfallSamples, 100)));
+        const safeInterval = Math.max(30, toFinite(settings.updateInterval, 500));
+        // Faster UI motion at lower update intervals without increasing backend load.
+        const waterfallBurst = Math.max(1, Math.min(4, Math.round(120 / safeInterval)));
         const noSignalRow = (bins) => Array.from({ length: bins }, () => -255);
+        const appendRowBurst = (prev, row, bins) => {
+          if (!Array.isArray(row) || row.length === 0) return prev;
+          const targetBins = Math.max(1, bins);
+          const normalized = row.length === targetBins ? row : resampleRow(row, targetBins);
+          const next = [...prev];
+          for (let i = 0; i < waterfallBurst; i += 1) {
+            next.push([...normalized]);
+          }
+          return next.slice(-safeWaterfallSamples);
+        };
         if (sanitizedWaterfallData.length > 0 && (frameAdvanced || fftChanged)) {
-          setWaterfallData(sanitizedWaterfallData.slice(-safeWaterfallSamples));
+          const latestServerRow = sanitizedWaterfallData[sanitizedWaterfallData.length - 1];
+          const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, latestServerRow?.length || 2048)));
+          setWaterfallData((prev) => appendRowBurst(prev, latestServerRow, targetBins));
         } else if (sanitizedFftData.length > 0 && (frameAdvanced || fftChanged)) {
           const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, sanitizedFftData.length)));
           const row = resampleRow(sanitizedFftData, targetBins);
-          setWaterfallData((prev) => [...prev, row].slice(-safeWaterfallSamples));
+          setWaterfallData((prev) => appendRowBurst(prev, row, targetBins));
         } else if (!frameAdvanced && !fftChanged && staleSeqCountRef.current >= 4) {
           const targetBins = Math.max(
             64,
@@ -177,7 +192,7 @@ const ChartComponent = ({
           );
           setWaterfallData((prev) => {
             const bins = (Array.isArray(prev[0]) && prev[0].length > 0) ? prev[0].length : targetBins;
-            return [...prev, noSignalRow(bins)].slice(-safeWaterfallSamples);
+            return appendRowBurst(prev, noSignalRow(bins), bins);
           });
         }
         setTime(data.time);
