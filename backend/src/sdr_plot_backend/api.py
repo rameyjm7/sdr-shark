@@ -8,7 +8,6 @@ import os
 import numpy as np
 import json
 from flask import Blueprint, jsonify, request, current_app, Response
-from numba import jit
 
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
@@ -37,6 +36,8 @@ main_frame_seq = 0
 scanner_frame_seq = 0
 analysis_peak_memory = {}
 analysis_memory_lock = threading.Lock()
+fft_failure_count = 0
+scanner_failure_count = 0
 
 
 def _quantize_mhz(value, step_mhz=0.05):
@@ -101,20 +102,25 @@ def _to_builtin(value):
         return value.item()
     return value
 
-@jit(nopython=True)
 def downsample(data, target_length=256):
+    data = np.asarray(data, dtype=np.float32)
+    n = data.size
+    if n == 0:
+        return np.zeros(1, dtype=np.float32)
     if target_length <= 0:
         target_length = 1
-    if target_length >= len(data):
+    if target_length >= n:
         return data.copy()
-    step = len(data) / target_length
-    downsampled = np.zeros(target_length, dtype=np.float64)
+
+    edges = np.linspace(0, n, target_length + 1, dtype=np.int64)
+    downsampled = np.empty(target_length, dtype=np.float32)
     for i in range(target_length):
-        start = int(i * step)
-        end = int((i + 1) * step)
+        start = int(edges[i])
+        end = int(edges[i + 1])
+        if end <= start:
+            end = min(start + 1, n)
         chunk = data[start:end]
-        avg = np.mean(chunk)
-        downsampled[i] = avg
+        downsampled[i] = float(np.mean(chunk)) if chunk.size else float(data[min(start, n - 1)])
     return downsampled
 
 def capture_samples():
@@ -130,7 +136,7 @@ def process_fft(samples):
     return fft_magnitude
 
 def generate_fft_data():
-    global reset_max_trace, reset_persist_trace, main_fft_updated_at, main_frame_seq
+    global reset_max_trace, reset_persist_trace, main_fft_updated_at, main_frame_seq, fft_failure_count
     full_fft = []
     current_freq = vars.sweep_settings['frequency_start']
     fft_max = None
@@ -247,27 +253,38 @@ def generate_fft_data():
                     main_fft_updated_at = time.time()
                     main_frame_seq += 1
             # Clear stale FFT error once a frame processes successfully.
+            fft_failure_count = 0
             vars.signal_stats.pop("fft_error", None)
             vars.signal_stats.pop("fft_error_ts", None)
         except Exception as e:
-            vars.signal_stats["fft_error"] = str(e)
-            vars.signal_stats["fft_error_ts"] = time.time()
+            fft_failure_count += 1
+            if fft_failure_count >= 3:
+                vars.signal_stats["fft_error"] = str(e)
+                vars.signal_stats["fft_error_ts"] = time.time()
             time.sleep(0.05)
 
 def radio_scanner():
-    global scanner_fft_updated_at, scanner_frame_seq
+    global scanner_fft_updated_at, scanner_frame_seq, scanner_failure_count
     nfft = 8*1024
-    detector = PeakDetector(sdr=vars.sdr0, averaging_count=vars.sdr_averagingCount(), nfft=nfft)
-    detector.start_receiving_data()
-    sdr_name = "sidekiq"
+    detector = None
+    detector_sdr = None
     
     while running:
-        minPeakDistance_index = int(vars.minPeakDistance * vars.sdr_sampleRate()/1e6)
         # Simulate continuous running until stopped
-        time.sleep(1)  # Adjust based on how frequently you want to process data
+        time.sleep(1)
 
         # Get processed scanner data outside shared lock to avoid starving FFT producer updates.
         try:
+            if vars.sdr0 is None:
+                raise RuntimeError("SDR not ready")
+
+            if detector is None or detector_sdr is not vars.sdr0:
+                if detector is not None:
+                    detector.stop_receiving_data()
+                detector = PeakDetector(sdr=vars.sdr0, averaging_count=vars.sdr_averagingCount(), nfft=nfft)
+                detector.start_receiving_data()
+                detector_sdr = vars.sdr0
+
             processed_data = detector.get_processed_data()
             if processed_data:
                 freq, fft_magnitude, noise_riding_threshold, signals, plot_ranges, freq_bound_left, freq_bound_right = processed_data
@@ -282,15 +299,23 @@ def radio_scanner():
                     scanner_fft_updated_at = time.time()
                     scanner_frame_seq += 1
             # Clear stale scanner error once scanner loop succeeds.
+            scanner_failure_count = 0
             vars.signal_stats.pop("scanner_error", None)
             vars.signal_stats.pop("scanner_error_ts", None)
         except Exception as e:
-            vars.signal_stats["scanner_error"] = str(e)
-            vars.signal_stats["scanner_error_ts"] = time.time()
+            scanner_failure_count += 1
+            if detector is not None:
+                detector.stop_receiving_data()
+                detector = None
+                detector_sdr = None
+            if scanner_failure_count >= 3:
+                vars.signal_stats["scanner_error"] = str(e)
+                vars.signal_stats["scanner_error_ts"] = time.time()
             time.sleep(0.1)
                     
     
-    detector.stop_receiving_data()
+    if detector is not None:
+        detector.stop_receiving_data()
 
 fft_thread = threading.Thread(target=generate_fft_data)
 scanner_thread = threading.Thread(target=radio_scanner)
