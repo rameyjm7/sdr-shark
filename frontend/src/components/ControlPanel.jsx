@@ -221,12 +221,22 @@ const ControlPanel = ({
     }
   };
 
-  const handleChange = (e) => {
+  const handleChange = async (e) => {
     const { name, value, type, checked } = e.target;
     const parsed = parseFloat(value);
     const newValue = type === 'checkbox' ? checked : (Number.isFinite(parsed) ? parsed : settings[name]);
     const newSettings = { ...settings, [name]: newValue };
     setSettings(newSettings);
+
+    // Sweep toggle should apply immediately to avoid requiring a manual save.
+    if (name === 'sweeping_enabled') {
+      try {
+        await axios.post(newValue ? '/api/start_sweep' : '/api/stop_sweep');
+      } catch (error) {
+        console.error('Error toggling sweep state:', error);
+      }
+      await applySettings(newSettings);
+    }
   };
 
   const handleSliderChange = (e, value, name) => {
@@ -432,7 +442,6 @@ const ControlPanel = ({
       <Box className="control-panel-tab-content">
         {tabIndex === 0 && (
           <>
-            <Typography variant="h6">SDR Settings</Typography>
             <Typography variant="body1">Select SDR:</Typography>
             <Select value={sdr || ''} onChange={handleSdrChange} fullWidth disabled={availableSdrs.length === 0}>
               {availableSdrs.map((device) => (

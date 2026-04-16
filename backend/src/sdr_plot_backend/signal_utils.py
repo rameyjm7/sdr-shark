@@ -20,7 +20,8 @@ class PeakDetector:
         self.running = False
         self.thread = None
         self.processed_data = None  # To store the processed data
-        self.save_last_packet = True
+        # Continuous pickle dumps are expensive; keep disabled unless explicitly requested.
+        self.save_last_packet = str(os.getenv("SDR_SHARK_SAVE_SCANNER_PICKLE", "0")).strip() in ("1", "true", "TRUE")
         self.processing_func = np.mean
     
     def set_processing_func(self, func):
@@ -279,4 +280,3 @@ def perform_and_refine_scan(sdr: SDRGeneric, wide_sample_rate: float, wide_fft_s
         refined_signals.append((peak_freq, max_power, refined_bandwidth_mhz))
 
     return refined_signals
-

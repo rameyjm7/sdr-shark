@@ -57,6 +57,20 @@ def _effective_peak_bw_mhz(raw_bw_mhz):
         bw = min_bw
     return max(min_bw, bw)
 
+
+def _normalize_peak_mhz(value):
+    """Normalize potentially mixed Hz/MHz peak values into MHz."""
+    try:
+        n = float(value)
+    except Exception:
+        return 0.0
+    if not np.isfinite(n):
+        return 0.0
+    # Some peak sources can leak Hz units. Treat huge values as Hz.
+    if abs(n) > 1e6:
+        return n / 1e6
+    return n
+
 def _safe_int(value, default, min_value=None, max_value=None):
     try:
         n = int(float(value))
@@ -188,8 +202,9 @@ def generate_fft_data():
                 else:
                     full_fft = np.concatenate((full_fft, current_fft))
 
-                # Tune to the next frequency
-                current_freq += 60e6
+                # Tune to the next frequency using current sample rate as sweep step.
+                step_hz = max(float(vars.sdr_sampleRate()), 1e6)
+                current_freq += step_hz
                 if current_freq > vars.sweep_settings['frequency_stop']:
                     current_freq = vars.sweep_settings['frequency_start']
 
@@ -355,7 +370,8 @@ def reset_fft_trace():
 def get_data():
     with data_lock:
         max_waterfall_rows = _safe_int(vars.waterfall_samples, default=100, min_value=1, max_value=2000)
-        max_payload_cells = 300000
+        # Keep live responses lightweight for lower-latency UI updates.
+        max_payload_cells = 150000
         main_fft_snapshot = list(fft_data['original_fft'])
         scanner_fft_snapshot = list(fft_data['original_fft2'])
         main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, max_waterfall_rows)
@@ -400,10 +416,11 @@ def get_data():
     center_freq_mhz = float(vars.sdr_frequency() / 1e6)
     peaks_response = []
     for idx, peak in enumerate(peaks_snapshot):
-        rel_center = float(peak['center_freq'])
-        rel_start = float(peak['start_freq'])
-        rel_end = float(peak['end_freq'])
-        bw_mhz = _effective_peak_bw_mhz(peak.get('bandwidth', 0.0))
+        rel_center = _normalize_peak_mhz(peak.get('center_freq', 0.0))
+        rel_start = _normalize_peak_mhz(peak.get('start_freq', 0.0))
+        rel_end = _normalize_peak_mhz(peak.get('end_freq', 0.0))
+        raw_bw = _normalize_peak_mhz(peak.get('bandwidth', 0.0))
+        bw_mhz = _effective_peak_bw_mhz(raw_bw)
         abs_center = center_freq_mhz + rel_center
         abs_start = center_freq_mhz + rel_start
         abs_end = center_freq_mhz + rel_end

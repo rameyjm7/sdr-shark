@@ -116,9 +116,14 @@ const ChartComponent = ({
         // Replace NaN values in FFT data
         const sanitizedFftData = rawFft.map(value => isNaN(value) ? -255 : value);
         const fftChanged = hasMeaningfulFftChange(sanitizedFftData, lastFftSnapshotRef.current);
+        const fftFinite = sanitizedFftData.filter((v) => Number.isFinite(v));
+        const fftMin = fftFinite.length ? Math.min(...fftFinite) : -255;
+        const fftMax = fftFinite.length ? Math.max(...fftFinite) : -255;
+        const fftRange = fftMax - fftMin;
+        const fftFlatNoSignal = fftFinite.length > 8 && fftMax < -200 && fftRange < 0.5;
         lastFftSnapshotRef.current = sanitizedFftData;
         setFftData(sanitizedFftData);
-        if (frameAdvanced || fftChanged) {
+        if ((frameAdvanced || fftChanged) && !fftFlatNoSignal) {
           staleSeqCountRef.current = 0;
           setWaterfallNoSignal(false);
           setSpectrumNoSignal(false);
@@ -176,7 +181,7 @@ const ChartComponent = ({
           });
         }
         setTime(data.time);
-        const backendPeaks = Array.isArray(data.peaks) ? data.peaks : [];
+        const backendPeaks = fftFlatNoSignal ? [] : (Array.isArray(data.peaks) ? data.peaks : []);
         let telemetryPeaks = backendPeaks;
         if (backendPeaks.length === 0 && sanitizedFftData.length > 0) {
           const bins = sanitizedFftData.length;
@@ -189,7 +194,7 @@ const ChartComponent = ({
             }
           }
           const centerMHz = Number(data?.settings?.frequency ?? settings.frequency ?? 0);
-          const sampleRateMHz = Math.max(0.1, Number(data?.settings?.sample_rate ?? settings.sampleRate ?? 1));
+          const sampleRateMHz = Math.max(0.1, Number(data?.settings?.sample_rate ?? ((settings.sampleRate || 1) * 1e6)) / 1e6);
           const binBwMHz = sampleRateMHz / Math.max(1, bins);
           const absFreqMHz = (centerMHz - (sampleRateMHz / 2)) + (maxIdx * binBwMHz);
           telemetryPeaks = [{

@@ -258,18 +258,23 @@ const App = () => {
   const telemetryDetectChipSx = { ...telemetryChipSx, width: 280, minWidth: 280, maxWidth: 280, flex: '0 0 280px' };
 
   const detectedSignalLabel = useMemo(() => {
+    const normalizeMHz = (value) => {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return NaN;
+      return Math.abs(n) > 1e6 ? (n / 1e6) : n;
+    };
     const peaks = Array.isArray(telemetry.peaks) ? telemetry.peaks : [];
     if (!peaks.length) return 'Detected: none';
 
     const strongest = [...peaks].sort(
       (a, b) => Number(b?.peak_power || -999) - Number(a?.peak_power || -999),
     )[0];
-    const absCenterMHz = Number(strongest?.absolute_frequency);
-    const relCenterMHz = Number(strongest?.frequency);
+    const absCenterMHz = normalizeMHz(strongest?.absolute_frequency);
+    const relCenterMHz = normalizeMHz(strongest?.frequency);
     const centerMHz = Number.isFinite(absCenterMHz)
       ? absCenterMHz
       : (Number.isFinite(relCenterMHz) ? relCenterMHz + Number(settings.frequency || 0) : NaN);
-    const bwMHz = Number(strongest?.bandwidth);
+    const bwMHz = normalizeMHz(strongest?.bandwidth);
     if (!Number.isFinite(centerMHz) || !Number.isFinite(bwMHz)) return 'Detected: unknown';
 
     const classes = Array.isArray(strongest?.classification) ? strongest.classification : [];
