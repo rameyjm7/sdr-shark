@@ -274,19 +274,21 @@ const ControlPanel = ({
     setSdr(newSdr);
     updateStatus(`Changing SDR to ${newSdr}...`, 'info');
 
-    const updatedSettings = {
+    // Optimistic local update; canonical device limits/settings are pulled from backend next.
+    setSettings({
       ...settings,
       sdr: newSdr,
       showSecondTrace: newSdr === 'hackrf',
-    };
-    setSettings(updatedSettings);
+    });
 
     try {
       const response = await axios.post('/api/select_sdr', { sdr_name: newSdr });
       if (!response?.data?.result) {
         throw new Error(response?.data?.message || `Failed to switch SDR to ${newSdr}`);
       }
-      await applySettings(updatedSettings);
+      // Do not apply stale prior-radio sample/bandwidth values here.
+      // Fetch backend-canonical settings for the newly selected SDR.
+      await fetchSettings();
       updateStatus(`SDR changed to ${newSdr}`, 'success');
     } catch (error) {
       console.error('Error changing SDR:', error);
@@ -298,7 +300,8 @@ const ControlPanel = ({
 
   const enforceLimits = (settings) => {
     const newSettings = { ...settings };
-    const device = availableSdrs.find((d) => d.id === sdr);
+    const targetSdr = newSettings.sdr || sdr;
+    const device = availableSdrs.find((d) => d.id === targetSdr);
     const freqMinMHz = device ? Number(device.freq_min_hz) / 1e6 : 1;
     const freqMaxMHz = device ? Number(device.freq_max_hz) / 1e6 : 6000;
     const srMaxMHz = device ? Number(device.max_sample_rate_sps) / 1e6 : 20;
@@ -309,6 +312,9 @@ const ControlPanel = ({
     newSettings.gain = clamp(toFinite(newSettings.gain, 10), 0, 62);
     newSettings.sampleRate = clamp(toFinite(newSettings.sampleRate, srMaxMHz), 0.25, srMaxMHz);
     newSettings.bandwidth = clamp(toFinite(newSettings.bandwidth, newSettings.sampleRate), 0.2, srMaxMHz);
+    if (newSettings.lockBandwidthSampleRate) {
+      newSettings.bandwidth = newSettings.sampleRate;
+    }
     newSettings.frequency_start = clamp(toFinite(newSettings.frequency_start, freqMinMHz), freqMinMHz, freqMaxMHz);
     newSettings.frequency_stop = clamp(toFinite(newSettings.frequency_stop, freqMaxMHz), freqMinMHz, freqMaxMHz);
     if (newSettings.frequency_stop < newSettings.frequency_start) {
