@@ -31,3 +31,5 @@ backend/tests/iq_data.pkl
 backend/tests/fft_data.pkl
 backend/tests/scan_data.pkl
 scan_data.pkl
+backend/.venv/
+backend/.venv

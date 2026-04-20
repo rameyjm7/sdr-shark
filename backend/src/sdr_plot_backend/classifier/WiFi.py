@@ -2,8 +2,9 @@ from sdr_plot_backend.classifier.Base import BaseSignalClassifier
 
 class WiFi24GHzClassifier(BaseSignalClassifier):
     def __init__(self):
+        super().__init__()
         self.bands = [
-			{"label": "WiFi 2.4G", "channel": 1, "frequency": 2412, "bandwidth": 22, "metadata": ""},
+            {"label": "WiFi 2.4G", "channel": 1, "frequency": 2412, "bandwidth": 22, "metadata": ""},
             {"label": "WiFi 2.4G", "channel": 2, "frequency": 2417, "bandwidth": 22, "metadata": ""},
             {"label": "WiFi 2.4G", "channel": 3, "frequency": 2422, "bandwidth": 22, "metadata": ""},
             {"label": "WiFi 2.4G", "channel": 4, "frequency": 2427, "bandwidth": 22, "metadata": ""},
@@ -18,10 +19,13 @@ class WiFi24GHzClassifier(BaseSignalClassifier):
             {"label": "WiFi 2.4G", "channel": 13, "frequency": 2472, "bandwidth": 22, "metadata": "Low Power Only (US)"},
             {"label": "WiFi 2.4G", "channel": 14, "frequency": 2484, "bandwidth": 22, "metadata": "Japan Only"},
         ]
+        self._prepare_bands()
 
     def classify_signal(self, frequency_mhz, bandwidth_mhz=None):
+        # Measurements rarely land exactly on channel center; allow small tolerance.
+        tolerance_mhz = 1.0
         for channel in self.bands:
-            if frequency_mhz == channel["frequency"]:
+            if abs(frequency_mhz - channel["frequency"]) <= tolerance_mhz:
                 return [{
                     "label": "WiFi 2.4 GHz",
                     "frequency": channel["frequency"],
@@ -46,6 +50,7 @@ class WiFi24GHzClassifier(BaseSignalClassifier):
 
 class WiFi5GHzClassifier(BaseSignalClassifier):
     def __init__(self):
+        super().__init__()
         self.bands = [
             {"label": "WiFi 5G", "channel": 36, "frequency": 5180, "bandwidth": 20, "metadata": ""},
             {"label": "WiFi 5G", "channel": 40, "frequency": 5200, "bandwidth": 20, "metadata": ""},
@@ -61,28 +66,10 @@ class WiFi5GHzClassifier(BaseSignalClassifier):
             {"label": "WiFi 5G", "channel": 161, "frequency": 5805, "bandwidth": 20, "metadata": ""},
             {"label": "WiFi 5G", "channel": 165, "frequency": 5825, "bandwidth": 20, "metadata": ""}
         ]
+        self._prepare_bands()
 
     def classify_signal(self, frequency_mhz, bandwidth_mhz=None):
-        for channel in self.bands:
-            if channel["frequency"] - channel["bandwidth"]/2 <= frequency_mhz <= channel["frequency"] + channel["bandwidth"]/2:
-                return [{
-                    "label": "WiFi 5 GHz",
-                    "frequency": channel["frequency"],
-                    "bandwidth": channel["bandwidth"],
-                    "channel": f"{channel['channel']}",
-                    "metadata": channel["metadata"]
-                }]
-        return []
+        return super().classify_signal(frequency_mhz, bandwidth_mhz)
 
     def get_signals_in_range(self, start_freq_mhz, end_freq_mhz):
-        matches = []
-        for channel in self.bands:
-            if start_freq_mhz <= channel["frequency"] <= end_freq_mhz:
-                matches.append({
-                    "label": "WiFi 5 GHz",
-                    "frequency": channel["frequency"],
-                    "bandwidth": channel["bandwidth"],
-                    "channel": f"{channel['channel']}",
-                    "metadata": channel["metadata"]
-                })
-        return matches
+        return super().get_signals_in_range(start_freq_mhz, end_freq_mhz)

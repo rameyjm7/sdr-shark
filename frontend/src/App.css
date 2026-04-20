@@ -1,28 +1,29 @@
-body, html, #root {
+html, body, #root {
     margin: 0;
     padding: 0;
     width: 100%;
-    display: flex;
-    flex-direction: column;
-    overflow: auto;
+    height: 100%;
+    overflow: hidden;
 }
 
 .plots {
-    flex: 1; /* Slightly reduced height for plots */
+    flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     padding: 0;
     overflow: hidden;
 }
 
 .control-panel {
-    flex: 0.25; /* Slightly reduced height for control panel */
+    flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     padding: 10px;
     background-color: #1c1c1c;
     color: white;
-    overflow-y: auto;
+    overflow: hidden;
     box-sizing: border-box;
 }
 
@@ -46,13 +47,13 @@ body, html, #root {
 }
 
 /* Firefox scrollbar */
-body, html, #root, .control-panel {
+html, body, #root, .control-panel {
     scrollbar-width: thin; /* Thin scrollbar */
     scrollbar-color: #444 #1c1c1c; /* Thumb and track colors */
 }
 
 /* IE 10+ */
-body, html, #root, .control-panel {
+html, body, #root, .control-panel {
     -ms-overflow-style: scrollbar; /* Use default scrollbar, but styled */
 }
 
@@ -72,12 +73,23 @@ body, html, #root, .control-panel {
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
 }
 
 /* New styles for control panel content to stretch */
 .control-panel-content {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
+}
+
+.control-panel-tab-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 2px;
 }
 
 .resize-handle {

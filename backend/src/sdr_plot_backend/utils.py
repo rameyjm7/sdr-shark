@@ -1,7 +1,7 @@
 import threading
 import json
 import os
-from sdrfly.sdr.sdr_generic import SDRGeneric
+from sdr_plot_backend.sdr_generic import SDRGeneric
 import numpy as np
 from sdr_plot_backend.classifier import SignalClassifier
 
@@ -20,9 +20,12 @@ class SdrSettings:
 class sdr_scheduler_config:
 
     def __init__(self) -> None:
-        # self.app_root = "/mnt/samba_share/datascience/"
-        self.app_root = "/root"
-        self.settings_file = "/root/configurations/sdr_scheduler_config.json"
+        home_dir = os.path.expanduser("~")
+        self.app_root = os.getenv("SDR_SHARK_APP_ROOT", os.path.join(home_dir, ".sdr-shark"))
+        self.settings_file = os.getenv(
+            "SDR_SHARK_SETTINGS_FILE",
+            os.path.join(self.app_root, "configurations", "sdr_scheduler_config.json"),
+        )
         self.sdr_settings = {
             "hackrf" : SdrSettings("hackrf"),
             "sidekiq" : SdrSettings("sidekiq")
@@ -54,6 +57,7 @@ class sdr_scheduler_config:
         self.dc_suppress = True
         self.show_waterfall = True
         self.waterfall_samples = 100
+        self.waterfall_bin_count = 2048
         self.persistence_decay  = 0.5
         self.number_of_peaks = 5
         self.showFirstTrace = True
@@ -61,10 +65,21 @@ class sdr_scheduler_config:
         self.showMaxTrace = True
         self.showPeristanceTrace = True
         self.minPeakDistance = 0.1 # MHz
-        self.recordings_dir = f"{self.app_root}/datascience/recordings"
-        self.classifiers_path = f"{self.app_root}/datascience/band_dictionaries/"
+        self.analysis_retention_sec = 10.0
+        self.recordings_dir = os.getenv(
+            "SDR_SHARK_RECORDINGS_DIR",
+            os.path.join(self.app_root, "datascience", "recordings"),
+        )
+        self.classifiers_path = os.getenv(
+            "SDR_SHARK_CLASSIFIERS_PATH",
+            os.path.join(self.app_root, "datascience", "band_dictionaries"),
+        )
         self.lockBandwidthSampleRate = False  # Default setting for lock
         self.radio_name = "sidekiq"
+
+        os.makedirs(os.path.dirname(self.settings_file), exist_ok=True)
+        os.makedirs(self.recordings_dir, exist_ok=True)
+        os.makedirs(self.classifiers_path, exist_ok=True)
         
         # Initialize SDRs
         self.sdr0 = SDRGeneric("sidekiq", 
@@ -73,7 +88,12 @@ class sdr_scheduler_config:
                                bandwidth=self.sdr_settings['sidekiq'].bandwidth,
                                gain=self.sdr_settings['sidekiq'].gain,
                                size=self.sample_size)
-        self.sdr0.start()
+        try:
+            self.sdr0.start()
+        except Exception as exc:
+            # Do not crash backend startup when gateway has no currently available SDR.
+            # The app can still start and recover once a device becomes available.
+            print(f"Warning: SDR init failed at startup: {exc}")
         # self.sdr1 = SDRGeneric("hackrf",
         #                        center_freq=self.sdr_settings['hackrf'].frequency,
         #                        sample_rate=self.sdr_settings['hackrf'].sampleRate,
@@ -91,6 +111,19 @@ class sdr_scheduler_config:
             "max" : -255
         }
 
+    def _ensure_radio_settings(self, key: str):
+        """Ensure we have a settings bucket for a discovered radio driver."""
+        if key in self.sdr_settings:
+            return
+        seed = self.sdr_settings.get(self.sdr_name, next(iter(self.sdr_settings.values())))
+        s = SdrSettings(key)
+        s.frequency = float(seed.frequency)
+        s.sampleRate = float(seed.sampleRate)
+        s.bandwidth = float(seed.bandwidth)
+        s.gain = float(seed.gain)
+        s.averagingCount = int(seed.averagingCount)
+        self.sdr_settings[key] = s
+
     def load_settings(self):
         """Load settings from a JSON file. If the file doesn't exist, create it with default values."""
         if os.path.exists(self.settings_file):
@@ -107,10 +140,9 @@ class sdr_scheduler_config:
 
     def create_default_settings(self):
         print(f"Settings file '{self.settings_file}' not found. Creating with default settings.")
-        self.save_settings(self.get_default_config())
-        with open(self.settings_file, 'r') as f:
-                settings = json.load(f)
-                self.apply_settings(settings)
+        settings = self.get_default_config()
+        self.save_settings(settings)
+        self.apply_settings(settings)
 
     def save_settings(self, settings_ = None):
         """Save current settings to a JSON file."""
@@ -167,10 +199,12 @@ class sdr_scheduler_config:
             "dc_suppress": self.dc_suppress,
             "show_waterfall": self.show_waterfall,
             "waterfall_samples": self.waterfall_samples,
+            "waterfall_bin_count": self.waterfall_bin_count,
             "number_of_peaks": self.number_of_peaks,
             "recordings_dir": self.recordings_dir,
             "lockBandwidthSampleRate": self.lockBandwidthSampleRate,
             "minPeakDistance": self.minPeakDistance,
+            "analysisRetentionSec": self.analysis_retention_sec,
             "radio_name": self.radio_name,
             "showFirstTrace": self.showFirstTrace,
             "showSecondTrace": self.showSecondTrace,
@@ -197,6 +231,7 @@ class sdr_scheduler_config:
             self.dc_suppress = settings.get("dcSuppress", self.dc_suppress)
             self.show_waterfall = settings.get("showWaterfall", self.show_waterfall)
             self.waterfall_samples = settings.get("waterfallSamples", self.waterfall_samples)
+            self.waterfall_bin_count = settings.get("waterfallBinCount", self.waterfall_bin_count)
             self.number_of_peaks = settings.get("number_of_peaks", self.number_of_peaks)
             self.recordings_dir = settings.get("recordings_dir", self.recordings_dir)
             self.lockBandwidthSampleRate = settings.get("lockBandwidthSampleRate", self.lockBandwidthSampleRate)
@@ -205,24 +240,19 @@ class sdr_scheduler_config:
             self.showMaxTrace = settings.get("showMaxTrace", self.showMaxTrace)
             self.showPeristanceTrace = settings.get("showPeristanceTrace", self.showPeristanceTrace)
             self.minPeakDistance = settings.get("minPeakDistance", self.minPeakDistance)
+            self.analysis_retention_sec = float(settings.get("analysisRetentionSec", self.analysis_retention_sec))
             self.radio_name = settings.get("radio_name", self.radio_name)
 
             # Validate the settings after applying them
             self.validate_settings()
 
 
-            if self.sdr_name in 'hackrf':
-                self.sdr1.set_frequency(self.sdr_frequency())
-                sr = self.sdr_sampleRate()
-                self.sdr1.set_sample_rate(20e6 if sr > 20e6 else sr)
-                self.sdr1.set_bandwidth(20e6 if sr > 20e6 else sr)
-                self.sdr1.set_gain(self.sdr_settings[self.sdr_name].gain)
-            else:
-                self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
-                sr = self.sdr_sampleRate()
-                self.sdr0.set_sample_rate(sr)
-                self.sdr0.set_bandwidth(sr)
-                self.sdr0.set_gain(self.sdr_gain())
+            # Always drive the active gateway-backed SDR instance.
+            self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
+            sr = self.sdr_sampleRate()
+            self.sdr0.set_sample_rate(sr)
+            self.sdr0.set_bandwidth(sr)
+            self.sdr0.set_gain(self.sdr_gain())
         except Exception as e:
             print(e)
             pass
@@ -239,34 +269,67 @@ class sdr_scheduler_config:
         return self.sdr_settings[self.sdr_name].averagingCount
 
     def reselect_radio(self, name: str) -> int:
-        """Temporarily disabled due to the use of both radios."""
-        print("Radio switching is currently disabled.")
-        return 1
+        try:
+            driver = str(name).split(":", 1)[0].lower()
+            self._ensure_radio_settings(driver)
+            selected = self.sdr0.select_device(name)
+            if selected:
+                self.sdr_name = driver
+                self.radio_name = name
+                # Apply sensible per-radio defaults, then clamp to device limits.
+                preferred_sr = {
+                    "hackrf": 20e6,
+                    "sidekiq": 60e6,
+                    "airspy": 10e6,
+                    "bladerf": 20e6,
+                    "rtlsdr": 2.4e6,
+                }.get(driver, self.sdr_settings[self.sdr_name].sampleRate)
+                max_sr = float(getattr(self.sdr0, "max_sample_rate", self.sdr_sampleRate()) or self.sdr_sampleRate())
+                sr = min(float(preferred_sr), max_sr)
+                self.sdr_settings[self.sdr_name].sampleRate = sr
+                self.sdr_settings[self.sdr_name].bandwidth = sr
+                self.sdr_settings[self.sdr_name].frequency = min(
+                    max(self.sdr_settings[self.sdr_name].frequency, float(getattr(self.sdr0, "min_frequency", 1e6))),
+                    float(getattr(self.sdr0, "max_frequency", 6e9)),
+                )
+                self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
+                self.sdr0.set_sample_rate(self.sdr_settings[self.sdr_name].sampleRate)
+                self.sdr0.set_bandwidth(self.sdr_settings[self.sdr_name].bandwidth)
+                self.sdr0.set_gain(self.sdr_settings[self.sdr_name].gain)
+                return 1
+            return 0
+        except Exception as e:
+            print(e)
+            return 0
     
     def get_default_config(self):
-        return """{
-    "frequency": 751000000.0,
-    "sample_rate": 20000000.0,
-    "bandwidth": 20000000.0,
-    "gain": 10,
-    "sweep_settings": {
-        "frequency_start": 700000000.0,
-        "frequency_stop": 820000000.0,
-        "bandwidth": 16000000.0
-    },
-    "sweeping_enabled": false,
-    "peak_threshold_minimum_dB": -25,
-    "averagingCount": 1,
-    "dc_suppress": true,
-    "show_waterfall": true,
-    "waterfall_samples": 100,
-    "number_of_peaks": 5,
-    "recordings_dir": "/root/workspace/data/recordings",
-    "lockBandwidthSampleRate": true,
-    "radio_name": "sidekiq",
-    "showFirstTrace": true,
-    "showSecondTrace": true
-        }"""
+        return {
+            "frequency": 751000000.0,
+            "sampleRate": 20000000.0,
+            "bandwidth": 20000000.0,
+            "gain": 10,
+            "sweep_settings": {
+                "frequency_start": 700000000.0,
+                "frequency_stop": 820000000.0,
+                "bandwidth": 16000000.0,
+            },
+            "sweeping_enabled": False,
+            "peakThreshold": -25,
+            "averagingCount": 1,
+            "dcSuppress": True,
+            "showWaterfall": True,
+            "waterfallSamples": 100,
+            "waterfallBinCount": 2048,
+            "number_of_peaks": 5,
+            "recordings_dir": self.recordings_dir,
+            "lockBandwidthSampleRate": True,
+            "radio_name": "sidekiq",
+            "showFirstTrace": True,
+            "showSecondTrace": True,
+            "showMaxTrace": True,
+            "showPeristanceTrace": True,
+            "analysisRetentionSec": 10.0,
+        }
 
 # Instantiate the configuration
 vars = sdr_scheduler_config()

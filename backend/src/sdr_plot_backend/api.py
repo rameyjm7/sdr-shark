@@ -8,7 +8,6 @@ import os
 import numpy as np
 import json
 from flask import Blueprint, jsonify, request, current_app, Response
-from numba import jit
 
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
@@ -17,8 +16,8 @@ api_blueprint = Blueprint('api', __name__)
 
 sample_buffer = np.zeros(vars.sample_size, dtype=np.complex64)  # Increase buffer size to decrease RBW
 data_buffer = deque(maxlen=vars.sdr_averagingCount())
-waterfall_buffer = deque(maxlen=100)  # Buffer for waterfall data
-waterfall_buffer2 = deque(maxlen=100)  # Buffer for waterfall data
+waterfall_buffer = deque(maxlen=2000)  # Buffer for waterfall data
+waterfall_buffer2 = deque(maxlen=2000)  # Buffer for waterfall data
 
 data_lock = threading.Lock()
 fft_data = {
@@ -29,17 +28,113 @@ fft_data = {
     'persist': []
 }
 running = True
+reset_max_trace = False
+reset_persist_trace = False
+main_fft_updated_at = 0.0
+scanner_fft_updated_at = 0.0
+main_frame_seq = 0
+scanner_frame_seq = 0
+analysis_peak_memory = {}
+analysis_memory_lock = threading.Lock()
+fft_failure_count = 0
+scanner_failure_count = 0
 
-@jit(nopython=True)
+
+def _quantize_mhz(value, step_mhz=0.05):
+    n = float(value)
+    step = max(0.001, float(step_mhz))
+    return round(round(n / step) * step, 3)
+
+
+def _effective_peak_bw_mhz(raw_bw_mhz):
+    """Enforce a floor for peak bandwidth based on configured min peak distance."""
+    min_bw = max(0.001, float(getattr(vars, "minPeakDistance", 0.1)))
+    try:
+        bw = float(raw_bw_mhz)
+    except Exception:
+        bw = min_bw
+    if not np.isfinite(bw):
+        bw = min_bw
+    return max(min_bw, bw)
+
+
+def _normalize_peak_mhz(value):
+    """Normalize potentially mixed Hz/MHz peak values into MHz."""
+    try:
+        n = float(value)
+    except Exception:
+        return 0.0
+    if not np.isfinite(n):
+        return 0.0
+    # Some peak sources can leak Hz units. Treat huge values as Hz.
+    if abs(n) > 1e6:
+        return n / 1e6
+    return n
+
+def _safe_int(value, default, min_value=None, max_value=None):
+    try:
+        n = int(float(value))
+    except Exception:
+        n = int(default)
+    if min_value is not None:
+        n = max(min_value, n)
+    if max_value is not None:
+        n = min(max_value, n)
+    return n
+
+def _active_sdr_key():
+    """Return the currently active settings key with safe fallback."""
+    key = getattr(vars, "sdr_name", None)
+    if key in vars.sdr_settings:
+        return key
+    if "sidekiq" in vars.sdr_settings:
+        return "sidekiq"
+    return next(iter(vars.sdr_settings.keys()))
+
+def _tail_deque_rows(buffer, max_rows):
+    """Return the newest max_rows from a deque without materializing the whole deque."""
+    if max_rows <= 0:
+        return []
+    rows = []
+    for row in reversed(buffer):
+        rows.append(row)
+        if len(rows) >= max_rows:
+            break
+    rows.reverse()
+    return rows
+
+
+def _to_builtin(value):
+    """Convert NumPy containers/scalars into JSON-serializable Python types."""
+    if isinstance(value, dict):
+        return {k: _to_builtin(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, deque)):
+        return [_to_builtin(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
 def downsample(data, target_length=256):
-    step = len(data) / target_length
-    downsampled = np.zeros(target_length, dtype=np.float64)
+    data = np.asarray(data, dtype=np.float32)
+    n = data.size
+    if n == 0:
+        return np.zeros(1, dtype=np.float32)
+    if target_length <= 0:
+        target_length = 1
+    if target_length >= n:
+        return data.copy()
+
+    edges = np.linspace(0, n, target_length + 1, dtype=np.int64)
+    downsampled = np.empty(target_length, dtype=np.float32)
     for i in range(target_length):
-        start = int(i * step)
-        end = int((i + 1) * step)
+        start = int(edges[i])
+        end = int(edges[i + 1])
+        if end <= start:
+            end = min(start + 1, n)
         chunk = data[start:end]
-        avg = np.mean(chunk)
-        downsampled[i] = avg
+        downsampled[i] = float(np.mean(chunk)) if chunk.size else float(data[min(start, n - 1)])
     return downsampled
 
 def capture_samples():
@@ -50,134 +145,192 @@ def capture_samples():
 
 def process_fft(samples):
     fft_result = np.fft.fftshift(np.fft.fft(samples))
-    fft_magnitude = 20 * np.log10(np.abs(fft_result))
+    # Add epsilon to avoid log10(0) warnings on silent bins.
+    fft_magnitude = 20 * np.log10(np.abs(fft_result) + 1e-12)
     return fft_magnitude
 
 def generate_fft_data():
+    global reset_max_trace, reset_persist_trace, main_fft_updated_at, main_frame_seq, fft_failure_count
     full_fft = []
-    sdr_name = "sidekiq"
     current_freq = vars.sweep_settings['frequency_start']
     fft_max = None
     fft_persist_data = None  # Initialize persistence trace
     persistence_decay = vars.persistence_decay  # Fetch decay factor (e.g., 0.9)
     
     while running:
-        start_time = time.time()
-        
-        # Capture and process FFT samples
-        capture_samples()
-        current_fft = process_fft(sample_buffer)
-        
-        # Suppress DC spike if enabled
-        if vars.dc_suppress:
-            dc_index = len(current_fft) // 2
-            current_fft[dc_index] = current_fft[dc_index + 1]
-        
-        # Normalize invalid (inf) values
-        current_fft = np.where(np.isinf(current_fft), -20, current_fft)
-        
-        # Update maximum FFT trace
-        fft_max = current_fft if fft_max is None else np.maximum(fft_max, current_fft)
+        try:
+            if reset_max_trace:
+                fft_max = None
+                reset_max_trace = False
+            if reset_persist_trace:
+                fft_persist_data = None
+                reset_persist_trace = False
 
-        # Handle persistence trace with decay
-        if fft_persist_data is None:
-            fft_persist_data = current_fft  # Initialize persistence trace
-        else:
-            fft_persist_data = (
-                persistence_decay * fft_persist_data + (1 - persistence_decay) * current_fft
-            )
-        fft_data['persist'] = fft_persist_data
+            # Capture and process FFT samples
+            capture_samples()
+            current_fft = process_fft(sample_buffer)
 
-        if vars.sweeping_enabled:
-            # Perform sweeping logic
-            if full_fft is None:
-                full_fft = current_fft
-            elif type(full_fft) is list:
-                full_fft = np.concatenate((full_fft, current_fft))
+            # Suppress DC spike if enabled
+            if vars.dc_suppress:
+                dc_index = len(current_fft) // 2
+                current_fft[dc_index] = current_fft[dc_index + 1]
+
+            # Normalize invalid (inf) values
+            current_fft = np.where(np.isinf(current_fft), -20, current_fft)
+
+            # Update maximum FFT trace
+            fft_max = current_fft if fft_max is None else np.maximum(fft_max, current_fft)
+
+            # Handle persistence trace with decay
+            if fft_persist_data is None:
+                fft_persist_data = current_fft  # Initialize persistence trace
             else:
-                full_fft = np.concatenate((full_fft, current_fft))
-            
-            # Tune to the next frequency
-            current_freq += 60e6
-            if current_freq > vars.sweep_settings['frequency_stop']:
-                current_freq = vars.sweep_settings['frequency_start']
-                
-                # Process completed sweep
-                averaged_fft = np.array(full_fft)
-                
-                # Calculate noise floor using the lowest 20% of FFT values
-                noise_floor = np.mean(np.percentile(averaged_fft, 20))
-                vars.signal_stats["noise_floor"] = round(noise_floor, 3)
-                vars.signal_stats["max"] = round(float(np.max(averaged_fft)), 3)
-                
-                # Downsample FFT data for output
-                downsampled_fft_avg = downsample(averaged_fft, len(current_fft))
-                downsampled_fft = downsample(current_fft, len(current_fft))
+                fft_persist_data = (
+                    persistence_decay * fft_persist_data + (1 - persistence_decay) * current_fft
+                )
+            fft_data['persist'] = fft_persist_data
 
-                # Update shared data
+            sdr_key = _active_sdr_key()
+            averaging_count = max(1, int(vars.sdr_settings[sdr_key].averagingCount))
+
+            if vars.sweeping_enabled:
+                # Perform sweeping logic
+                if full_fft is None:
+                    full_fft = current_fft
+                elif type(full_fft) is list:
+                    full_fft = np.concatenate((full_fft, current_fft))
+                else:
+                    full_fft = np.concatenate((full_fft, current_fft))
+
+                # Tune to the next frequency using current sample rate as sweep step.
+                step_hz = max(float(vars.sdr_sampleRate()), 1e6)
+                current_freq += step_hz
+                if current_freq > vars.sweep_settings['frequency_stop']:
+                    current_freq = vars.sweep_settings['frequency_start']
+
+                    # Process completed sweep
+                    averaged_fft = np.array(full_fft)
+
+                    # Calculate noise floor using the lowest 20% of FFT values
+                    noise_floor = np.mean(np.percentile(averaged_fft, 20))
+                    vars.signal_stats["noise_floor"] = round(noise_floor, 3)
+                    vars.signal_stats["max"] = round(float(np.max(averaged_fft)), 3)
+
+                    # Downsample FFT data for output
+                    downsampled_fft_avg = downsample(averaged_fft, len(current_fft))
+                    downsampled_fft = downsample(current_fft, len(current_fft))
+
+                    # Update shared data
                 with data_lock:
                     fft_data['original_fft'] = downsampled_fft_avg.tolist()
                     waterfall_buffer.append(downsampled_fft.tolist())
-                
-                # Reset for the next sweep
-                full_fft = []
-            
-            # Update SDR frequency
-            vars.sdr_settings[sdr_name].frequency = current_freq
-            vars.sdr0.set_frequency(current_freq)
-            time.sleep(0.05)
-        else:
-            # Normal operation without sweeping
-            if len(full_fft) == 0:
-                full_fft = current_fft
+                    main_fft_updated_at = time.time()
+                    main_frame_seq += 1
+
+                    # Reset for the next sweep
+                    full_fft = []
+
+                # Update SDR frequency
+                vars.sdr_settings[sdr_key].frequency = current_freq
+                vars.sdr0.set_frequency(current_freq)
+                time.sleep(0.05)
             else:
-                full_fft = (full_fft[:vars.sample_size] * (vars.sdr_settings[sdr_name].averagingCount - 1) + current_fft) / vars.sdr_settings[sdr_name].averagingCount
-            
-            # Calculate noise floor and signal stats
-            noise_floor = np.mean(np.percentile(full_fft, 20))
-            vars.signal_stats["noise_floor"] = round(noise_floor, 3)
-            vars.signal_stats["noise_riding_threshold"] = round(noise_floor + vars.peak_threshold_minimum_dB, 3)
-            vars.signal_stats['max'] = round(float(np.max(full_fft)), 3)
-            
-            # Determine maximum frequency
-            max_index = np.argmax(full_fft)
-            frequency_step = vars.sdr_sampleRate() / vars.sample_size
-            max_freq = ((max_index * frequency_step) + (vars.sdr_frequency() - vars.sdr_sampleRate() / 2)) / 1e6
-            vars.signal_stats['max_freq'] = round(float(max_freq), 3)
+                # Normal operation without sweeping
+                if len(full_fft) == 0:
+                    full_fft = current_fft
+                else:
+                    full_fft = (full_fft[:vars.sample_size] * (averaging_count - 1) + current_fft) / averaging_count
 
-            # Signal detection logic
-            vars.signal_stats['signal_detected'] = 1 if vars.signal_stats['max'] > vars.signal_stats["noise_riding_threshold"] else 0
+                # Calculate noise floor and signal stats
+                noise_floor = np.mean(np.percentile(full_fft, 20))
+                vars.signal_stats["noise_floor"] = round(noise_floor, 3)
+                vars.signal_stats["noise_riding_threshold"] = round(noise_floor + vars.peak_threshold_minimum_dB, 3)
+                vars.signal_stats['max'] = round(float(np.max(full_fft)), 3)
 
-            # Update shared data
-            with data_lock:
-                fft_data['original_fft'] = full_fft.tolist()
-                fft_data['max'] = fft_max.tolist()
-                fft_data['persist'] = fft_persist_data.tolist()
-                waterfall_buffer.append(downsample(current_fft).tolist())
+                # Determine maximum frequency
+                max_index = np.argmax(full_fft)
+                frequency_step = vars.sdr_sampleRate() / vars.sample_size
+                max_freq = ((max_index * frequency_step) + (vars.sdr_frequency() - vars.sdr_sampleRate() / 2)) / 1e6
+                vars.signal_stats['max_freq'] = round(float(max_freq), 3)
+
+                # Signal detection logic
+                vars.signal_stats['signal_detected'] = 1 if vars.signal_stats['max'] > vars.signal_stats["noise_riding_threshold"] else 0
+
+                # Update shared data
+                bin_count = _safe_int(vars.waterfall_bin_count, default=2048, min_value=64, max_value=max(64, vars.sample_size))
+                with data_lock:
+                    fft_data['original_fft'] = full_fft.tolist()
+                    fft_data['max'] = fft_max.tolist()
+                    fft_data['persist'] = fft_persist_data.tolist()
+                    waterfall_buffer.append(
+                        downsample(current_fft, bin_count).tolist()
+                    )
+                    main_fft_updated_at = time.time()
+                    main_frame_seq += 1
+            # Clear stale FFT error once a frame processes successfully.
+            fft_failure_count = 0
+            vars.signal_stats.pop("fft_error", None)
+            vars.signal_stats.pop("fft_error_ts", None)
+        except Exception as e:
+            fft_failure_count += 1
+            if fft_failure_count >= 3:
+                vars.signal_stats["fft_error"] = str(e)
+                vars.signal_stats["fft_error_ts"] = time.time()
+            time.sleep(0.05)
 
 def radio_scanner():
+    global scanner_fft_updated_at, scanner_frame_seq, scanner_failure_count
     nfft = 8*1024
-    detector = PeakDetector(sdr=vars.sdr0, averaging_count=vars.sdr_averagingCount(), nfft=nfft)
-    detector.start_receiving_data()
-    sdr_name = "sidekiq"
+    detector = None
+    detector_sdr = None
     
     while running:
-        minPeakDistance_index = int(vars.minPeakDistance * vars.sdr_sampleRate()/1e6)
         # Simulate continuous running until stopped
-        time.sleep(1)  # Adjust based on how frequently you want to process data
+        time.sleep(1)
 
-        # Process the peaks
-        with data_lock:
+        # Get processed scanner data outside shared lock to avoid starving FFT producer updates.
+        try:
+            if vars.sdr0 is None:
+                raise RuntimeError("SDR not ready")
+
+            if detector is None or detector_sdr is not vars.sdr0:
+                if detector is not None:
+                    detector.stop_receiving_data()
+                detector = PeakDetector(sdr=vars.sdr0, averaging_count=vars.sdr_averagingCount(), nfft=nfft)
+                detector.start_receiving_data()
+                detector_sdr = vars.sdr0
+
             processed_data = detector.get_processed_data()
             if processed_data:
                 freq, fft_magnitude, noise_riding_threshold, signals, plot_ranges, freq_bound_left, freq_bound_right = processed_data
-                fft_data['original_fft2'] = fft_magnitude.tolist()  # Store the FFT data
-                fft_data['peaks'] = signals  # Store the detected peaks
-                if len(fft_magnitude) > 0:
-                    waterfall_buffer2.append(downsample(np.array(fft_magnitude)).tolist())
+                with data_lock:
+                    fft_data['original_fft2'] = fft_magnitude.tolist()  # Store the FFT data
+                    fft_data['peaks'] = signals  # Store the detected peaks
+                    if len(fft_magnitude) > 0:
+                        bin_count = _safe_int(vars.waterfall_bin_count, default=2048, min_value=64, max_value=max(64, len(fft_magnitude)))
+                        waterfall_buffer2.append(
+                            downsample(np.array(fft_magnitude), bin_count).tolist()
+                        )
+                    scanner_fft_updated_at = time.time()
+                    scanner_frame_seq += 1
+            # Clear stale scanner error once scanner loop succeeds.
+            scanner_failure_count = 0
+            vars.signal_stats.pop("scanner_error", None)
+            vars.signal_stats.pop("scanner_error_ts", None)
+        except Exception as e:
+            scanner_failure_count += 1
+            if detector is not None:
+                detector.stop_receiving_data()
+                detector = None
+                detector_sdr = None
+            if scanner_failure_count >= 3:
+                vars.signal_stats["scanner_error"] = str(e)
+                vars.signal_stats["scanner_error_ts"] = time.time()
+            time.sleep(0.1)
                     
     
-    detector.stop_receiving_data()
+    if detector is not None:
+        detector.stop_receiving_data()
 
 fft_thread = threading.Thread(target=generate_fft_data)
 scanner_thread = threading.Thread(target=radio_scanner)
@@ -196,40 +349,127 @@ def get_data_ext():
     }
     return jsonify(response)
 
+
+@api_blueprint.route('/api/reset_fft_trace', methods=['POST'])
+def reset_fft_trace():
+    global reset_max_trace, reset_persist_trace
+    payload = request.get_json(silent=True) or {}
+    trace = str(payload.get('trace', 'all')).lower()
+
+    with data_lock:
+        if trace in ('max', 'all'):
+            fft_data['max'] = []
+            reset_max_trace = True
+        if trace in ('persist', 'persistence', 'all'):
+            fft_data['persist'] = []
+            reset_persist_trace = True
+
+    return jsonify({'status': 'success', 'trace': trace})
+
 @api_blueprint.route('/api/data')
 def get_data():
     with data_lock:
-        if vars.sdr_name == "hackrf":
-            fft_response = [float(x) for x in fft_data['original_fft2']]
-            waterfall_response = [[float(y) for y in x] for x in waterfall_buffer2]
-            
-        else:
-            fft_response = [float(x) for x in fft_data['original_fft']]
-            waterfall_response = [[float(y) for y in x] for x in waterfall_buffer]
-            
-            
-        # fft_response = [float(x) for x in fft_data['original_fft']]
+        max_waterfall_rows = _safe_int(vars.waterfall_samples, default=100, min_value=1, max_value=2000)
+        # Keep live responses lightweight for lower-latency UI updates.
+        max_payload_cells = 150000
+        main_fft_snapshot = list(fft_data['original_fft'])
+        scanner_fft_snapshot = list(fft_data['original_fft2'])
+        main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, max_waterfall_rows)
+        scanner_waterfall_snapshot = _tail_deque_rows(waterfall_buffer2, max_waterfall_rows)
+        main_ts_snapshot = main_fft_updated_at
+        scanner_ts_snapshot = scanner_fft_updated_at
+        main_seq_snapshot = main_frame_seq
+        scanner_seq_snapshot = scanner_frame_seq
         
-        # Dynamically add an index or remove if not needed
-        peaks_response = [{
-            'index': idx,  # Dynamically generate index
-            'frequency': float(peak['center_freq']),
+        peaks_snapshot = list(fft_data['peaks'])
+
+    source = request.args.get('source', 'main').lower()
+    scanner_fresh = (time.time() - scanner_ts_snapshot) <= 3.0
+    scanner_available = scanner_fresh and len(scanner_fft_snapshot) > 0
+    main_available = len(main_fft_snapshot) > 0
+
+    if source == 'scanner':
+        fft_snapshot = scanner_fft_snapshot if scanner_available else (main_fft_snapshot or scanner_fft_snapshot)
+        waterfall_snapshot = scanner_waterfall_snapshot if scanner_available else (main_waterfall_snapshot or scanner_waterfall_snapshot)
+    elif source == 'auto':
+        # Prefer live main FFT for the main UI; scanner is fallback only.
+        if main_available:
+            fft_snapshot = main_fft_snapshot
+            waterfall_snapshot = main_waterfall_snapshot or scanner_waterfall_snapshot
+        else:
+            fft_snapshot = scanner_fft_snapshot or main_fft_snapshot
+            waterfall_snapshot = scanner_waterfall_snapshot or main_waterfall_snapshot
+    else:  # default main
+        fft_snapshot = main_fft_snapshot if main_available else (scanner_fft_snapshot or main_fft_snapshot)
+        waterfall_snapshot = main_waterfall_snapshot if main_waterfall_snapshot else (scanner_waterfall_snapshot or main_waterfall_snapshot)
+
+    fft_response = [float(x) for x in fft_snapshot]
+
+    if waterfall_snapshot:
+        cols = len(waterfall_snapshot[0]) if waterfall_snapshot[0] is not None else 0
+        stride = max(1, int(np.ceil((len(waterfall_snapshot) * max(1, cols)) / max_payload_cells)))
+        waterfall_rows = waterfall_snapshot[::stride]
+    else:
+        waterfall_rows = []
+    waterfall_response = [[float(y) for y in x] for x in waterfall_rows]
+        
+    center_freq_mhz = float(vars.sdr_frequency() / 1e6)
+    peaks_response = []
+    for idx, peak in enumerate(peaks_snapshot):
+        rel_center = _normalize_peak_mhz(peak.get('center_freq', 0.0))
+        rel_start = _normalize_peak_mhz(peak.get('start_freq', 0.0))
+        rel_end = _normalize_peak_mhz(peak.get('end_freq', 0.0))
+        raw_bw = _normalize_peak_mhz(peak.get('bandwidth', 0.0))
+        bw_mhz = _effective_peak_bw_mhz(raw_bw)
+        abs_center = center_freq_mhz + rel_center
+        abs_start = center_freq_mhz + rel_start
+        abs_end = center_freq_mhz + rel_end
+        classifications = vars.classifier.classify_signal(abs_center, bw_mhz)
+
+        peaks_response.append({
+            'index': idx,
+            # Keep legacy relative fields for existing plots.
+            'frequency': rel_center,
+            'start_freq': rel_start,
+            'end_freq': rel_end,
+            # Add absolute MHz fields for detection/classification.
+            'absolute_frequency': abs_center,
+            'absolute_start_freq': abs_start,
+            'absolute_end_freq': abs_end,
             'avg_power': float(peak['avg_power']),
             'peak_power': float(peak['peak_power']),
-            'start_freq': float(peak['start_freq']),
-            'end_freq': float(peak['end_freq']),
-            'bandwidth': float(peak.get('bandwidth', 0.0))  # Handle missing 'bandwidth' key
-        } for idx, peak in enumerate(fft_data['peaks'])]
+            'bandwidth': bw_mhz,
+            'classification': [
+                {'label': c.get('label', 'Unknown'), 'channel': c.get('channel', 'N/A')}
+                for c in classifications
+            ],
+        })
 
 
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+    fft_error = vars.signal_stats.get("fft_error")
+    scanner_error = vars.signal_stats.get("scanner_error")
+    now_ts = time.time()
+    fft_err_ts = float(vars.signal_stats.get("fft_error_ts", 0.0) or 0.0)
+    scanner_err_ts = float(vars.signal_stats.get("scanner_error_ts", 0.0) or 0.0)
+    if not fft_err_ts or (now_ts - fft_err_ts) > 3.0:
+        fft_error = None
+    if not scanner_err_ts or (now_ts - scanner_err_ts) > 3.0:
+        scanner_error = None
 
     response = {
         'fft': fft_response,
         'peaks': peaks_response,
         'waterfall': waterfall_response,
+        'waterfallRows': len(waterfall_response),
         'time': current_time,
-        'settings': vars.get_settings()
+        'settings': vars.get_settings(),
+        'mainFrameSeq': int(main_seq_snapshot),
+        'scannerFrameSeq': int(scanner_seq_snapshot),
+        'scannerFresh': bool(scanner_available),
+        'fftError': fft_error,
+        'scannerError': scanner_error,
     }
 
     # Convert all settings values to native Python types
@@ -264,22 +504,38 @@ def get_analytics():
         
         # Use the processed peaks data from radio_scanner
         peaks_data = list(fft_data['peaks'])  # Retrieve peaks data
-        peaks_response = []
+    peaks_response = []
+    now = time.time()
+    retention_sec = max(1.0, float(getattr(vars, "analysis_retention_sec", 10.0)))
 
+    with analysis_memory_lock:
         for peak in peaks_data:
             freq = round(float(peak['center_freq'] + vars.sdr_frequency()/1e6), num_digits)
             freq_start = round(float(peak['start_freq'] + vars.sdr_frequency()/1e6), num_digits)
             freq_end = round(float(peak['end_freq'] + vars.sdr_frequency()/1e6), num_digits)
             peak_power = float(peak['peak_power'])
-            bandwidth = round(float(peak.get('bandwidth', 0.0)), num_digits)
+            bandwidth = round(_effective_peak_bw_mhz(peak.get('bandwidth', 0.0)), num_digits)
             avg_power = float(peak.get('avg_power', 0.0))
 
-            # Classify the signal
             classifications = vars.classifier.classify_signal(freq, bandwidth)
             classifications_list = [{"label": c['label'], "channel": c.get('channel', 'N/A')} for c in classifications]
+            primary_label = classifications_list[0]["label"] if classifications_list else "N/A"
+            key = (
+                _quantize_mhz(freq, step_mhz=0.05),
+                _quantize_mhz(max(0.0, bandwidth), step_mhz=0.05),
+                primary_label,
+            )
 
-            peaks_response.append({
-                'peak': f'Peak {peaks_data.index(peak) + 1}',
+            previous = analysis_peak_memory.get(key)
+            if previous is None or (now - float(previous.get("last_seen_ts", 0.0))) > retention_sec:
+                seen_count = 1
+                first_seen_ts = now
+            else:
+                seen_count = int(previous.get("seen_count", 0)) + 1
+                first_seen_ts = float(previous.get("first_seen_ts", now))
+
+            analysis_peak_memory[key] = {
+                'peak': f'Peak {len(analysis_peak_memory) + 1}',
                 'frequency': freq,
                 'freq_start': freq_start,
                 'freq_end': freq_end,
@@ -287,11 +543,28 @@ def get_analytics():
                 'avg_power': avg_power,
                 'bandwidth': bandwidth,
                 'classification': classifications_list,
-            })
+                'seen_count': seen_count,
+                'first_seen_ts': first_seen_ts,
+                'last_seen_ts': now,
+            }
 
-        payload['peaks'] = peaks_response
+        expired_keys = []
+        for key, row in analysis_peak_memory.items():
+            age_seconds = now - float(row.get("last_seen_ts", 0.0))
+            if age_seconds > retention_sec:
+                expired_keys.append(key)
+                continue
+            out = dict(row)
+            out['age_seconds'] = round(age_seconds, 2)
+            peaks_response.append(out)
+
+        for key in expired_keys:
+            analysis_peak_memory.pop(key, None)
+
+    peaks_response.sort(key=lambda x: float(x.get('frequency', 0.0)))
+    payload['peaks'] = peaks_response
     
-    return jsonify(payload)
+    return jsonify(_to_builtin(payload))
 
 
 @api_blueprint.route('/api/signal_detection', methods=['POST'])
@@ -449,13 +722,45 @@ def upload_classifier():
 @api_blueprint.route('/api/select_sdr', methods=['POST'])
 def select_sdr():
     sdr_name = request.json.get('sdr_name', 'hackrf')
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+    driver = str(sdr_name).split(':', 1)[0]
+    if driver not in supported_drivers:
+        return jsonify({
+            'status': 'error',
+            'result': 0,
+            'message': f"SDR '{sdr_name}' is discovered but not stream-capable in SDR Shark yet."
+        }), 400
     result = vars.reselect_radio(sdr_name)
-    return jsonify({'status': 'success', 'result': result})
+    if result:
+        return jsonify({'status': 'success', 'result': result})
+    return jsonify({'status': 'error', 'result': result, 'message': f'Failed to switch SDR to {sdr_name}'}), 400
+
+
+@api_blueprint.route('/api/sdr_devices', methods=['GET'])
+def get_sdr_devices():
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+
+    def _filter_supported(devices):
+        return [d for d in devices if str(d.get('driver', '')).lower() in supported_drivers]
+
+    try:
+        all_devices = vars.sdr0.list_devices()
+        devices = _filter_supported(all_devices)
+        selected = vars.sdr0.device_id
+        if selected and str(selected).split(':', 1)[0] not in supported_drivers:
+            selected = devices[0]['id'] if devices else None
+        return jsonify(_to_builtin({'devices': devices, 'selected': selected}))
+    except Exception as e:
+        cached = _filter_supported(getattr(vars.sdr0, "_devices_cache", []) or [])
+        selected = vars.sdr0.device_id if getattr(vars, "sdr0", None) else None
+        if selected and str(selected).split(':', 1)[0] not in supported_drivers:
+            selected = cached[0]['id'] if cached else None
+        return jsonify({'devices': _to_builtin(cached), 'selected': selected, 'error': str(e)}), 200
 
 @api_blueprint.route('/api/get_settings', methods=['GET'])
 def get_settings():
     settings = {
-        'sdr': vars.radio_name,
+        'sdr': vars.sdr0.device_id or vars.radio_name,
         'frequency': vars.sdr_frequency() / 1e6,  # Convert to MHz
         'gain': vars.sdr_gain(),
         'sampleRate': vars.sdr_sampleRate() / 1e6,  # Convert to MHz
@@ -465,6 +770,7 @@ def get_settings():
         'showWaterfall': vars.show_waterfall,
         'updateInterval': vars.sleeptime * 1000,  # Convert to ms
         'waterfallSamples': vars.waterfall_samples,
+        'waterfallBinCount': vars.waterfall_bin_count,
         'frequency_start': vars.sweep_settings['frequency_start'] / 1e6,
         'frequency_stop': vars.sweep_settings['frequency_stop'] / 1e6,
         'sweeping_enabled': vars.sweeping_enabled,
@@ -474,16 +780,17 @@ def get_settings():
         'showMaxTrace': vars.showMaxTrace,
         'showPeristanceTrace': vars.showPeristanceTrace,
         'lockBandwidthSampleRate': vars.lockBandwidthSampleRate,
+        'analysisRetentionSec': float(getattr(vars, "analysis_retention_sec", 10.0)),
         'signal_stats' : vars.signal_stats
     }
-    return jsonify(settings)
+    return jsonify(_to_builtin(settings))
 
 @api_blueprint.route('/api/update_settings', methods=['POST'])
 def update_settings():
     try:
         settings = request.json
         if settings['frequency'] == 0 or  settings['frequency'] is None or  settings['sampleRate'] is None or settings['bandwidth'] is None:
-            return jsonify({'success': True, 'settings': settings})
+            return jsonify(_to_builtin({'success': True, 'settings': settings}))
         new_settings = settings.copy()
         # Update vars with the new settings and save them
         new_settings['frequency'] = settings['frequency'] * 1e6
@@ -494,7 +801,7 @@ def update_settings():
         vars.apply_settings(new_settings)
         vars.save_settings()
 
-        return jsonify({'success': True, 'settings': settings})
+        return jsonify(_to_builtin({'success': True, 'settings': settings}))
     except Exception as e:
         print(e)
         return jsonify({'success': False, 'error': str(e)})
@@ -513,9 +820,16 @@ def stop_sweep():
 def cleanup():
     global running
     running = False
-    vars.sdr0.stop()
-    fft_thread.join()
-    scanner_thread.join()
+    try:
+        vars.sdr0.stop()
+    except Exception:
+        pass
+    for thread in (fft_thread, scanner_thread):
+        try:
+            if thread.is_alive():
+                thread.join(timeout=2)
+        except BaseException:
+            pass
 
 
 @api_blueprint.route('/api/move', methods=['POST'])

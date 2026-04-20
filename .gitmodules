@@ -1,3 +1,3 @@
-[submodule "sdrfly"]
-	path = sdrfly
-	url = https://github.com/rameyjm7/sdrfly.git
+[submodule "sdr-gateway"]
+	path = sdr-gateway
+	url = https://github.com/rameyjm7/sdr-gateway.git

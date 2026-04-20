@@ -2,7 +2,7 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
-from sdrfly.sdr.sdr_generic import SDRGeneric
+from sdr_plot_backend.sdr_generic import SDRGeneric
 from sdr_plot_backend.signal_utils import detect_signal_peaks, refine_peak_bandwidth
 import time
 import pickle

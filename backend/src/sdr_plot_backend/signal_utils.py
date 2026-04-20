@@ -1,13 +1,14 @@
-from sdrfly.sdr.sdr_generic import SDRGeneric
+from sdr_plot_backend.sdr_generic import SDRGeneric
 import numpy as np
 import time
 from sdr_plot_backend.utils import vars
 from sdr_plot_backend.peak_detector import process_fft_data
-from sdrfly.sdr.sdr_generic import SDRGeneric
+from sdr_plot_backend.sdr_generic import SDRGeneric
 import numpy as np
 import threading
 import pickle, os
 from datetime import datetime
+import tempfile
 
 class PeakDetector:
     def __init__(self, sdr, averaging_count=30, nfft=8*1024):
@@ -19,7 +20,8 @@ class PeakDetector:
         self.running = False
         self.thread = None
         self.processed_data = None  # To store the processed data
-        self.save_last_packet = True
+        # Continuous pickle dumps are expensive; keep disabled unless explicitly requested.
+        self.save_last_packet = str(os.getenv("SDR_SHARK_SAVE_SCANNER_PICKLE", "0")).strip() in ("1", "true", "TRUE")
         self.processing_func = np.mean
     
     def set_processing_func(self, func):
@@ -40,11 +42,21 @@ class PeakDetector:
             "metadata": metadata,
             "records": records
         }
+        # Use configured recordings directory when writable; otherwise fall back locally.
+        target_dir = vars.recordings_dir
+        try:
+            os.makedirs(target_dir, exist_ok=True)
+            with tempfile.NamedTemporaryFile(dir=target_dir):
+                pass
+        except Exception:
+            target_dir = os.path.join(os.getcwd(), "recordings")
+            os.makedirs(target_dir, exist_ok=True)
+
         # Define the base file name
         timestamp = datetime.now().strftime("%Y%m%d_%H")
         label = metadata.get("label", "FFT")
         file_name = f"{label}_{timestamp}.pkl"
-        file_path = os.path.join("/root/datascience/recordings/", file_name)
+        file_path = os.path.join(target_dir, file_name)
 
         with open(file_path, 'wb') as f:
             pickle.dump(data, f)
@@ -268,5 +280,3 @@ def perform_and_refine_scan(sdr: SDRGeneric, wide_sample_rate: float, wide_fft_s
         refined_signals.append((peak_freq, max_power, refined_bandwidth_mhz))
 
     return refined_signals
-
-

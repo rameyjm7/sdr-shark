@@ -2,6 +2,7 @@ from sdr_plot_backend.classifier.Base import BaseSignalClassifier
 
 class LTEClassifier(BaseSignalClassifier):
     def __init__(self):
+        super().__init__()
         self.bands = [
             {"label": "LTE", "frequency": 663, "bandwidth": 36, "channel": "71", "metadata": "Uplink"},
             {"label": "LTE", "frequency": 617, "bandwidth": 36, "channel": "71", "metadata": "Downlink"},
@@ -33,29 +34,10 @@ class LTEClassifier(BaseSignalClassifier):
             {"label": "LTE", "frequency": 3625, "bandwidth": 150, "channel": "48", "metadata": "Uplink/Downlink"},
             {"label": "LTE", "frequency": 5537.5, "bandwidth": 775, "channel": "46", "metadata": "Uplink/Downlink"},
         ]
+        self._prepare_bands()
     
     def classify_signal(self, frequency_mhz, bandwidth_mhz=None):
-        matches = []
-        for band in self.bands:
-            if band["frequency"] - band["bandwidth"]/2 <= frequency_mhz <= band["frequency"] + band["bandwidth"]/2:
-                matches.append({
-                    "label": band["label"],
-                    "frequency": band["frequency"],
-                    "bandwidth": band["bandwidth"],
-                    "channel": band["channel"],
-                    "metadata": band["metadata"]
-                })
-        return matches
+        return super().classify_signal(frequency_mhz, bandwidth_mhz)
 
     def get_signals_in_range(self, start_freq_mhz, end_freq_mhz):
-        matches = []
-        for band in self.bands:
-            if start_freq_mhz <= band["frequency"] <= end_freq_mhz:
-                matches.append({
-                    "label": band["label"],
-                    "frequency": str(band["frequency"]),
-                    "bandwidth": str(band["bandwidth"]),
-                    "channel": band["channel"],
-                    "metadata": band["metadata"]
-                })
-        return matches
+        return super().get_signals_in_range(start_freq_mhz, end_freq_mhz)

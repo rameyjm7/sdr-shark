@@ -34,6 +34,8 @@ def process_fft_data(records, metadata, threshold_dB = 10, func = np.mean):
 
     # Identify signals above the noise riding threshold
     signal_indices = np.where(fft_magnitude > noise_riding_threshold)[0]
+    # Ensure single-bin detections still report a non-zero bandwidth.
+    bin_width_mhz = abs(freq[1] - freq[0]) if len(freq) > 1 else 0.0
 
     signals = []
     if len(signal_indices) > 0:
@@ -47,7 +49,7 @@ def process_fft_data(records, metadata, threshold_dB = 10, func = np.mean):
                 start_freq = freq[current_signal[0]]
                 end_freq = freq[current_signal[-1]]
                 center_freq = (start_freq + end_freq) / 2
-                bandwidth = end_freq - start_freq
+                bandwidth = max(end_freq - start_freq, bin_width_mhz)
                 peak_power = np.max(fft_magnitude[current_signal])
                 avg_power = np.mean(fft_magnitude[current_signal])
 
@@ -67,7 +69,7 @@ def process_fft_data(records, metadata, threshold_dB = 10, func = np.mean):
             start_freq = freq[current_signal[0]]
             end_freq = freq[current_signal[-1]]
             center_freq = (start_freq + end_freq) / 2
-            bandwidth = end_freq - start_freq
+            bandwidth = max(end_freq - start_freq, bin_width_mhz)
             peak_power = np.max(fft_magnitude[current_signal])
             avg_power = np.mean(fft_magnitude[current_signal])
 

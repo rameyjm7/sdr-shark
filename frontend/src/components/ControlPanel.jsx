@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Typography, Select, MenuItem, IconButton, Tabs, Tab, Button, CircularProgress, Slider, FormControlLabel, Switch } from '@mui/material';
+import { Box, Typography, Select, MenuItem, IconButton, Tabs, Tab, Button, CircularProgress, Slider, FormControlLabel, Switch, TextField, Chip } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SaveIcon from '@mui/icons-material/Save';
 import axios from 'axios';
 import SDRSettings from './ControlPanel/SDRSettings';
 import PlotSettings from './ControlPanel/PlotSettings';
-import Analysis from './Analysis';
-import Classifiers from './ControlPanel/Classifiers';
 import debounce from 'lodash/debounce';
 import '../App.css';
 import Actions from './Actions';
+
+const PROFILE_STORAGE_KEY = 'sdrshark_ui_profiles_v1';
+const RECENT_FREQ_STORAGE_KEY = 'sdrshark_recent_frequencies_v1';
+
 const ControlPanel = ({
   settings,
   setSettings,
@@ -30,13 +32,33 @@ const ControlPanel = ({
   handleSaveSelection,
   verticalLines, // Add this prop to receive vertical lines
 }) => {
+  const toFinite = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
   const [sdr, setSdr] = useState(settings.sdr || 'hackrf');
-  const [status, setStatus] = useState('Ready');
+  const [availableSdrs, setAvailableSdrs] = useState([]);
+  const [statusState, setStatusState] = useState({ text: 'Ready', level: 'info', count: 1 });
   const [saving, setSaving] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   const [tabIndex, setTabIndex] = useState(0);
   const [tasks, setTasks] = useState([]);
   const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
+  const [profiles, setProfiles] = useState({});
+  const [selectedProfile, setSelectedProfile] = useState('');
+  const [profileName, setProfileName] = useState('');
+  const [recentFrequencies, setRecentFrequencies] = useState([]);
+  const selectedDevice = availableSdrs.find((d) => d.id === sdr) || null;
+
+  const updateStatus = (text, level = 'info') => {
+    setStatusState((prev) => {
+      if (prev.text === text && prev.level === level) {
+        return { ...prev, count: prev.count + 1 };
+      }
+      return { text, level, count: 1 };
+    });
+  };
 
   useEffect(() => {
     if (!settingsLoaded) {
@@ -44,6 +66,55 @@ const ControlPanel = ({
     }
   }, [settingsLoaded]);
 
+  useEffect(() => {
+    try {
+      const savedProfiles = JSON.parse(localStorage.getItem(PROFILE_STORAGE_KEY) || '{}');
+      if (savedProfiles && typeof savedProfiles === 'object') {
+        setProfiles(savedProfiles);
+      }
+      const savedRecent = JSON.parse(localStorage.getItem(RECENT_FREQ_STORAGE_KEY) || '[]');
+      if (Array.isArray(savedRecent)) {
+        setRecentFrequencies(savedRecent);
+      }
+    } catch (error) {
+      console.error('Error loading local UI state:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    const freq = Number(settings.frequency);
+    if (!Number.isFinite(freq) || freq <= 0) {
+      return;
+    }
+    setRecentFrequencies((prev) => {
+      const next = [freq, ...prev.filter((x) => Math.abs(x - freq) > 1e-6)].slice(0, 10);
+      try {
+        localStorage.setItem(RECENT_FREQ_STORAGE_KEY, JSON.stringify(next));
+      } catch (error) {
+        console.error('Error saving recent frequencies:', error);
+      }
+      return next;
+    });
+  }, [settings.frequency]);
+
+  const fetchDevices = async () => {
+    try {
+      const response = await axios.get('/api/sdr_devices');
+      const payload = response.data || {};
+      const devices = Array.isArray(payload.devices) ? payload.devices : [];
+      setAvailableSdrs(devices);
+      if (payload.selected) {
+        setSdr(payload.selected);
+      } else if (devices.length > 0) {
+        setSdr(devices[0].id);
+      }
+      return { devices, selected: payload.selected };
+    } catch (error) {
+      console.error('Error fetching SDR devices:', error);
+      setAvailableSdrs([]);
+      return { devices: [], selected: null };
+    }
+  };
 
 
   // Function to delete a task
@@ -70,27 +141,37 @@ const ControlPanel = ({
 
   const fetchSettings = async () => {
     try {
+      const { devices, selected } = await fetchDevices();
       const response = await axios.get('/api/get_settings');
       const data = response.data;
-      setSdr(data.sdr);
+      const selectedSdr = selected || data.sdr || (devices[0] && devices[0].id) || 'hackrf';
+      setSdr(selectedSdr);
 
-      setSettings((prevSettings) => ({
-        ...prevSettings,
-        showSecondTrace: data.sdr === 'hackrf',
+      const sanitized = {
         ...data,
-      }));
+        sdr: selectedSdr,
+        frequency: toFinite(data.frequency, 751),
+        gain: toFinite(data.gain, 10),
+        sampleRate: toFinite(data.sampleRate, 20),
+        bandwidth: toFinite(data.bandwidth, 20),
+        frequency_start: toFinite(data.frequency_start, 700),
+        frequency_stop: toFinite(data.frequency_stop, 820),
+        waterfallBinCount: toFinite(data.waterfallBinCount, 2048),
+        updateInterval: toFinite(data.updateInterval, 500),
+        showSecondTrace: data.sdr === 'hackrf',
+        dcSuppress: typeof data.dcSuppress === 'boolean' ? data.dcSuppress : true,
+        sweeping_enabled: typeof data.sweeping_enabled === 'boolean' ? data.sweeping_enabled : false,
+      };
 
-      setSettings(data);
-      setUpdateInterval(data.updateInterval);
-      setMinY(minY);
-      setMaxY(maxY);
-      setStatus('Settings loaded');
+      setSettings((prevSettings) => ({ ...prevSettings, ...sanitized }));
+      setUpdateInterval(sanitized.updateInterval);
+      updateStatus('Settings loaded', 'success');
       setSettingsLoaded(true);
       setTimeout(fetchAndAdjustYAxis, 1000);
 
     } catch (error) {
       console.error('Error fetching settings:', error);
-      setStatus('Error fetching settings');
+      updateStatus('Error fetching settings', 'error');
     }
   };
 
@@ -102,12 +183,12 @@ const ControlPanel = ({
         },
       });
       setSettings(newSettings);
-      setStatus('Settings updated');
+      updateStatus('Settings updated', 'success');
 
       setTimeout(fetchAndAdjustYAxis, 1000);
     } catch (error) {
       console.error('Error updating settings:', error);
-      setStatus('Error updating settings');
+      updateStatus('Error updating settings', 'error');
     }
   };
 
@@ -127,28 +208,41 @@ const ControlPanel = ({
 
   const handleSaveSelectionClick = async () => {
     setSaving(true);
-    setStatus('Saving file...');
+    updateStatus('Saving file...', 'info');
 
     try {
       await handleSaveSelection();
-      setStatus('Selection saved successfully');
+      updateStatus('Selection saved successfully', 'success');
     } catch (error) {
       console.error('Error saving selection:', error);
-      setStatus('Error saving selection');
+      updateStatus('Error saving selection', 'error');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleChange = (e) => {
+  const handleChange = async (e) => {
     const { name, value, type, checked } = e.target;
-    const newValue = type === 'checkbox' ? checked : parseFloat(value);
+    const parsed = parseFloat(value);
+    const newValue = type === 'checkbox' ? checked : (Number.isFinite(parsed) ? parsed : settings[name]);
     const newSettings = { ...settings, [name]: newValue };
     setSettings(newSettings);
+
+    // Sweep toggle should apply immediately to avoid requiring a manual save.
+    if (name === 'sweeping_enabled') {
+      try {
+        await axios.post(newValue ? '/api/start_sweep' : '/api/stop_sweep');
+      } catch (error) {
+        console.error('Error toggling sweep state:', error);
+      }
+      await applySettings(newSettings);
+    }
   };
 
   const handleSliderChange = (e, value, name) => {
-    const newSettings = { ...settings, [name]: value };
+    const sliderValue = Array.isArray(value) ? value[0] : value;
+    const safeValue = Number.isFinite(sliderValue) ? sliderValue : settings[name];
+    const newSettings = { ...settings, [name]: safeValue };
     setSettings(newSettings);
     // if (name === 'averagingCount') {
     //   debouncedApplySettings(newSettings);
@@ -156,8 +250,10 @@ const ControlPanel = ({
   };
 
   const handleSliderChangeCommitted = (e, value, name) => {
+    const sliderValue = Array.isArray(value) ? value[0] : value;
+    const safeValue = Number.isFinite(sliderValue) ? sliderValue : settings[name];
     if (name === 'averagingCount') {
-      applySettings({ ...settings, [name]: value });
+      applySettings({ ...settings, [name]: safeValue });
     }
   };
 
@@ -171,54 +267,70 @@ const ControlPanel = ({
     }
   };
 
-  const handleSdrChange = (e) => {
+  const handleSdrChange = async (e) => {
     const newSdr = e.target.value;
+    const prevSdr = sdr;
+    const prevSettings = { ...settings };
     setSdr(newSdr);
-    setStatus(`Changing SDR to ${newSdr}...`);
+    updateStatus(`Changing SDR to ${newSdr}...`, 'info');
 
-    const updatedSettings = {
+    // Optimistic local update; canonical device limits/settings are pulled from backend next.
+    setSettings({
       ...settings,
       sdr: newSdr,
       showSecondTrace: newSdr === 'hackrf',
-    };
-    setSettings(updatedSettings);
+    });
 
-    axios.post('/api/select_sdr', { sdr_name: newSdr })
-      .then(response => {
-        console.log('SDR changed:', response.data);
-        applySettings(updatedSettings);
-        setStatus(`SDR changed to ${newSdr}`);
-      })
-      .catch(error => {
-        console.error('Error changing SDR:', error);
-        setStatus('Error changing SDR');
-      });
+    try {
+      const response = await axios.post('/api/select_sdr', { sdr_name: newSdr });
+      if (!response?.data?.result) {
+        throw new Error(response?.data?.message || `Failed to switch SDR to ${newSdr}`);
+      }
+      // Do not apply stale prior-radio sample/bandwidth values here.
+      // Fetch backend-canonical settings for the newly selected SDR.
+      await fetchSettings();
+      updateStatus(`SDR changed to ${newSdr}`, 'success');
+    } catch (error) {
+      console.error('Error changing SDR:', error);
+      setSdr(prevSdr);
+      setSettings(prevSettings);
+      updateStatus(`Error changing SDR to ${newSdr}`, 'error');
+    }
   };
 
   const enforceLimits = (settings) => {
     const newSettings = { ...settings };
-    const limitKeys = ['frequency', 'gain', 'sampleRate', 'bandwidth'];
+    const targetSdr = newSettings.sdr || sdr;
+    const device = availableSdrs.find((d) => d.id === targetSdr);
+    const freqMinMHz = device ? Number(device.freq_min_hz) / 1e6 : 1;
+    const freqMaxMHz = device ? Number(device.freq_max_hz) / 1e6 : 6000;
+    const srMaxMHz = device ? Number(device.max_sample_rate_sps) / 1e6 : 20;
 
-    limitKeys.forEach((key) => {
-      const limit = sdrLimits[sdr][key];
-      if (newSettings[key] < limit.min) {
-        newSettings[key] = limit.min;
-      }
-      if (newSettings[key] > limit.max) {
-        newSettings[key] = limit.max;
-      }
-    });
+    const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+    newSettings.frequency = clamp(toFinite(newSettings.frequency, freqMinMHz), freqMinMHz, freqMaxMHz);
+    newSettings.gain = clamp(toFinite(newSettings.gain, 10), 0, 62);
+    newSettings.sampleRate = clamp(toFinite(newSettings.sampleRate, srMaxMHz), 0.25, srMaxMHz);
+    newSettings.bandwidth = clamp(toFinite(newSettings.bandwidth, newSettings.sampleRate), 0.2, srMaxMHz);
+    if (newSettings.lockBandwidthSampleRate) {
+      newSettings.bandwidth = newSettings.sampleRate;
+    }
+    newSettings.frequency_start = clamp(toFinite(newSettings.frequency_start, freqMinMHz), freqMinMHz, freqMaxMHz);
+    newSettings.frequency_stop = clamp(toFinite(newSettings.frequency_stop, freqMaxMHz), freqMinMHz, freqMaxMHz);
+    if (newSettings.frequency_stop < newSettings.frequency_start) {
+      newSettings.frequency_stop = newSettings.frequency_start;
+    }
 
     return newSettings;
   };
 
   const applySettings = async (newSettings) => {
     const enforcedSettings = enforceLimits(newSettings);
-    setStatus('Updating settings...');
-
-    const interval = settings.updateInterval;
-    // Temporarily set updateInterval to 5000
-    setUpdateInterval(5000);
+    const preservedInterval = toFinite(settings.updateInterval, toFinite(updateInterval, 500));
+    if (!Number.isFinite(enforcedSettings.updateInterval)) {
+      enforcedSettings.updateInterval = preservedInterval;
+    }
+    updateStatus('Updating settings...', 'info');
 
     try {
       await axios.post('/api/update_settings', enforcedSettings, {
@@ -227,29 +339,12 @@ const ControlPanel = ({
         },
       });
       setSettings(enforcedSettings);
-      // After settings are applied, revert updateInterval to the original value
-      setUpdateInterval(interval);
+      setUpdateInterval(toFinite(enforcedSettings.updateInterval, preservedInterval));
 
-      setStatus('Settings updated');
+      updateStatus('Settings updated', 'success');
     } catch (error) {
       console.error('Error updating settings:', error);
-      setStatus('Error updating settings');
-    }
-  };
-
-
-  const sdrLimits = {
-    hackrf: {
-      frequency: { min: 0, max: 7250 },
-      gain: { min: 0, max: 61 },
-      sampleRate: { min: 0, max: 20 },
-      bandwidth: { min: 0, max: 20 },
-    },
-    sidekiq: {
-      frequency: { min: 46.875, max: 6000 },
-      gain: { min: 0, max: 76 },
-      sampleRate: { min: 0.233, max: 61.233 },
-      bandwidth: { min: 0.233, max: 61.233 },
+      updateStatus('Error updating settings', 'error');
     }
   };
 
@@ -257,16 +352,79 @@ const ControlPanel = ({
     setTabIndex(newValue);
   };
 
+  const getProfilePayload = () => ({
+    sdr: settings.sdr,
+    frequency: toFinite(settings.frequency, 751),
+    gain: toFinite(settings.gain, 10),
+    sampleRate: toFinite(settings.sampleRate, 20),
+    bandwidth: toFinite(settings.bandwidth, 20),
+    frequency_start: toFinite(settings.frequency_start, 700),
+    frequency_stop: toFinite(settings.frequency_stop, 820),
+    sweeping_enabled: typeof settings.sweeping_enabled === 'boolean' ? settings.sweeping_enabled : false,
+    lockBandwidthSampleRate: typeof settings.lockBandwidthSampleRate === 'boolean' ? settings.lockBandwidthSampleRate : true,
+    dcSuppress: typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : true,
+    waterfallBinCount: toFinite(settings.waterfallBinCount, 2048),
+    waterfallSamples: toFinite(settings.waterfallSamples, 100),
+  });
+
+  const saveProfile = () => {
+    const resolvedName = (profileName || selectedProfile || '').trim();
+    if (!resolvedName) {
+      updateStatus('Enter a profile name first', 'warning');
+      return;
+    }
+    const nextProfiles = { ...profiles, [resolvedName]: getProfilePayload() };
+    setProfiles(nextProfiles);
+    setSelectedProfile(resolvedName);
+    setProfileName('');
+    try {
+      localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(nextProfiles));
+      updateStatus(`Profile saved: ${resolvedName}`, 'success');
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      updateStatus('Error saving profile', 'error');
+    }
+  };
+
+  const loadProfile = async () => {
+    if (!selectedProfile || !profiles[selectedProfile]) {
+      updateStatus('Select a profile to load', 'warning');
+      return;
+    }
+    const merged = { ...settings, ...profiles[selectedProfile] };
+    setSettings(merged);
+    await applySettings(merged);
+    updateStatus(`Profile loaded: ${selectedProfile}`, 'success');
+  };
+
+  const tuneRecentFrequency = async (freqMHz) => {
+    const merged = { ...settings, frequency: freqMHz };
+    setSettings(merged);
+    await applySettings(merged);
+  };
+
   return (
-    <Box className="control-panel" sx={{ p: 2 }}>
+    <Box className="control-panel" sx={{ p: 1.5 }}>
       <Box display="flex" alignItems="center">
-        <Typography variant="subtitle1" color="textSecondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="subtitle2"
+          color={
+            statusState.level === 'error'
+              ? 'error.main'
+              : statusState.level === 'warning'
+                ? 'warning.main'
+                : statusState.level === 'success'
+                  ? 'success.main'
+                  : 'textSecondary'
+          }
+          sx={{ mb: 1 }}
+        >
           {saving ? (
             <>
               Saving file... <CircularProgress size={14} sx={{ ml: 1 }} />
             </>
           ) : (
-            `Status: ${status}`
+            `Status: ${statusState.text}${statusState.count > 1 ? ` (x${statusState.count})` : ''}`
           )}
         </Typography>
         <IconButton onClick={fetchSettings} sx={{ ml: 2 }}>
@@ -276,24 +434,67 @@ const ControlPanel = ({
           <SaveIcon />
         </IconButton>
       </Box>
-      <Tabs value={tabIndex} onChange={handleTabChange}>
+      <Tabs
+        value={tabIndex}
+        onChange={handleTabChange}
+        variant="scrollable"
+        scrollButtons="auto"
+        sx={{ minHeight: 36, '& .MuiTab-root': { minHeight: 36, py: 0.5 } }}
+      >
         <Tab label="SDR" />
         <Tab label="Plot" />
-        <Tab label="Analysis" />
-        <Tab label="Classifiers" />
         <Tab label="Actions" />
       </Tabs>
       <Box className="control-panel-tab-content">
         {tabIndex === 0 && (
           <>
-            <Typography variant="h6">SDR Settings</Typography>
             <Typography variant="body1">Select SDR:</Typography>
-            <Select value={sdr} onChange={handleSdrChange} fullWidth>
-              <MenuItem value="hackrf">HackRF</MenuItem>
-              <MenuItem value="sidekiq">Sidekiq</MenuItem>
+            <Select value={sdr || ''} onChange={handleSdrChange} fullWidth disabled={availableSdrs.length === 0}>
+              {availableSdrs.map((device) => (
+                <MenuItem key={device.id} value={device.id}>
+                  {device.label || device.id}
+                </MenuItem>
+              ))}
             </Select>
+            <Box sx={{ display: 'flex', gap: 1, mt: 1, alignItems: 'center' }}>
+              <Select
+                size="small"
+                value={selectedProfile}
+                onChange={(e) => setSelectedProfile(e.target.value)}
+                displayEmpty
+                sx={{ minWidth: 180, flex: 1 }}
+              >
+                <MenuItem value="">Saved profile...</MenuItem>
+                {Object.keys(profiles).sort().map((name) => (
+                  <MenuItem key={name} value={name}>{name}</MenuItem>
+                ))}
+              </Select>
+              <Button size="small" variant="outlined" onClick={loadProfile}>Load</Button>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
+              <TextField
+                size="small"
+                fullWidth
+                label="Profile name"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+              />
+              <Button size="small" variant="contained" onClick={saveProfile}>Save Current</Button>
+            </Box>
+            <Box sx={{ display: 'flex', gap: 0.75, mt: 1, flexWrap: 'wrap' }}>
+              {recentFrequencies.map((freq) => (
+                <Chip
+                  key={freq}
+                  size="small"
+                  label={`${freq.toFixed(3)} MHz`}
+                  onClick={() => tuneRecentFrequency(freq)}
+                  variant="outlined"
+                />
+              ))}
+            </Box>
             <SDRSettings
               settings={settings}
+              selectedDevice={selectedDevice}
               handleChange={handleChange}
               handleKeyPress={handleKeyPress}
               setSettings={setSettings}
@@ -322,36 +523,61 @@ const ControlPanel = ({
             /> */}
 
             <Box>
-              <Typography variant="h6" sx={{ mt: 2 }}>Waterfall Settings</Typography>
+              <Typography variant="h6" sx={{ mt: 2, mb: 1 }}>Waterfall Settings</Typography>
 
-              <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-
-                <Box sx={{ flex: 1, ml: 2 }}>
-                  <Typography gutterBottom>Waterfall Samples: {settings.waterfallSamples}</Typography>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' },
+                  gap: 2,
+                  alignItems: 'start',
+                }}
+              >
+                <Box>
+                  <Typography variant="body2" gutterBottom>Waterfall Samples: {toFinite(settings.waterfallSamples, 100)}</Typography>
                   <Slider
                     min={25}
-                    max={1000}
-                    value={settings.waterfallSamples}
+                    max={2000}
+                    value={toFinite(settings.waterfallSamples, 100)}
                     onChange={(e, value) => setSettings({ ...settings, waterfallSamples: value })}
                     valueLabelDisplay="auto"
                     step={25}
-                    marks={[
-                      { value: 25, label: '25' },
-                      { value: 500, label: '500' },
-                      { value: 1000, label: '1000' },
-                    ]}
+                    sx={{ '& .MuiSlider-thumb': { width: 18, height: 18 }, '& .MuiSlider-rail': { opacity: 0.35 } }}
                   />
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.25, px: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary">25</Typography>
+                    <Typography variant="caption" color="text.secondary">1000</Typography>
+                    <Typography variant="caption" color="text.secondary">2000</Typography>
+                  </Box>
+                </Box>
+                <Box>
+                  <Typography variant="body2" gutterBottom>Waterfall Bin Count: {toFinite(settings.waterfallBinCount, 2048)}</Typography>
+                  <Slider
+                    min={256}
+                    max={4096}
+                    value={toFinite(settings.waterfallBinCount, 2048)}
+                    onChange={(e, value) => setSettings({ ...settings, waterfallBinCount: value })}
+                    valueLabelDisplay="auto"
+                    step={128}
+                    sx={{ '& .MuiSlider-thumb': { width: 18, height: 18 }, '& .MuiSlider-rail': { opacity: 0.35 } }}
+                  />
+                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.25, px: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary">256</Typography>
+                    <Typography variant="caption" color="text.secondary">2048</Typography>
+                    <Typography variant="caption" color="text.secondary">4096</Typography>
+                  </Box>
                 </Box>
               </Box>
 
               <FormControlLabel
+                sx={{ mt: 0.5 }}
                 control={
                   <Switch
                     checked={showWaterfall}
                     onChange={() => {
-                      setSettings(!showWaterfall);
                       const newSettings = { ...settings, showWaterfall: !showWaterfall };
                       setSettings(newSettings);
+                      setShowWaterfall(!showWaterfall);
                     }}
                     name="showWaterfall"
                     color="primary"
@@ -364,26 +590,6 @@ const ControlPanel = ({
           </>
         )}
         {tabIndex === 2 && (
-          <Analysis
-            settings={settings}
-            setSettings={setSettings}
-            addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
-            clearVerticalLines={clearVerticalLines}
-            addHorizontalLines={addHorizontalLines}
-            clearHorizontalLines={clearHorizontalLines}
-          />
-        )}
-        {tabIndex === 3 && (
-          <Classifiers
-            settings={settings}
-            setSettings={setSettings}
-            addVerticalLines={addVerticalLines} // Ensure vertical lines are added correctly
-            clearVerticalLines={clearVerticalLines}
-            addHorizontalLines={addHorizontalLines}
-            clearHorizontalLines={clearHorizontalLines}
-          />
-        )}
-        {tabIndex === 4 && (
           <Actions
             settings={settings}
             setSettings={setSettings}
@@ -392,7 +598,6 @@ const ControlPanel = ({
             currentTaskIndex={currentTaskIndex}
             tasks={tasks}
             setTasks={(newTasks) => {
-              console.log(newTasks);
               setTasks(newTasks);
 
               // Extract center frequency and bandwidth from the new tasks
@@ -410,7 +615,6 @@ const ControlPanel = ({
                   setSettings(newSettings);
 
                   // Optionally log the update for debugging
-                  console.log("Updated settings with task values:", newSettings);
                 }
               }
             }}
