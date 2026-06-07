@@ -32,6 +32,7 @@ Environment overrides:
   SDR_SHARK_ENV_FILE      (default: /etc/default/<service>)
   SDR_SHARK_START_SCRIPT  (default: <repo>/scripts/start.sh)
   SDR_GATEWAY_API_TOKEN   (optional; written to env file on install)
+  SDR_SERVER_URL          (optional; written to env file on install)
 EOF
 }
 
@@ -85,15 +86,27 @@ EOF
   run_root install -m 0644 "/tmp/${SERVICE_NAME}.service" "${UNIT_PATH}"
   rm -f "/tmp/${SERVICE_NAME}.service"
 
+  env_lines=()
   if [[ -n "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
     token_escaped="$(printf "%s" "${SDR_GATEWAY_API_TOKEN}" | sed "s/'/'\"'\"'/g")"
-    run_root sh -c "cat > '${ENV_FILE}' <<'EOF'
-SDR_GATEWAY_API_TOKEN='${token_escaped}'
-EOF"
+    env_lines+=("SDR_GATEWAY_API_TOKEN='${token_escaped}'")
+  fi
+  if [[ -n "${SDR_SERVER_URL:-}" ]]; then
+    server_url_escaped="$(printf "%s" "${SDR_SERVER_URL}" | sed "s/'/'\"'\"'/g")"
+    env_lines+=("SDR_SERVER_URL='${server_url_escaped}'")
+  fi
+
+  if [[ "${#env_lines[@]}" -gt 0 ]]; then
+    {
+      for line in "${env_lines[@]}"; do
+        printf '%s\n' "${line}"
+      done
+    } | run_root tee "${ENV_FILE}" >/dev/null
     run_root chmod 0600 "${ENV_FILE}"
-    echo "Wrote token to ${ENV_FILE}"
+    echo "Wrote service environment to ${ENV_FILE}"
   else
-    echo "Note: SDR_GATEWAY_API_TOKEN not set. Service relies on scripts/start.sh token discovery."
+    run_root rm -f "${ENV_FILE}"
+    echo "Note: no service env vars were set. Service will use scripts/start.sh defaults."
   fi
 
   run_root systemctl daemon-reload

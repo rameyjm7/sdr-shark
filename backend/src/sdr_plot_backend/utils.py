@@ -28,7 +28,8 @@ class sdr_scheduler_config:
         )
         self.sdr_settings = {
             "hackrf" : SdrSettings("hackrf"),
-            "sidekiq" : SdrSettings("sidekiq")
+            "sidekiq" : SdrSettings("sidekiq"),
+            "antsdre200" : SdrSettings("antsdre200"),
         }
         self.sdr_name = "sidekiq"
         # Default settings
@@ -43,6 +44,12 @@ class sdr_scheduler_config:
         self.sdr_settings['sidekiq'].sampleRate = 60e6    # Sample Rate in Hz
         self.sdr_settings['sidekiq'].gain = 30
         self.sdr_settings['sidekiq'].averagingCount = 20
+
+        self.sdr_settings['antsdre200'].frequency = 102.1e6
+        self.sdr_settings['antsdre200'].bandwidth = 20e6
+        self.sdr_settings['antsdre200'].sampleRate = 20e6
+        self.sdr_settings['antsdre200'].gain = 30
+        self.sdr_settings['antsdre200'].averagingCount = 20
         self.tasks = []
         self.task_lock = threading.Lock()
         self.sleeptime = 0.01
@@ -283,6 +290,7 @@ class sdr_scheduler_config:
                     "airspy": 10e6,
                     "bladerf": 20e6,
                     "rtlsdr": 2.4e6,
+                    "antsdre200": 20e6,
                 }.get(driver, self.sdr_settings[self.sdr_name].sampleRate)
                 max_sr = float(getattr(self.sdr0, "max_sample_rate", self.sdr_sampleRate()) or self.sdr_sampleRate())
                 sr = min(float(preferred_sr), max_sr)

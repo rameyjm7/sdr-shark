@@ -722,7 +722,7 @@ def upload_classifier():
 @api_blueprint.route('/api/select_sdr', methods=['POST'])
 def select_sdr():
     sdr_name = request.json.get('sdr_name', 'hackrf')
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
     driver = str(sdr_name).split(':', 1)[0]
     if driver not in supported_drivers:
         return jsonify({
@@ -738,7 +738,7 @@ def select_sdr():
 
 @api_blueprint.route('/api/sdr_devices', methods=['GET'])
 def get_sdr_devices():
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
 
     def _filter_supported(devices):
         return [d for d in devices if str(d.get('driver', '')).lower() in supported_drivers]

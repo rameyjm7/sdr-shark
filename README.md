@@ -42,6 +42,8 @@ Use ./scripts/sdr-shark-service.sh to install/manage a service:
 - status
 - logs
 
+If your `sdr-gateway` lives somewhere other than `http://127.0.0.1:8080`, set `SDR_SERVER_URL` before installing the service and the helper will write it into the service environment file alongside `SDR_GATEWAY_API_TOKEN`.
+
 
 **Option 2:** If you want to make changes and develop
 
@@ -52,4 +54,3 @@ yarn start
 python3 -m sdr_plot_backend
 
 Then, Browse to the IP Address of your PC, port 3000. i.e. 10.139.1.86:3000
-
