@@ -63,7 +63,7 @@ class sdr_scheduler_config:
         self.sweeping_enabled = False
         self.dc_suppress = True
         self.show_waterfall = True
-        self.waterfall_samples = 100
+        self.waterfall_samples = 200
         self.waterfall_bin_count = 2048
         self.persistence_decay  = 0.5
         self.number_of_peaks = 5
@@ -326,7 +326,7 @@ class sdr_scheduler_config:
             "averagingCount": 1,
             "dcSuppress": True,
             "showWaterfall": True,
-            "waterfallSamples": 100,
+            "waterfallSamples": 200,
             "waterfallBinCount": 2048,
             "number_of_peaks": 5,
             "recordings_dir": self.recordings_dir,

@@ -65,7 +65,7 @@ const App = () => {
     minPeakDistance: 0.1,
     numberOfPeaks: 5,
     showWaterfall: true,
-    waterfallSamples: 100,
+    waterfallSamples: 200,
     waterfallBinCount: 2048,
     updateInterval: 500
   });

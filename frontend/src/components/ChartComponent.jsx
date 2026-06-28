@@ -23,6 +23,7 @@ const ChartComponent = ({
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
   };
+  const maxWaterfallSamples = 375;
 
   const [fftData, setFftData] = useState([]);
   const [fftMaxData, setFftMaxData] = useState([]);
@@ -178,7 +179,7 @@ const ChartComponent = ({
           .map(row =>
             row.map(value => isNaN(value) ? -255 : value)
         );
-        const safeWaterfallSamples = Math.max(1, Math.min(2000, toFinite(settings.waterfallSamples, 100)));
+        const safeWaterfallSamples = Math.max(1, Math.min(maxWaterfallSamples, toFinite(settings.waterfallSamples, 200)));
         const safeInterval = Math.max(30, toFinite(settings.updateInterval, 500));
         // Faster UI motion at lower update intervals without increasing backend load.
         const waterfallBurst = Math.max(1, Math.min(4, Math.round(120 / safeInterval)));
@@ -295,7 +296,7 @@ const ChartComponent = ({
           setWaterfallNoSignal(true);
           setSpectrumNoSignal(true);
         }
-        const safeWaterfallSamples = Math.max(1, Math.min(2000, toFinite(settings.waterfallSamples, 100)));
+        const safeWaterfallSamples = Math.max(1, Math.min(maxWaterfallSamples, toFinite(settings.waterfallSamples, 200)));
         setWaterfallData((prev) => {
           const bins = (Array.isArray(prev[0]) && prev[0].length > 0)
             ? prev[0].length
@@ -542,11 +543,13 @@ const ChartComponent = ({
   const waterfallRows = waterfallData.length;
   const waterfallCols = safeWaterfallBins;
   const cellCount = waterfallRows * waterfallCols;
-  const maxWaterfallCells = 1800000;
+  const requestedWaterfallRows = Math.max(1, Math.min(maxWaterfallSamples, toFinite(settings.waterfallSamples, 200)));
+  const maxWaterfallCells = Math.max(1800000, requestedWaterfallRows * waterfallCols);
   const rowStride = cellCount > maxWaterfallCells ? Math.ceil(cellCount / maxWaterfallCells) : 1;
   const renderedWaterfallData = rowStride > 1
     ? waterfallData.filter((_, idx) => idx % rowStride === 0)
     : waterfallData;
+  const waterfallSmooth = cellCount <= 1800000 ? 'best' : false;
   const peakAnnotations = generateAnnotations(peaks, baseFreq, freqStep);
   const peakNameAnnotations = generateSignalNameAnnotations(peaks);
   const waterfallCenterDb = ((Number(minY) + Number(maxY)) / 2) + waterfallLevelOffset;
@@ -1208,16 +1211,16 @@ const ChartComponent = ({
               </select>
               <label style={quickTuneLabelStyle}>Duration</label>
               <select
-                value={toFinite(settings.waterfallSamples, 100)}
+                value={Math.max(1, Math.min(maxWaterfallSamples, toFinite(settings.waterfallSamples, 200)))}
                 onChange={(e) => {
-                  const samples = toFinite(e.target.value, 100);
+                  const samples = Math.max(1, Math.min(maxWaterfallSamples, toFinite(e.target.value, 100)));
                   setSettings({ ...settings, waterfallSamples: samples });
                   setWaterfallData((prev) => prev.slice(-samples));
                   pushSettings({ waterfallSamples: samples });
                 }}
                 style={quickTuneSelectStyle}
               >
-                {[100, 200, 400, 800, 1200, 1600].map((samples) => (
+                {[100, 200, 375].map((samples) => (
                   <option key={samples} value={samples}>{samples}</option>
                 ))}
               </select>
@@ -1231,7 +1234,7 @@ const ChartComponent = ({
                 z: renderedWaterfallData,
                 type: 'heatmap',
                 colorscale: waterfallColorScale,
-                zsmooth: 'best',
+                zsmooth: waterfallSmooth,
                 zmin: waterfallZMin,
                 zmax: waterfallZMax,
                 showscale: false, // Remove the color scale
@@ -1251,6 +1254,7 @@ const ChartComponent = ({
                 title: 'Samples',
                 color: 'white',
                 gridcolor: '#444',
+                range: [0, requestedWaterfallRows],
               },
               margin: {
                 l: 50,
@@ -1260,6 +1264,7 @@ const ChartComponent = ({
                 pad: 4
               },
               autosize: true,  // Let Plotly auto size
+              uirevision: `waterfall-${requestedWaterfallRows}-${safeWaterfallBins}`,
               paper_bgcolor: '#000',
               plot_bgcolor: '#000',
               font: {

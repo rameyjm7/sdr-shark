@@ -11,6 +11,7 @@ import Actions from './Actions';
 
 const PROFILE_STORAGE_KEY = 'sdrshark_ui_profiles_v1';
 const RECENT_FREQ_STORAGE_KEY = 'sdrshark_recent_frequencies_v1';
+const MAX_WATERFALL_SAMPLES = 375;
 
 const ControlPanel = ({
   settings,
@@ -36,6 +37,7 @@ const ControlPanel = ({
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
   };
+  const clampWaterfallSamples = (value) => Math.max(25, Math.min(MAX_WATERFALL_SAMPLES, toFinite(value, 200)));
 
   const [sdr, setSdr] = useState(settings.sdr || 'hackrf');
   const [availableSdrs, setAvailableSdrs] = useState([]);
@@ -157,6 +159,7 @@ const ControlPanel = ({
         frequency_start: toFinite(data.frequency_start, 700),
         frequency_stop: toFinite(data.frequency_stop, 820),
         waterfallBinCount: toFinite(data.waterfallBinCount, 2048),
+        waterfallSamples: clampWaterfallSamples(data.waterfallSamples),
         updateInterval: toFinite(data.updateInterval, 500),
         showSecondTrace: data.sdr === 'hackrf',
         dcSuppress: typeof data.dcSuppress === 'boolean' ? data.dcSuppress : true,
@@ -252,7 +255,7 @@ const ControlPanel = ({
   const handleSliderChangeCommitted = (e, value, name) => {
     const sliderValue = Array.isArray(value) ? value[0] : value;
     const safeValue = Number.isFinite(sliderValue) ? sliderValue : settings[name];
-    if (name === 'averagingCount') {
+    if (name === 'averagingCount' || name === 'waterfallSamples' || name === 'waterfallBinCount') {
       applySettings({ ...settings, [name]: safeValue });
     }
   };
@@ -317,6 +320,8 @@ const ControlPanel = ({
     }
     newSettings.frequency_start = clamp(toFinite(newSettings.frequency_start, freqMinMHz), freqMinMHz, freqMaxMHz);
     newSettings.frequency_stop = clamp(toFinite(newSettings.frequency_stop, freqMaxMHz), freqMinMHz, freqMaxMHz);
+    newSettings.waterfallSamples = clampWaterfallSamples(newSettings.waterfallSamples);
+    newSettings.waterfallBinCount = clamp(toFinite(newSettings.waterfallBinCount, 2048), 256, 4096);
     if (newSettings.frequency_stop < newSettings.frequency_start) {
       newSettings.frequency_stop = newSettings.frequency_start;
     }
@@ -364,7 +369,7 @@ const ControlPanel = ({
     lockBandwidthSampleRate: typeof settings.lockBandwidthSampleRate === 'boolean' ? settings.lockBandwidthSampleRate : true,
     dcSuppress: typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : true,
     waterfallBinCount: toFinite(settings.waterfallBinCount, 2048),
-    waterfallSamples: toFinite(settings.waterfallSamples, 100),
+    waterfallSamples: clampWaterfallSamples(settings.waterfallSamples),
   });
 
   const saveProfile = () => {
@@ -534,20 +539,21 @@ const ControlPanel = ({
                 }}
               >
                 <Box>
-                  <Typography variant="body2" gutterBottom>Waterfall Samples: {toFinite(settings.waterfallSamples, 100)}</Typography>
+                  <Typography variant="body2" gutterBottom>Waterfall Samples: {clampWaterfallSamples(settings.waterfallSamples)}</Typography>
                   <Slider
                     min={25}
-                    max={2000}
-                    value={toFinite(settings.waterfallSamples, 100)}
-                    onChange={(e, value) => setSettings({ ...settings, waterfallSamples: value })}
+                    max={MAX_WATERFALL_SAMPLES}
+                    value={clampWaterfallSamples(settings.waterfallSamples)}
+                    onChange={(e, value) => handleSliderChange(e, value, 'waterfallSamples')}
+                    onChangeCommitted={(e, value) => handleSliderChangeCommitted(e, value, 'waterfallSamples')}
                     valueLabelDisplay="auto"
                     step={25}
                     sx={{ '& .MuiSlider-thumb': { width: 18, height: 18 }, '& .MuiSlider-rail': { opacity: 0.35 } }}
                   />
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.25, px: 0.5 }}>
                     <Typography variant="caption" color="text.secondary">25</Typography>
-                    <Typography variant="caption" color="text.secondary">1000</Typography>
-                    <Typography variant="caption" color="text.secondary">2000</Typography>
+                    <Typography variant="caption" color="text.secondary">200</Typography>
+                    <Typography variant="caption" color="text.secondary">375</Typography>
                   </Box>
                 </Box>
                 <Box>
@@ -556,7 +562,8 @@ const ControlPanel = ({
                     min={256}
                     max={4096}
                     value={toFinite(settings.waterfallBinCount, 2048)}
-                    onChange={(e, value) => setSettings({ ...settings, waterfallBinCount: value })}
+                    onChange={(e, value) => handleSliderChange(e, value, 'waterfallBinCount')}
+                    onChangeCommitted={(e, value) => handleSliderChangeCommitted(e, value, 'waterfallBinCount')}
                     valueLabelDisplay="auto"
                     step={128}
                     sx={{ '& .MuiSlider-thumb': { width: 18, height: 18 }, '& .MuiSlider-rail': { opacity: 0.35 } }}

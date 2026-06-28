@@ -67,6 +67,40 @@ THREADS="${SDR_SHARK_THREADS:-10}"
 HOST="${SDR_SHARK_HOST:-0.0.0.0}"
 PORT="${SDR_SHARK_PORT:-5000}"
 
+if [[ "${SDR_SHARK_REGISTER_WITH_PORTAL:-1}" != "0" ]]; then
+  SDR_SHARK_FRONTEND_PORT="${SDR_SHARK_FRONTEND_PORT:-3000}"
+  SDR_SHARK_PORTAL_URL="${SDR_SHARK_PORTAL_URL:-http://127.0.0.1/apps}"
+  SDR_SHARK_PORTAL_NAME="${SDR_SHARK_PORTAL_NAME:-SDR Shark}"
+  SDR_SHARK_PORTAL_ID="${SDR_SHARK_PORTAL_ID:-sdr-shark}"
+  SDR_SHARK_PORTAL_DESCRIPTION="${SDR_SHARK_PORTAL_DESCRIPTION:-Live SDR spectrum and waterfall UI}"
+  SDR_SHARK_FRONTEND_PORT="${SDR_SHARK_FRONTEND_PORT}" \
+  SDR_SHARK_PORTAL_URL="${SDR_SHARK_PORTAL_URL}" \
+  SDR_SHARK_PORTAL_NAME="${SDR_SHARK_PORTAL_NAME}" \
+  SDR_SHARK_PORTAL_ID="${SDR_SHARK_PORTAL_ID}" \
+  SDR_SHARK_PORTAL_DESCRIPTION="${SDR_SHARK_PORTAL_DESCRIPTION}" \
+  python3 - <<'PY' >/dev/null 2>&1 || true
+import json
+import os
+import urllib.request
+
+payload = {
+    "id": os.environ["SDR_SHARK_PORTAL_ID"],
+    "name": os.environ["SDR_SHARK_PORTAL_NAME"],
+    "port": int(os.environ["SDR_SHARK_FRONTEND_PORT"]),
+    "description": os.environ["SDR_SHARK_PORTAL_DESCRIPTION"],
+    "tags": ["sdr", "spectrum", "waterfall"],
+}
+data = json.dumps(payload).encode("utf-8")
+req = urllib.request.Request(
+    os.environ["SDR_SHARK_PORTAL_URL"],
+    data=data,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+urllib.request.urlopen(req, timeout=0.75).read()
+PY
+fi
+
 exec "${GUNICORN_BIN}" \
   -w "${WORKERS}" \
   --threads "${THREADS}" \
