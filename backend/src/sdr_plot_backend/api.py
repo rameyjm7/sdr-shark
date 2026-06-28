@@ -811,6 +811,7 @@ def get_sdr_devices():
 def get_settings():
     settings = {
         'sdr': vars.sdr0.device_id or vars.radio_name,
+        'sdrBackend': getattr(vars.sdr0, 'backend', 'gateway'),
         'frequency': vars.sdr_frequency() / 1e6,  # Convert to MHz
         'gain': vars.sdr_gain(),
         'sampleRate': vars.sdr_sampleRate() / 1e6,  # Convert to MHz

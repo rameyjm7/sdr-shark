@@ -4,6 +4,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
+export SDR_BACKEND="${SDR_BACKEND:-soapy}"
+
 # Optional token loading for sdr-gateway auth.
 # Priority:
 # 1) pre-exported SDR_GATEWAY_API_TOKEN
@@ -11,7 +13,7 @@ cd "${REPO_ROOT}"
 # 3) SDR_SHARK_GATEWAY_TOKEN_FILE
 # 4) ../sdr-gateway/configs/key.txt
 # 5) ../sdr-gateway/key.txt
-if [[ -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
+if [[ "${SDR_BACKEND}" == "gateway" && -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
   TOKEN_FILE="${SDR_SHARK_GATEWAY_TOKEN_FILE:-}"
   if [[ -z "${TOKEN_FILE}" && -r "/etc/default/sdr-gateway" ]]; then
     TOKEN_FILE="/etc/default/sdr-gateway"
@@ -43,7 +45,7 @@ if [[ -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
   fi
 fi
 
-if [[ -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
+if [[ "${SDR_BACKEND}" == "gateway" && -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
   echo "Warning: SDR_GATEWAY_API_TOKEN is not set; backend may fail against authenticated sdr-gateway."
 fi
 

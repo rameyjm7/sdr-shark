@@ -44,6 +44,25 @@ Use ./scripts/sdr-shark-service.sh to install/manage a service:
 
 If your `sdr-gateway` lives somewhere other than `http://127.0.0.1:8080`, set `SDR_SERVER_URL` before installing the service and the helper will write it into the service environment file alongside `SDR_GATEWAY_API_TOKEN`.
 
+SDR backend options:
+
+- Default: `SDR_BACKEND=soapy` uses local SoapySDR Python bindings directly and does not require `sdr-gateway`.
+- Gateway mode: `SDR_BACKEND=gateway` uses `sdr-gateway` at `SDR_SERVER_URL`.
+
+For direct SoapySDR mode, install SoapySDR and the driver packages for your radio, then verify:
+
+```bash
+SoapySDRUtil --find
+python -c "import SoapySDR; print('SoapySDR ok')"
+SDR_BACKEND=soapy ./scripts/start.sh
+```
+
+Optional: limit direct discovery with `SDR_SOAPY_DRIVERS=hackrf,rtlsdr,airspy,bladerf,sidekiq`.
+
+SoapySDR/vendor probe and overflow warnings are written to `~/.sdr-shark/logs/soapysdr.log` by default instead of the service console. Override with `SDR_SOAPY_LOG_FILE=/path/to/soapysdr.log`, or set `SDR_SOAPY_LOG_STDERR=1` while debugging to show them on stderr again.
+
+Backend startup auto-launches the React dev frontend when `frontend/node_modules` exists. If port `3000` is already in use, it skips auto-start instead of prompting for another port. Set `SDR_SHARK_AUTO_START_FRONTEND=0` to disable this behavior, or `SDR_SHARK_FRONTEND_PORT=3001` to use a different frontend port.
+
 
 **Option 2:** If you want to make changes and develop
 

@@ -31,6 +31,9 @@ Environment overrides:
   SDR_SHARK_GROUP         (default: current user's group)
   SDR_SHARK_ENV_FILE      (default: /etc/default/<service>)
   SDR_SHARK_START_SCRIPT  (default: <repo>/scripts/start.sh)
+  SDR_BACKEND             (default: soapy; written to env file on install)
+  SDR_SOAPY_LOG_FILE      (optional; written to env file on install)
+  SDR_SOAPY_LOG_STDERR    (optional; written to env file on install)
   SDR_GATEWAY_API_TOKEN   (optional; written to env file on install)
   SDR_SERVER_URL          (optional; written to env file on install)
 EOF
@@ -87,11 +90,24 @@ EOF
   rm -f "/tmp/${SERVICE_NAME}.service"
 
   env_lines=()
-  if [[ -n "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
+  backend="${SDR_BACKEND:-soapy}"
+  backend_escaped="$(printf "%s" "${backend}" | sed "s/'/'\"'\"'/g")"
+  env_lines+=("SDR_BACKEND='${backend_escaped}'")
+
+  if [[ -n "${SDR_SOAPY_LOG_FILE:-}" ]]; then
+    soapy_log_file_escaped="$(printf "%s" "${SDR_SOAPY_LOG_FILE}" | sed "s/'/'\"'\"'/g")"
+    env_lines+=("SDR_SOAPY_LOG_FILE='${soapy_log_file_escaped}'")
+  fi
+  if [[ -n "${SDR_SOAPY_LOG_STDERR:-}" ]]; then
+    soapy_log_stderr_escaped="$(printf "%s" "${SDR_SOAPY_LOG_STDERR}" | sed "s/'/'\"'\"'/g")"
+    env_lines+=("SDR_SOAPY_LOG_STDERR='${soapy_log_stderr_escaped}'")
+  fi
+
+  if [[ "${backend}" == "gateway" && -n "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
     token_escaped="$(printf "%s" "${SDR_GATEWAY_API_TOKEN}" | sed "s/'/'\"'\"'/g")"
     env_lines+=("SDR_GATEWAY_API_TOKEN='${token_escaped}'")
   fi
-  if [[ -n "${SDR_SERVER_URL:-}" ]]; then
+  if [[ "${backend}" == "gateway" && -n "${SDR_SERVER_URL:-}" ]]; then
     server_url_escaped="$(printf "%s" "${SDR_SERVER_URL}" | sed "s/'/'\"'\"'/g")"
     env_lines+=("SDR_SERVER_URL='${server_url_escaped}'")
   fi
