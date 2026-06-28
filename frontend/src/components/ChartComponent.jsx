@@ -120,7 +120,7 @@ const ChartComponent = ({
           const response = await axios.get('/api/data', {
             params: {
               source: 'main',
-              waterfall: showWaterfall ? 'latest' : 'none',
+              waterfall: showWaterfall ? 'derive' : 'none',
               _ts: Date.now(),
             },
           });
@@ -193,12 +193,14 @@ const ChartComponent = ({
           }
           return next.slice(-safeWaterfallSamples);
         };
-        if (sanitizedWaterfallData.length > 0 && (frameAdvanced || fftChanged)) {
+        if (sanitizedWaterfallData.length > 0 && data?.waterfallMode !== 'derive' && (frameAdvanced || fftChanged)) {
           const latestServerRow = sanitizedWaterfallData[sanitizedWaterfallData.length - 1];
           const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, latestServerRow?.length || 2048)));
           setWaterfallData((prev) => appendRowBurst(prev, latestServerRow, targetBins));
         } else if (sanitizedFftData.length > 0 && (frameAdvanced || fftChanged)) {
-          const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, sanitizedFftData.length)));
+          const targetBins = data?.waterfallMode === 'derive'
+            ? sanitizedFftData.length
+            : Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, sanitizedFftData.length)));
           const row = resampleRow(sanitizedFftData, targetBins);
           setWaterfallData((prev) => appendRowBurst(prev, row, targetBins));
         } else if (!frameAdvanced && !fftChanged && staleSeqCountRef.current >= 4) {
@@ -317,7 +319,7 @@ const ChartComponent = ({
     if (typeof window !== 'undefined' && typeof window.EventSource === 'function') {
       const streamParams = new URLSearchParams({
         source: 'main',
-        waterfall: showWaterfall ? 'latest' : 'none',
+        waterfall: showWaterfall ? 'derive' : 'none',
         interval: String(safeInterval),
       });
       eventSource = new window.EventSource(`/api/data_stream?${streamParams.toString()}`);

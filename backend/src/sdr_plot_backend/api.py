@@ -375,7 +375,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         max_payload_cells = 150000
         main_fft_snapshot = list(fft_data['original_fft'])
         scanner_fft_snapshot = list(fft_data['original_fft2'])
-        waterfall_rows_requested = 0 if waterfall_mode == 'none' else (1 if waterfall_mode == 'latest' else max_waterfall_rows)
+        waterfall_rows_requested = 0 if waterfall_mode in ('none', 'derive') else (1 if waterfall_mode == 'latest' else max_waterfall_rows)
         main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, waterfall_rows_requested)
         scanner_waterfall_snapshot = _tail_deque_rows(waterfall_buffer2, waterfall_rows_requested)
         main_ts_snapshot = main_fft_updated_at
@@ -463,6 +463,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'fft': fft_response,
         'peaks': peaks_response,
         'waterfall': waterfall_response,
+        'waterfallMode': waterfall_mode,
         'waterfallRows': len(waterfall_response),
         'time': current_time,
         'settings': vars.get_settings(),
