@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import axios from 'axios';
 import Plot from 'react-plotly.js';
 import '../App.css';
@@ -58,6 +58,10 @@ const ChartComponent = ({
   const lastMainSeqRef = useRef(null);
   const staleSeqCountRef = useRef(0);
   const lastFftSnapshotRef = useRef([]);
+  const dataRequestInFlightRef = useRef(false);
+  const queuedSsePayloadRef = useRef(null);
+  const sseHealthyRef = useRef(false);
+  const sseLastMessageAtRef = useRef(0);
   const spectrumPlotRef = useRef(null);
   const lastTuneRef = useRef({
     frequency: Number(settings.frequency),
@@ -98,15 +102,30 @@ const ChartComponent = ({
 
   useEffect(() => {
     const fetchData = async () => {
+      if (dataRequestInFlightRef.current) {
+        droppedFramesRef.current += 1;
+        return;
+      }
+      dataRequestInFlightRef.current = true;
       const start = performance.now();
       try {
-        const response = await axios.get('/api/data', {
-          params: {
-            source: 'main',
-            _ts: Date.now(),
-          },
-        });
-        const data = response.data;
+        const queuedPayload = queuedSsePayloadRef.current;
+        let data = null;
+        if (queuedPayload) {
+          queuedSsePayloadRef.current = null;
+          data = queuedPayload;
+        } else if (sseHealthyRef.current && Date.now() - sseLastMessageAtRef.current < 2000) {
+          return;
+        } else {
+          const response = await axios.get('/api/data', {
+            params: {
+              source: 'main',
+              waterfall: showWaterfall ? 'latest' : 'none',
+              _ts: Date.now(),
+            },
+          });
+          data = response.data;
+        }
         const mainSeq = Number(data?.mainFrameSeq || 0);
         const prevSeq = lastMainSeqRef.current;
         const frameAdvanced = prevSeq === null ? true : mainSeq !== prevSeq;
@@ -289,13 +308,44 @@ const ChartComponent = ({
             staleMs: Date.now() - lastDataTsRef.current,
           }));
         }
+      } finally {
+        dataRequestInFlightRef.current = false;
       }
     };
     const safeInterval = Math.max(50, toFinite(settings.updateInterval, 500));
+    let eventSource = null;
+    if (typeof window !== 'undefined' && typeof window.EventSource === 'function') {
+      const streamParams = new URLSearchParams({
+        source: 'main',
+        waterfall: showWaterfall ? 'latest' : 'none',
+        interval: String(safeInterval),
+      });
+      eventSource = new window.EventSource(`/api/data_stream?${streamParams.toString()}`);
+      eventSource.addEventListener('frame', (event) => {
+        try {
+          queuedSsePayloadRef.current = JSON.parse(event.data);
+          sseHealthyRef.current = true;
+          sseLastMessageAtRef.current = Date.now();
+          fetchData();
+        } catch (error) {
+          console.error('Error parsing stream data:', error);
+        }
+      });
+      eventSource.onerror = () => {
+        sseHealthyRef.current = false;
+      };
+    }
     fetchData();
     const interval = setInterval(fetchData, safeInterval);
-    return () => clearInterval(interval);
-  }, [settings.updateInterval, settings.waterfallSamples, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, onTelemetryUpdate]);
+    return () => {
+      clearInterval(interval);
+      if (eventSource) {
+        eventSource.close();
+      }
+      sseHealthyRef.current = false;
+      queuedSsePayloadRef.current = null;
+    };
+  }, [settings.updateInterval, settings.waterfallSamples, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, showWaterfall, onTelemetryUpdate]);
 
 
 
@@ -468,10 +518,24 @@ const ChartComponent = ({
     : (safeFrequencyMHz - safeSampleRateMHz / 2) * 1e6;
   const freqStep = safeBandwidthHz / safeBins;
   const waterfallFreqStep = safeBandwidthHz / safeWaterfallBins;
-  const fftX = Array.from({ length: safeBins }, (_, index) => baseFreq + index * freqStep);
-  const waterfallX = Array.from(
-    { length: safeWaterfallBins },
-    (_, index) => baseFreq + index * waterfallFreqStep,
+  const fftX = useMemo(
+    () => Array.from({ length: safeBins }, (_, index) => baseFreq + index * freqStep),
+    [safeBins, baseFreq, freqStep],
+  );
+  const maxFftX = useMemo(
+    () => Array.from({ length: fftMaxData.length }, (_, index) => baseFreq + index * freqStep),
+    [fftMaxData.length, baseFreq, freqStep],
+  );
+  const persistenceX = useMemo(
+    () => Array.from({ length: persistanceData.length }, (_, index) => baseFreq + index * freqStep),
+    [persistanceData.length, baseFreq, freqStep],
+  );
+  const waterfallX = useMemo(
+    () => Array.from(
+      { length: safeWaterfallBins },
+      (_, index) => baseFreq + index * waterfallFreqStep,
+    ),
+    [safeWaterfallBins, baseFreq, waterfallFreqStep],
   );
   const maxWaterfallCells = 500000;
   const waterfallRows = waterfallData.length;
@@ -957,42 +1021,33 @@ const ChartComponent = ({
             traceStyles.live.visible && {
               x: Array.isArray(fftData) ? fftX : [],
               y: Array.isArray(fftData) ? fftData : [],
-              type: 'scatter',
+              type: 'scattergl',
               mode: 'lines',
               marker: { color: 'orange' },
               opacity: traceStyles.live.opacity,
-              line: { shape: 'spline', width: traceStyles.live.width },
+              line: { shape: 'linear', width: traceStyles.live.width },
               showlegend: false,
             },
             traceStyles.max.visible && settings.showMaxTrace && {  // Conditionally add the Max FFT trace
-            x: Array.isArray(fftMaxData)
-              ? Array.from({ length: fftMaxData.length }, (_, index) => baseFreq + index * freqStep)
-              : [],
+            x: Array.isArray(fftMaxData) ? maxFftX : [],
             y: Array.isArray(fftMaxData) ? fftMaxData : [],
-            type: 'scatter',
+            type: 'scattergl',
             mode: 'lines',
             marker: { color: 'green' },
             opacity: traceStyles.max.opacity,
-            line: { shape: 'spline', width: traceStyles.max.width },
+            line: { shape: 'linear', width: traceStyles.max.width },
             showlegend: false, // Show this trace in the legend
             name: 'Max FFT Data', // Label for the legend
           },
           traceStyles.persist.visible && settings.showPersistanceTrace && {  // Conditionally add the Persistence Trace
-            x: Array.isArray(persistanceData)
-              ? Array.from(
-                { length: persistanceData.length },
-                (_, index) => baseFreq + index * freqStep,
-              )
-              : [],
+            x: Array.isArray(persistanceData) ? persistenceX : [],
             y: Array.isArray(persistanceData) ? persistanceData : [],
-            type: 'scatter',
+            type: 'scattergl',
             mode: 'lines',
-            fill: 'tozeroy', // Fill area under the trace
-            fillcolor: 'rgba(0, 0, 255, 0.08)', // Blue fill with 20% transparency
             opacity: traceStyles.persist.opacity,
             line: {
               color: 'rgba(0, 0, 255, 0.1)', // Semi-transparent blue line
-              shape: 'spline', // Smooth line shape
+              shape: 'linear',
               width: traceStyles.persist.width,
             },
             showlegend: false, // Hide horizontal lines from the legend

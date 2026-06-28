@@ -366,16 +366,18 @@ def reset_fft_trace():
 
     return jsonify({'status': 'success', 'trace': trace})
 
-@api_blueprint.route('/api/data')
-def get_data():
+def _build_data_payload(source='main', waterfall_mode='history'):
+    source = str(source or 'main').lower()
+    waterfall_mode = str(waterfall_mode or 'history').lower()
     with data_lock:
         max_waterfall_rows = _safe_int(vars.waterfall_samples, default=100, min_value=1, max_value=2000)
         # Keep live responses lightweight for lower-latency UI updates.
         max_payload_cells = 150000
         main_fft_snapshot = list(fft_data['original_fft'])
         scanner_fft_snapshot = list(fft_data['original_fft2'])
-        main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, max_waterfall_rows)
-        scanner_waterfall_snapshot = _tail_deque_rows(waterfall_buffer2, max_waterfall_rows)
+        waterfall_rows_requested = 0 if waterfall_mode == 'none' else (1 if waterfall_mode == 'latest' else max_waterfall_rows)
+        main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, waterfall_rows_requested)
+        scanner_waterfall_snapshot = _tail_deque_rows(waterfall_buffer2, waterfall_rows_requested)
         main_ts_snapshot = main_fft_updated_at
         scanner_ts_snapshot = scanner_fft_updated_at
         main_seq_snapshot = main_frame_seq
@@ -383,7 +385,6 @@ def get_data():
         
         peaks_snapshot = list(fft_data['peaks'])
 
-    source = request.args.get('source', 'main').lower()
     scanner_fresh = (time.time() - scanner_ts_snapshot) <= 3.0
     scanner_available = scanner_fresh and len(scanner_fft_snapshot) > 0
     main_available = len(main_fft_snapshot) > 0
@@ -487,7 +488,55 @@ def get_data():
         if response['frequency_start'] < 1e6:
             print("error")
 
-    return jsonify(response)
+    return response
+
+
+def _stream_sequence_for_source(source):
+    source = str(source or 'main').lower()
+    with data_lock:
+        if source == 'scanner':
+            return int(scanner_frame_seq)
+        if source == 'auto':
+            return max(int(main_frame_seq), int(scanner_frame_seq))
+        return int(main_frame_seq)
+
+
+@api_blueprint.route('/api/data')
+def get_data():
+    return jsonify(_build_data_payload(
+        source=request.args.get('source', 'main'),
+        waterfall_mode=request.args.get('waterfall', 'history'),
+    ))
+
+
+@api_blueprint.route('/api/data_stream')
+def stream_data():
+    source = request.args.get('source', 'main')
+    waterfall_mode = request.args.get('waterfall', 'latest')
+    min_interval_ms = _safe_int(request.args.get('interval', 50), default=50, min_value=20, max_value=2000)
+
+    def event_stream():
+        last_seq = -1
+        heartbeat_at = time.time()
+        while running:
+            seq = _stream_sequence_for_source(source)
+            now = time.time()
+            if seq != last_seq:
+                payload = _build_data_payload(source=source, waterfall_mode=waterfall_mode)
+                last_seq = seq
+                heartbeat_at = now
+                yield f"id: {seq}\nevent: frame\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            elif now - heartbeat_at >= 10:
+                heartbeat_at = now
+                yield ": keepalive\n\n"
+            time.sleep(min_interval_ms / 1000.0)
+
+    headers = {
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+    }
+    return Response(event_stream(), mimetype='text/event-stream', headers=headers)
 
 
 @api_blueprint.route('/api/analytics')
