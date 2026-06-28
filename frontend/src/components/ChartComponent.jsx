@@ -347,7 +347,7 @@ const ChartComponent = ({
       sseHealthyRef.current = false;
       queuedSsePayloadRef.current = null;
     };
-  }, [settings.updateInterval, settings.waterfallSamples, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, showWaterfall, onTelemetryUpdate]);
+  }, [settings.updateInterval, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, showWaterfall, onTelemetryUpdate]);
 
 
 
@@ -539,10 +539,10 @@ const ChartComponent = ({
     ),
     [safeWaterfallBins, baseFreq, waterfallFreqStep],
   );
-  const maxWaterfallCells = 500000;
   const waterfallRows = waterfallData.length;
   const waterfallCols = safeWaterfallBins;
   const cellCount = waterfallRows * waterfallCols;
+  const maxWaterfallCells = 1800000;
   const rowStride = cellCount > maxWaterfallCells ? Math.ceil(cellCount / maxWaterfallCells) : 1;
   const renderedWaterfallData = rowStride > 1
     ? waterfallData.filter((_, idx) => idx % rowStride === 0)
@@ -1211,6 +1211,8 @@ const ChartComponent = ({
                 value={toFinite(settings.waterfallSamples, 100)}
                 onChange={(e) => {
                   const samples = toFinite(e.target.value, 100);
+                  setSettings({ ...settings, waterfallSamples: samples });
+                  setWaterfallData((prev) => prev.slice(-samples));
                   pushSettings({ waterfallSamples: samples });
                 }}
                 style={quickTuneSelectStyle}
@@ -1229,7 +1231,7 @@ const ChartComponent = ({
                 z: renderedWaterfallData,
                 type: 'heatmap',
                 colorscale: waterfallColorScale,
-                zsmooth: false,
+                zsmooth: 'best',
                 zmin: waterfallZMin,
                 zmax: waterfallZMax,
                 showscale: false, // Remove the color scale
