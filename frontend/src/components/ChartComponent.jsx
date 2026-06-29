@@ -1176,6 +1176,19 @@ const ChartComponent = ({
     applyQuickTune(quickCenterMHz + deltaMHz, quickSpanMHz);
   };
 
+  const applyYLimits = (nextMin, nextMax) => {
+    const yMin = toFinite(nextMin, minY);
+    const yMax = toFinite(nextMax, maxY);
+    if (!Number.isFinite(yMin) || !Number.isFinite(yMax) || yMax <= yMin) return;
+    setAutoscaleMode('manual');
+    setMinY(yMin);
+    setMaxY(yMax);
+  };
+
+  const shiftYLimits = (deltaDb) => {
+    applyYLimits(Number(minY) + deltaDb, Number(maxY) + deltaDb);
+  };
+
   const markerDelta =
     markerPrimary && markerSecondary
       ? {
@@ -1317,6 +1330,24 @@ const ChartComponent = ({
           <option value="noise_follow">Noise-follow</option>
           <option value="hold">Hold</option>
         </select>
+        <label style={{ ...quickTuneLabelStyle, marginLeft: 8 }}>Y Min</label>
+        <input
+          type="number"
+          step="5"
+          value={Number.isFinite(Number(minY)) ? Number(minY).toFixed(0) : minY}
+          onChange={(e) => applyYLimits(e.target.value, maxY)}
+          style={{ ...quickTuneInputStyle, width: 66 }}
+        />
+        <label style={quickTuneLabelStyle}>Y Max</label>
+        <input
+          type="number"
+          step="5"
+          value={Number.isFinite(Number(maxY)) ? Number(maxY).toFixed(0) : maxY}
+          onChange={(e) => applyYLimits(minY, e.target.value)}
+          style={{ ...quickTuneInputStyle, width: 66 }}
+        />
+        <button type="button" style={quickTuneButtonStyle} onClick={() => shiftYLimits(-5)}>-5 dB</button>
+        <button type="button" style={quickTuneButtonStyle} onClick={() => shiftYLimits(5)}>+5 dB</button>
         <span style={{ ...quickTuneLabelStyle, marginLeft: 6 }}>Keys: Space [ ] G R M</span>
       </div>
       <div style={{ position: 'relative' }}>
