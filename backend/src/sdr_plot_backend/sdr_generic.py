@@ -718,6 +718,7 @@ class SDRGeneric:
             "lna_gain_db": lna_gain,
             "vga_gain_db": vga_gain,
             "amp_enable": True,
+            "replace_existing": True,
             "baseband_filter_hz": int(round(min(sample_rate, max(1_750_000, self.bandwidth)))),
             "iq_format": self.gateway_requested_iq_format,
         }
@@ -795,6 +796,8 @@ class SDRGeneric:
                 frame = self._ws.recv()
                 if not isinstance(frame, (bytes, bytearray)):
                     continue
+                if self._should_publish_iq_tap():
+                    self._publish_iq_tap(self._gateway_frame_to_cs8(frame))
                 iq = self._decode_gateway_frame(frame)
 
                 if iq.size >= self.size:
@@ -836,3 +839,10 @@ class SDRGeneric:
         i = iq_raw[0::2].astype(np.float32)
         q = iq_raw[1::2].astype(np.float32)
         return ((i + 1j * q) / scale).astype(np.complex64, copy=False)
+
+    def _gateway_frame_to_cs8(self, frame: bytes | bytearray) -> bytes:
+        if self.gateway_iq_format == "cs16":
+            return self._cs16_to_cs8(np.frombuffer(frame, dtype=np.int16))
+        if self.gateway_iq_format == "cf32":
+            return self._complex_to_cs8(np.frombuffer(frame, dtype=np.complex64))
+        return bytes(frame)

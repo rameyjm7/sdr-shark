@@ -22,6 +22,8 @@ const PlotSettings = ({
   const dcSuppress = typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : false;
   const showMaxTrace = typeof settings.showMaxTrace === 'boolean' ? settings.showMaxTrace : false;
   const showPersistanceTrace = typeof settings.showPersistanceTrace === 'boolean' ? settings.showPersistanceTrace : false;
+  const activityLogRetentionSec = Math.max(60, Math.min(3600, toFinite(settings.activityLogRetentionSec, 600)));
+  const activityLogRetentionMin = Math.round(activityLogRetentionSec / 60);
 
   const [lockYAxisRange, setLockYAxisRange] = useState(true); // Locked by default
 
@@ -162,6 +164,27 @@ const PlotSettings = ({
           sx={sliderSx}
         />
         {rangeHint('10 ms', '500 ms', '1000 ms')}
+      </Box>
+
+      <Box sx={{ mt: 1.5 }}>
+        <Typography variant="body2" gutterBottom>Activity Log Retention: {activityLogRetentionMin} min</Typography>
+        <Slider
+          min={1}
+          max={60}
+          value={activityLogRetentionMin}
+          onChange={(e, value) => {
+            const safeValue = Array.isArray(value) ? value[0] : value;
+            if (!Number.isFinite(safeValue)) return;
+            setSettings((prevSettings) => ({
+              ...prevSettings,
+              activityLogRetentionSec: safeValue * 60,
+            }));
+          }}
+          valueLabelDisplay="auto"
+          step={1}
+          sx={sliderSx}
+        />
+        {rangeHint('1 min', '30 min', '60 min')}
       </Box>
 
       <Box

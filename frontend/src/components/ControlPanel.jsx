@@ -11,10 +11,50 @@ import Actions from './Actions';
 
 const PROFILE_STORAGE_KEY = 'sdrshark_ui_profiles_v1';
 const RECENT_FREQ_STORAGE_KEY = 'sdrshark_recent_frequencies_v1';
+const LAST_SDR_STORAGE_KEY = 'sdrshark_last_selected_sdr_v1';
+const SDR_DEVICE_CACHE_STORAGE_KEY = 'sdrshark_sdr_device_cache_v1';
 const MAX_WATERFALL_SAMPLES = 375;
 const SETTINGS_POST_CONFIG = {
   headers: { 'Content-Type': 'application/json' },
   timeout: 8000,
+};
+
+const readJsonStorage = (key, fallback) => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+    return parsed === null ? fallback : parsed;
+  } catch (error) {
+    return fallback;
+  }
+};
+
+const readLastSdr = () => {
+  try {
+    return localStorage.getItem(LAST_SDR_STORAGE_KEY) || '';
+  } catch (error) {
+    return '';
+  }
+};
+
+const writeLastSdr = (sdrId) => {
+  try {
+    if (sdrId) localStorage.setItem(LAST_SDR_STORAGE_KEY, sdrId);
+  } catch (error) {
+    // Non-fatal: browser storage may be disabled.
+  }
+};
+
+const fallbackDeviceForSdr = (sdrId) => {
+  const driver = String(sdrId || '').split(':', 1)[0];
+  const defaults = {
+    bladerf: { label: 'bladeRF', freq_min_hz: 47_000_000, freq_max_hz: 6_000_000_000, max_sample_rate_sps: 61_440_000 },
+    hackrf: { label: 'HackRF', freq_min_hz: 1_000_000, freq_max_hz: 6_000_000_000, max_sample_rate_sps: 20_000_000 },
+    airspy: { label: 'Airspy', freq_min_hz: 24_000_000, freq_max_hz: 1_800_000_000, max_sample_rate_sps: 10_000_000 },
+    rtlsdr: { label: 'RTL-SDR', freq_min_hz: 24_000_000, freq_max_hz: 1_766_000_000, max_sample_rate_sps: 3_200_000 },
+    sidekiq: { label: 'Sidekiq', freq_min_hz: 70_000_000, freq_max_hz: 6_000_000_000, max_sample_rate_sps: 61_440_000 },
+  };
+  if (!defaults[driver]) return null;
+  return { id: sdrId, driver, ...defaults[driver] };
 };
 
 const ControlPanel = ({
@@ -43,8 +83,11 @@ const ControlPanel = ({
   };
   const clampWaterfallSamples = (value) => Math.max(25, Math.min(MAX_WATERFALL_SAMPLES, toFinite(value, 200)));
 
-  const [sdr, setSdr] = useState(settings.sdr || 'hackrf');
-  const [availableSdrs, setAvailableSdrs] = useState([]);
+  const [sdr, setSdr] = useState(settings.sdr || readLastSdr() || 'hackrf');
+  const [availableSdrs, setAvailableSdrs] = useState(() => {
+    const cached = readJsonStorage(SDR_DEVICE_CACHE_STORAGE_KEY, []);
+    return Array.isArray(cached) ? cached : [];
+  });
   const [statusState, setStatusState] = useState({ text: 'Ready', level: 'info', count: 1 });
   const [saving, setSaving] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -55,7 +98,12 @@ const ControlPanel = ({
   const [selectedProfile, setSelectedProfile] = useState('');
   const [profileName, setProfileName] = useState('');
   const [recentFrequencies, setRecentFrequencies] = useState([]);
-  const selectedDevice = availableSdrs.find((d) => d.id === sdr) || null;
+  const discoveredSelectedDevice = availableSdrs.find((d) => d.id === sdr) || null;
+  const selectedDevice = discoveredSelectedDevice || fallbackDeviceForSdr(sdr);
+  const savedSelectedDevice = selectedDevice || { id: sdr, label: sdr };
+  const displayedSdrs = discoveredSelectedDevice || !sdr
+    ? availableSdrs
+    : [{ ...savedSelectedDevice, id: sdr, label: `${savedSelectedDevice.label || sdr} (last selected)` }, ...availableSdrs];
 
   const updateStatus = (text, level = 'info') => {
     setStatusState((prev) => {
@@ -103,22 +151,38 @@ const ControlPanel = ({
     });
   }, [settings.frequency]);
 
-  const fetchDevices = async () => {
+  const deviceExists = (devices, sdrId) => Boolean(sdrId && devices.some((device) => device.id === sdrId));
+
+  const resolveSelectedSdr = (devices, backendSelected, settingsSelected) => {
+    const lastSdr = readLastSdr();
+    const candidates = [lastSdr, settingsSelected, sdr, backendSelected].filter(Boolean);
+    const match = candidates.find((candidate) => deviceExists(devices, candidate));
+    if (match) return match;
+    return lastSdr || settingsSelected || sdr || backendSelected || (devices[0] && devices[0].id) || 'hackrf';
+  };
+
+  const fetchDevices = async ({ force = false } = {}) => {
+    if (!force && availableSdrs.length > 0) {
+      return { devices: availableSdrs, selected: sdr || settings.sdr || readLastSdr() || null };
+    }
     try {
       const response = await axios.get('/api/sdr_devices');
       const payload = response.data || {};
       const devices = Array.isArray(payload.devices) ? payload.devices : [];
-      setAvailableSdrs(devices);
-      if (payload.selected) {
-        setSdr(payload.selected);
-      } else if (devices.length > 0) {
-        setSdr(devices[0].id);
+      if (devices.length > 0) {
+        setAvailableSdrs(devices);
+        try {
+          localStorage.setItem(SDR_DEVICE_CACHE_STORAGE_KEY, JSON.stringify(devices));
+        } catch (error) {
+          // Non-fatal: cache is only for smoother initial UI.
+        }
+      } else if (availableSdrs.length === 0) {
+        setAvailableSdrs([]);
       }
       return { devices, selected: payload.selected };
     } catch (error) {
       console.error('Error fetching SDR devices:', error);
-      setAvailableSdrs([]);
-      return { devices: [], selected: null };
+      return { devices: availableSdrs, selected: sdr || settings.sdr || readLastSdr() || null };
     }
   };
 
@@ -145,13 +209,15 @@ const ControlPanel = ({
     setTasks(updatedTasks);
   };
 
-  const fetchSettings = async () => {
+  const fetchSettings = async ({ refreshDevices = false } = {}) => {
     try {
-      const { devices, selected } = await fetchDevices();
+      const { devices, selected } = await fetchDevices({ force: refreshDevices });
+      const usableDevices = devices.length > 0 ? devices : availableSdrs;
       const response = await axios.get('/api/get_settings');
       const data = response.data;
-      const selectedSdr = selected || data.sdr || (devices[0] && devices[0].id) || 'hackrf';
+      const selectedSdr = resolveSelectedSdr(usableDevices, selected, data.sdr);
       setSdr(selectedSdr);
+      writeLastSdr(selectedSdr);
 
       const sanitized = {
         ...data,
@@ -165,7 +231,7 @@ const ControlPanel = ({
         waterfallBinCount: toFinite(data.waterfallBinCount, 2048),
         waterfallSamples: clampWaterfallSamples(data.waterfallSamples),
         updateInterval: toFinite(data.updateInterval, 500),
-        showSecondTrace: data.sdr === 'hackrf',
+        showSecondTrace: selectedSdr === 'hackrf',
         dcSuppress: typeof data.dcSuppress === 'boolean' ? data.dcSuppress : true,
         sweeping_enabled: typeof data.sweeping_enabled === 'boolean' ? data.sweeping_enabled : false,
       };
@@ -292,6 +358,7 @@ const ControlPanel = ({
       if (!response?.data?.result) {
         throw new Error(response?.data?.message || `Failed to switch SDR to ${newSdr}`);
       }
+      writeLastSdr(newSdr);
       // Do not apply stale prior-radio sample/bandwidth values here.
       // Fetch backend-canonical settings for the newly selected SDR.
       await fetchSettings();
@@ -434,7 +501,7 @@ const ControlPanel = ({
             `Status: ${statusState.text}${statusState.count > 1 ? ` (x${statusState.count})` : ''}`
           )}
         </Typography>
-        <IconButton onClick={fetchSettings} sx={{ ml: 2 }}>
+        <IconButton onClick={() => fetchSettings({ refreshDevices: true })} sx={{ ml: 2 }}>
           <RefreshIcon />
         </IconButton>
         <IconButton onClick={() => applySettings(settings)} sx={{ ml: 2 }}>
@@ -456,8 +523,8 @@ const ControlPanel = ({
         {tabIndex === 0 && (
           <>
             <Typography variant="body1">Select SDR:</Typography>
-            <Select value={sdr || ''} onChange={handleSdrChange} fullWidth disabled={availableSdrs.length === 0}>
-              {availableSdrs.map((device) => (
+            <Select value={sdr || ''} onChange={handleSdrChange} fullWidth disabled={displayedSdrs.length === 0}>
+              {displayedSdrs.map((device) => (
                 <MenuItem key={device.id} value={device.id}>
                   {device.label || device.id}
                 </MenuItem>

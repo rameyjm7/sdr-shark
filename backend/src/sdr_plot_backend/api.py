@@ -10,6 +10,7 @@ import json
 from flask import Blueprint, jsonify, request, current_app, Response
 
 from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
+from sdr_plot_backend.fm_plugin import FmBroadcastPlugin
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
 
@@ -41,6 +42,7 @@ settings_update_lock = threading.Lock()
 fft_failure_count = 0
 scanner_failure_count = 0
 bluetooth_plugin = BluetoothGatewayPlugin()
+fm_plugin = FmBroadcastPlugin()
 
 
 def _quantize_mhz(value, step_mhz=0.05):
@@ -119,6 +121,7 @@ def _to_builtin(value):
         return value.item()
     return value
 
+
 def downsample(data, target_length=256):
     data = np.asarray(data, dtype=np.float32)
     n = data.size
@@ -173,6 +176,12 @@ def generate_fft_data():
             capture_samples()
             bluetooth_plugin.update(vars.sdr0)
             current_fft = process_fft(sample_buffer)
+            fm_plugin.update_from_iq_and_fft(
+                sample_buffer,
+                current_fft,
+                center_freq_hz=vars.sdr_frequency(),
+                sample_rate_hz=vars.sdr_sampleRate(),
+            )
 
             # Suppress DC spike if enabled
             if vars.dc_suppress:
@@ -477,6 +486,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'fftError': fft_error,
         'scannerError': scanner_error,
         'bluetooth': bluetooth_plugin.snapshot(max_events=20),
+        'fm': fm_plugin.snapshot(max_events=20),
     }
 
     # Convert all settings values to native Python types
@@ -549,6 +559,46 @@ def stream_data():
 def bluetooth_events():
     max_events = _safe_int(request.args.get('limit', 50), default=50, min_value=1, max_value=200)
     return jsonify(_to_builtin(bluetooth_plugin.snapshot(max_events=max_events)))
+
+
+@api_blueprint.route('/api/fm/play', methods=['POST'])
+def fm_play():
+    payload = request.get_json(silent=True) or {}
+    try:
+        frequency_mhz = float(payload.get('frequency_mhz'))
+    except Exception:
+        return jsonify({'ok': False, 'error': 'Invalid FM frequency'}), 400
+
+    try:
+        fm_plugin.stop_playback()
+        station = fm_plugin.start_playback(vars.sdr0, frequency_mhz)
+    except Exception as exc:
+        fm_plugin.stop_playback()
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    return jsonify({
+        'ok': True,
+        'station': _to_builtin(station),
+        'mode': 'wideband',
+    })
+
+
+@api_blueprint.route('/api/fm/stop', methods=['POST'])
+def fm_stop():
+    fm_plugin.stop_playback()
+    return jsonify({'ok': True})
+
+
+@api_blueprint.route('/api/fm/audio/batch')
+def fm_audio_batch():
+    count = _safe_int(request.args.get('count', 6), default=6, min_value=1, max_value=16)
+    try:
+        timeout = max(0.05, min(float(request.args.get('timeout', 0.4)), 2.0))
+    except Exception:
+        timeout = 0.4
+    pcm = fm_plugin.audio_batch(count=count, timeout=timeout)
+    if not pcm:
+        return Response(b'', mimetype='application/octet-stream', status=204)
+    return Response(pcm, mimetype='application/octet-stream')
 
 
 @api_blueprint.route('/api/analytics')

@@ -22,6 +22,8 @@ except Exception:
 BT_LOW_HZ = 2_402_000_000
 BT_HIGH_HZ = 2_480_000_000
 DEFAULT_LOG_DIR = Path("/var/log/sdr-shark")
+BLUETOOTH_EVENT_LOG_PREFIX = "bluetooth-events-"
+BLUETOOTH_EVENT_LOG_CURRENT = "bluetooth-events-current.jsonl"
 
 
 def _log_dir_from_env() -> Path:
@@ -38,6 +40,33 @@ def _log_dir_from_env() -> Path:
         except Exception:
             continue
     return candidates[-1]
+
+
+def _archive_old_bluetooth_event_logs(log_dir: Path) -> None:
+    event_logs = sorted(
+        path
+        for path in log_dir.glob(f"{BLUETOOTH_EVENT_LOG_PREFIX}*.jsonl")
+        if path.name != BLUETOOTH_EVENT_LOG_CURRENT and path.is_file()
+    )
+    if not event_logs:
+        return
+
+    archive_dir = log_dir / "archive" / time.strftime("%Y%m%d-%H%M%S")
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return
+
+    for path in event_logs:
+        try:
+            target = archive_dir / path.name
+            suffix = 1
+            while target.exists():
+                target = archive_dir / f"{path.stem}-{suffix}{path.suffix}"
+                suffix += 1
+            path.rename(target)
+        except Exception:
+            continue
 
 
 class BluetoothGatewayPlugin:
@@ -398,8 +427,9 @@ class BluetoothGatewayPlugin:
         log_dir = _log_dir_from_env()
         try:
             log_dir.mkdir(parents=True, exist_ok=True)
-            path = log_dir / f"bluetooth-events-{os.getpid()}.jsonl"
-            current = log_dir / "bluetooth-events-current.jsonl"
+            _archive_old_bluetooth_event_logs(log_dir)
+            path = log_dir / f"{BLUETOOTH_EVENT_LOG_PREFIX}{os.getpid()}.jsonl"
+            current = log_dir / BLUETOOTH_EVENT_LOG_CURRENT
             with open(path, "a", encoding="utf-8") as log:
                 log.write(json.dumps({
                     "type": "session_start",
