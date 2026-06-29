@@ -4,6 +4,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
+export SDR_BACKEND="gateway"
+export SDR_BACKEND="${SDR_BACKEND:-soapy}"
+
 # Optional token loading for sdr-gateway auth.
 # Priority:
 # 1) pre-exported SDR_GATEWAY_API_TOKEN
@@ -11,7 +14,7 @@ cd "${REPO_ROOT}"
 # 3) SDR_SHARK_GATEWAY_TOKEN_FILE
 # 4) ../sdr-gateway/configs/key.txt
 # 5) ../sdr-gateway/key.txt
-if [[ -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
+if [[ "${SDR_BACKEND}" == "gateway" && -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
   TOKEN_FILE="${SDR_SHARK_GATEWAY_TOKEN_FILE:-}"
   if [[ -z "${TOKEN_FILE}" && -r "/etc/default/sdr-gateway" ]]; then
     TOKEN_FILE="/etc/default/sdr-gateway"
@@ -43,7 +46,7 @@ if [[ -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
   fi
 fi
 
-if [[ -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
+if [[ "${SDR_BACKEND}" == "gateway" && -z "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
   echo "Warning: SDR_GATEWAY_API_TOKEN is not set; backend may fail against authenticated sdr-gateway."
 fi
 
@@ -64,6 +67,40 @@ WORKERS="${SDR_SHARK_WORKERS:-1}"
 THREADS="${SDR_SHARK_THREADS:-10}"
 HOST="${SDR_SHARK_HOST:-0.0.0.0}"
 PORT="${SDR_SHARK_PORT:-5000}"
+
+if [[ "${SDR_SHARK_REGISTER_WITH_PORTAL:-1}" != "0" ]]; then
+  SDR_SHARK_FRONTEND_PORT="${SDR_SHARK_FRONTEND_PORT:-3000}"
+  SDR_SHARK_PORTAL_URL="${SDR_SHARK_PORTAL_URL:-http://127.0.0.1/apps}"
+  SDR_SHARK_PORTAL_NAME="${SDR_SHARK_PORTAL_NAME:-SDR Shark}"
+  SDR_SHARK_PORTAL_ID="${SDR_SHARK_PORTAL_ID:-sdr-shark}"
+  SDR_SHARK_PORTAL_DESCRIPTION="${SDR_SHARK_PORTAL_DESCRIPTION:-Live SDR spectrum and waterfall UI}"
+  SDR_SHARK_FRONTEND_PORT="${SDR_SHARK_FRONTEND_PORT}" \
+  SDR_SHARK_PORTAL_URL="${SDR_SHARK_PORTAL_URL}" \
+  SDR_SHARK_PORTAL_NAME="${SDR_SHARK_PORTAL_NAME}" \
+  SDR_SHARK_PORTAL_ID="${SDR_SHARK_PORTAL_ID}" \
+  SDR_SHARK_PORTAL_DESCRIPTION="${SDR_SHARK_PORTAL_DESCRIPTION}" \
+  python3 - <<'PY' >/dev/null 2>&1 || true
+import json
+import os
+import urllib.request
+
+payload = {
+    "id": os.environ["SDR_SHARK_PORTAL_ID"],
+    "name": os.environ["SDR_SHARK_PORTAL_NAME"],
+    "port": int(os.environ["SDR_SHARK_FRONTEND_PORT"]),
+    "description": os.environ["SDR_SHARK_PORTAL_DESCRIPTION"],
+    "tags": ["sdr", "spectrum", "waterfall"],
+}
+data = json.dumps(payload).encode("utf-8")
+req = urllib.request.Request(
+    os.environ["SDR_SHARK_PORTAL_URL"],
+    data=data,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+urllib.request.urlopen(req, timeout=0.75).read()
+PY
+fi
 
 exec "${GUNICORN_BIN}" \
   -w "${WORKERS}" \

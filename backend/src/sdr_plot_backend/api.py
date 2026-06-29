@@ -9,6 +9,8 @@ import numpy as np
 import json
 from flask import Blueprint, jsonify, request, current_app, Response
 
+from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
+from sdr_plot_backend.fm_plugin import FmBroadcastPlugin
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
 
@@ -36,8 +38,11 @@ main_frame_seq = 0
 scanner_frame_seq = 0
 analysis_peak_memory = {}
 analysis_memory_lock = threading.Lock()
+settings_update_lock = threading.Lock()
 fft_failure_count = 0
 scanner_failure_count = 0
+bluetooth_plugin = BluetoothGatewayPlugin()
+fm_plugin = FmBroadcastPlugin()
 
 
 def _quantize_mhz(value, step_mhz=0.05):
@@ -116,6 +121,7 @@ def _to_builtin(value):
         return value.item()
     return value
 
+
 def downsample(data, target_length=256):
     data = np.asarray(data, dtype=np.float32)
     n = data.size
@@ -168,7 +174,14 @@ def generate_fft_data():
 
             # Capture and process FFT samples
             capture_samples()
+            bluetooth_plugin.update(vars.sdr0)
             current_fft = process_fft(sample_buffer)
+            fm_plugin.update_from_iq_and_fft(
+                sample_buffer,
+                current_fft,
+                center_freq_hz=vars.sdr_frequency(),
+                sample_rate_hz=vars.sdr_sampleRate(),
+            )
 
             # Suppress DC spike if enabled
             if vars.dc_suppress:
@@ -366,16 +379,18 @@ def reset_fft_trace():
 
     return jsonify({'status': 'success', 'trace': trace})
 
-@api_blueprint.route('/api/data')
-def get_data():
+def _build_data_payload(source='main', waterfall_mode='history'):
+    source = str(source or 'main').lower()
+    waterfall_mode = str(waterfall_mode or 'history').lower()
     with data_lock:
         max_waterfall_rows = _safe_int(vars.waterfall_samples, default=100, min_value=1, max_value=2000)
         # Keep live responses lightweight for lower-latency UI updates.
         max_payload_cells = 150000
         main_fft_snapshot = list(fft_data['original_fft'])
         scanner_fft_snapshot = list(fft_data['original_fft2'])
-        main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, max_waterfall_rows)
-        scanner_waterfall_snapshot = _tail_deque_rows(waterfall_buffer2, max_waterfall_rows)
+        waterfall_rows_requested = 0 if waterfall_mode in ('none', 'derive') else (1 if waterfall_mode == 'latest' else max_waterfall_rows)
+        main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, waterfall_rows_requested)
+        scanner_waterfall_snapshot = _tail_deque_rows(waterfall_buffer2, waterfall_rows_requested)
         main_ts_snapshot = main_fft_updated_at
         scanner_ts_snapshot = scanner_fft_updated_at
         main_seq_snapshot = main_frame_seq
@@ -383,7 +398,6 @@ def get_data():
         
         peaks_snapshot = list(fft_data['peaks'])
 
-    source = request.args.get('source', 'main').lower()
     scanner_fresh = (time.time() - scanner_ts_snapshot) <= 3.0
     scanner_available = scanner_fresh and len(scanner_fft_snapshot) > 0
     main_available = len(main_fft_snapshot) > 0
@@ -462,6 +476,7 @@ def get_data():
         'fft': fft_response,
         'peaks': peaks_response,
         'waterfall': waterfall_response,
+        'waterfallMode': waterfall_mode,
         'waterfallRows': len(waterfall_response),
         'time': current_time,
         'settings': vars.get_settings(),
@@ -470,6 +485,8 @@ def get_data():
         'scannerFresh': bool(scanner_available),
         'fftError': fft_error,
         'scannerError': scanner_error,
+        'bluetooth': bluetooth_plugin.snapshot(max_events=20),
+        'fm': fm_plugin.snapshot(max_events=20),
     }
 
     # Convert all settings values to native Python types
@@ -487,7 +504,101 @@ def get_data():
         if response['frequency_start'] < 1e6:
             print("error")
 
-    return jsonify(response)
+    return response
+
+
+def _stream_sequence_for_source(source):
+    source = str(source or 'main').lower()
+    with data_lock:
+        if source == 'scanner':
+            return int(scanner_frame_seq)
+        if source == 'auto':
+            return max(int(main_frame_seq), int(scanner_frame_seq))
+        return int(main_frame_seq)
+
+
+@api_blueprint.route('/api/data')
+def get_data():
+    return jsonify(_build_data_payload(
+        source=request.args.get('source', 'main'),
+        waterfall_mode=request.args.get('waterfall', 'history'),
+    ))
+
+
+@api_blueprint.route('/api/data_stream')
+def stream_data():
+    source = request.args.get('source', 'main')
+    waterfall_mode = request.args.get('waterfall', 'latest')
+    min_interval_ms = _safe_int(request.args.get('interval', 50), default=50, min_value=20, max_value=2000)
+
+    def event_stream():
+        last_seq = -1
+        heartbeat_at = time.time()
+        while running:
+            seq = _stream_sequence_for_source(source)
+            now = time.time()
+            if seq != last_seq:
+                payload = _build_data_payload(source=source, waterfall_mode=waterfall_mode)
+                last_seq = seq
+                heartbeat_at = now
+                yield f"id: {seq}\nevent: frame\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            elif now - heartbeat_at >= 10:
+                heartbeat_at = now
+                yield ": keepalive\n\n"
+            time.sleep(min_interval_ms / 1000.0)
+
+    headers = {
+        'Cache-Control': 'no-cache',
+        'X-Accel-Buffering': 'no',
+        'Connection': 'keep-alive',
+    }
+    return Response(event_stream(), mimetype='text/event-stream', headers=headers)
+
+
+@api_blueprint.route('/api/bluetooth/events')
+def bluetooth_events():
+    max_events = _safe_int(request.args.get('limit', 50), default=50, min_value=1, max_value=200)
+    return jsonify(_to_builtin(bluetooth_plugin.snapshot(max_events=max_events)))
+
+
+@api_blueprint.route('/api/fm/play', methods=['POST'])
+def fm_play():
+    payload = request.get_json(silent=True) or {}
+    try:
+        frequency_mhz = float(payload.get('frequency_mhz'))
+    except Exception:
+        return jsonify({'ok': False, 'error': 'Invalid FM frequency'}), 400
+
+    try:
+        fm_plugin.stop_playback()
+        station = fm_plugin.start_playback(vars.sdr0, frequency_mhz)
+    except Exception as exc:
+        fm_plugin.stop_playback()
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    return jsonify({
+        'ok': True,
+        'station': _to_builtin(station),
+        'mode': 'wideband',
+    })
+
+
+@api_blueprint.route('/api/fm/stop', methods=['POST'])
+def fm_stop():
+    fm_plugin.stop_playback()
+    return jsonify({'ok': True})
+
+
+@api_blueprint.route('/api/fm/audio/batch')
+def fm_audio_batch():
+    count = _safe_int(request.args.get('count', 6), default=6, min_value=1, max_value=16)
+    try:
+        timeout = max(0.05, min(float(request.args.get('timeout', 0.4)), 2.0))
+    except Exception:
+        timeout = 0.4
+    pcm = fm_plugin.audio_batch(count=count, timeout=timeout)
+    if not pcm:
+        return Response(b'', mimetype='application/octet-stream', status=204)
+    return Response(pcm, mimetype='application/octet-stream')
 
 
 @api_blueprint.route('/api/analytics')
@@ -722,7 +833,7 @@ def upload_classifier():
 @api_blueprint.route('/api/select_sdr', methods=['POST'])
 def select_sdr():
     sdr_name = request.json.get('sdr_name', 'hackrf')
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
     driver = str(sdr_name).split(':', 1)[0]
     if driver not in supported_drivers:
         return jsonify({
@@ -738,7 +849,7 @@ def select_sdr():
 
 @api_blueprint.route('/api/sdr_devices', methods=['GET'])
 def get_sdr_devices():
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
 
     def _filter_supported(devices):
         return [d for d in devices if str(d.get('driver', '')).lower() in supported_drivers]
@@ -761,6 +872,7 @@ def get_sdr_devices():
 def get_settings():
     settings = {
         'sdr': vars.sdr0.device_id or vars.radio_name,
+        'sdrBackend': getattr(vars.sdr0, 'backend', 'gateway'),
         'frequency': vars.sdr_frequency() / 1e6,  # Convert to MHz
         'gain': vars.sdr_gain(),
         'sampleRate': vars.sdr_sampleRate() / 1e6,  # Convert to MHz
@@ -787,10 +899,26 @@ def get_settings():
 
 @api_blueprint.route('/api/update_settings', methods=['POST'])
 def update_settings():
+    if not settings_update_lock.acquire(timeout=2.0):
+        return jsonify({'success': False, 'error': 'Settings update already in progress'}), 429
     try:
         settings = request.json
         if settings['frequency'] == 0 or  settings['frequency'] is None or  settings['sampleRate'] is None or settings['bandwidth'] is None:
             return jsonify(_to_builtin({'success': True, 'settings': settings}))
+        requested_sdr = str(settings.get('sdr') or '').strip()
+        if requested_sdr and requested_sdr != (vars.sdr0.device_id or vars.radio_name):
+            supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
+            driver = requested_sdr.split(':', 1)[0]
+            if driver not in supported_drivers:
+                return jsonify({
+                    'success': False,
+                    'error': f"SDR '{requested_sdr}' is not stream-capable in SDR Shark."
+                }), 400
+            if not vars.reselect_radio(requested_sdr):
+                return jsonify({
+                    'success': False,
+                    'error': f"Failed to switch SDR to {requested_sdr}"
+                }), 400
         new_settings = settings.copy()
         # Update vars with the new settings and save them
         new_settings['frequency'] = settings['frequency'] * 1e6
@@ -805,6 +933,8 @@ def update_settings():
     except Exception as e:
         print(e)
         return jsonify({'success': False, 'error': str(e)})
+    finally:
+        settings_update_lock.release()
 
 @api_blueprint.route('/api/start_sweep', methods=['POST'])
 def start_sweep():
@@ -820,6 +950,7 @@ def stop_sweep():
 def cleanup():
     global running
     running = False
+    bluetooth_plugin.stop()
     try:
         vars.sdr0.stop()
     except Exception:

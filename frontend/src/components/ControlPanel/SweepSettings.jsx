@@ -2,6 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { Box, Typography, TextField, Switch, FormControlLabel } from '@mui/material';
 import axios from 'axios';
 
+const SETTINGS_POST_CONFIG = {
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 8000,
+};
+
 const SweepSettings = ({ settings, setSettings, setStatus }) => {
   const [localSettings, setLocalSettings] = useState({
     frequency_start: settings.frequency_start,
@@ -73,11 +78,10 @@ const SweepSettings = ({ settings, setSettings, setStatus }) => {
         center_freq: (localSettings.frequency_start + localSettings.frequency_stop) / 2,
       };
 
-      await axios.post('/api/update_settings', newSettings, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      const response = await axios.post('/api/update_settings', newSettings, SETTINGS_POST_CONFIG);
+      if (response?.data?.success === false) {
+        throw new Error(response.data.error || 'Settings update failed');
+      }
 
       setSettings(newSettings);
       setStatus('Settings updated');
@@ -100,11 +104,10 @@ const SweepSettings = ({ settings, setSettings, setStatus }) => {
         center_freq: (localSettings.frequency_start + localSettings.frequency_stop) / 2,
       };
 
-      await axios.post('/api/update_settings', newSettings, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      const response = await axios.post('/api/update_settings', newSettings, SETTINGS_POST_CONFIG);
+      if (response?.data?.success === false) {
+        throw new Error(response.data.error || 'Settings update failed');
+      }
 
       setSettings(newSettings);
       setStatus('Settings updated');

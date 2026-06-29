@@ -6,3 +6,4 @@ numba
 requests
 websocket-client
 gunicorn
+pyadi-iio

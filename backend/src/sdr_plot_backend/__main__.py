@@ -1,5 +1,6 @@
 import faulthandler
 import os
+import socket
 import subprocess
 import threading
 from pathlib import Path
@@ -42,10 +43,20 @@ def start_frontend():
             "Run 'npm install' (or 'yarn install') in frontend/."
         )
         return
+    frontend_port = int(os.getenv("SDR_SHARK_FRONTEND_PORT", "3000"))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        if sock.connect_ex(("127.0.0.1", frontend_port)) == 0:
+            print(f"Frontend already appears to be running on port {frontend_port}; skipping auto-start.")
+            return
     try:
+        env = os.environ.copy()
+        env.setdefault("BROWSER", "none")
+        env.setdefault("PORT", str(frontend_port))
         subprocess.run(
             ["npm", "start"],
             cwd=str(frontend_dir),
+            env=env,
             check=True
         )
     except subprocess.CalledProcessError as e:

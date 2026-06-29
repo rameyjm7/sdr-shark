@@ -5,6 +5,8 @@ import { RichTreeView } from '@mui/x-tree-view/RichTreeView';
 import { Typography, Menu, MenuItem, Paper, Button, Stack } from '@mui/material';
 import ClassifierUploader from './ClassifierUploader';  // Import your new component
 
+const SETTINGS_POST_CONFIG = { timeout: 8000 };
+
 const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLines }) => {
   const [classifiers, setClassifiers] = useState([]);
   const [contextMenu, setContextMenu] = useState(null);
@@ -143,7 +145,10 @@ const Classifiers = ({ settings, setSettings, addVerticalLines, clearVerticalLin
 
   const updateSettings = async (newSettings) => {
     try {
-      await axios.post('/api/update_settings', newSettings);
+      const response = await axios.post('/api/update_settings', newSettings, SETTINGS_POST_CONFIG);
+      if (response?.data?.success === false) {
+        throw new Error(response.data.error || 'Settings update failed');
+      }
       console.log('Settings updated successfully!');
     } catch (error) {
       console.error('Error updating settings:', error);

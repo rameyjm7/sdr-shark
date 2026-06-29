@@ -28,7 +28,8 @@ class sdr_scheduler_config:
         )
         self.sdr_settings = {
             "hackrf" : SdrSettings("hackrf"),
-            "sidekiq" : SdrSettings("sidekiq")
+            "sidekiq" : SdrSettings("sidekiq"),
+            "antsdre200" : SdrSettings("antsdre200"),
         }
         self.sdr_name = "sidekiq"
         # Default settings
@@ -43,6 +44,12 @@ class sdr_scheduler_config:
         self.sdr_settings['sidekiq'].sampleRate = 60e6    # Sample Rate in Hz
         self.sdr_settings['sidekiq'].gain = 30
         self.sdr_settings['sidekiq'].averagingCount = 20
+
+        self.sdr_settings['antsdre200'].frequency = 102.1e6
+        self.sdr_settings['antsdre200'].bandwidth = 20e6
+        self.sdr_settings['antsdre200'].sampleRate = 20e6
+        self.sdr_settings['antsdre200'].gain = 30
+        self.sdr_settings['antsdre200'].averagingCount = 20
         self.tasks = []
         self.task_lock = threading.Lock()
         self.sleeptime = 0.01
@@ -56,7 +63,7 @@ class sdr_scheduler_config:
         self.sweeping_enabled = False
         self.dc_suppress = True
         self.show_waterfall = True
-        self.waterfall_samples = 100
+        self.waterfall_samples = 200
         self.waterfall_bin_count = 2048
         self.persistence_decay  = 0.5
         self.number_of_peaks = 5
@@ -247,12 +254,13 @@ class sdr_scheduler_config:
             self.validate_settings()
 
 
-            # Always drive the active gateway-backed SDR instance.
-            self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
             sr = self.sdr_sampleRate()
-            self.sdr0.set_sample_rate(sr)
-            self.sdr0.set_bandwidth(sr)
-            self.sdr0.set_gain(self.sdr_gain())
+            self.sdr0.configure_receiver(
+                frequency=self.sdr_settings[self.sdr_name].frequency,
+                sample_rate=sr,
+                bandwidth=sr,
+                gain=self.sdr_gain(),
+            )
         except Exception as e:
             print(e)
             pass
@@ -281,8 +289,9 @@ class sdr_scheduler_config:
                     "hackrf": 20e6,
                     "sidekiq": 60e6,
                     "airspy": 10e6,
-                    "bladerf": 20e6,
+                    "bladerf": 60e6,
                     "rtlsdr": 2.4e6,
+                    "antsdre200": 20e6,
                 }.get(driver, self.sdr_settings[self.sdr_name].sampleRate)
                 max_sr = float(getattr(self.sdr0, "max_sample_rate", self.sdr_sampleRate()) or self.sdr_sampleRate())
                 sr = min(float(preferred_sr), max_sr)
@@ -292,10 +301,12 @@ class sdr_scheduler_config:
                     max(self.sdr_settings[self.sdr_name].frequency, float(getattr(self.sdr0, "min_frequency", 1e6))),
                     float(getattr(self.sdr0, "max_frequency", 6e9)),
                 )
-                self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
-                self.sdr0.set_sample_rate(self.sdr_settings[self.sdr_name].sampleRate)
-                self.sdr0.set_bandwidth(self.sdr_settings[self.sdr_name].bandwidth)
-                self.sdr0.set_gain(self.sdr_settings[self.sdr_name].gain)
+                self.sdr0.configure_receiver(
+                    frequency=self.sdr_settings[self.sdr_name].frequency,
+                    sample_rate=self.sdr_settings[self.sdr_name].sampleRate,
+                    bandwidth=self.sdr_settings[self.sdr_name].bandwidth,
+                    gain=self.sdr_settings[self.sdr_name].gain,
+                )
                 return 1
             return 0
         except Exception as e:
@@ -318,7 +329,7 @@ class sdr_scheduler_config:
             "averagingCount": 1,
             "dcSuppress": True,
             "showWaterfall": True,
-            "waterfallSamples": 100,
+            "waterfallSamples": 200,
             "waterfallBinCount": 2048,
             "number_of_peaks": 5,
             "recordings_dir": self.recordings_dir,

@@ -31,7 +31,13 @@ Environment overrides:
   SDR_SHARK_GROUP         (default: current user's group)
   SDR_SHARK_ENV_FILE      (default: /etc/default/<service>)
   SDR_SHARK_START_SCRIPT  (default: <repo>/scripts/start.sh)
+  SDR_BACKEND             (default: soapy; written to env file on install)
+  SDR_SHARK_LOG_DIR       (default: /var/log/sdr-shark; created on install)
+  SDR_SHARK_BLUETOOTH_LOG_DIR (optional; written to env file on install)
+  SDR_SOAPY_LOG_FILE      (optional; written to env file on install)
+  SDR_SOAPY_LOG_STDERR    (optional; written to env file on install)
   SDR_GATEWAY_API_TOKEN   (optional; written to env file on install)
+  SDR_SERVER_URL          (optional; written to env file on install)
 EOF
 }
 
@@ -58,6 +64,8 @@ install_unit() {
     echo "Run: chmod +x ${REPO_ROOT}/scripts/start.sh" >&2
     exit 1
   fi
+  log_dir="${SDR_SHARK_LOG_DIR:-/var/log/sdr-shark}"
+  run_root install -d -o "${RUN_USER}" -g "${RUN_GROUP}" -m 0755 "${log_dir}"
 
   cat >"/tmp/${SERVICE_NAME}.service" <<EOF
 [Unit]
@@ -85,15 +93,44 @@ EOF
   run_root install -m 0644 "/tmp/${SERVICE_NAME}.service" "${UNIT_PATH}"
   rm -f "/tmp/${SERVICE_NAME}.service"
 
-  if [[ -n "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
+  env_lines=()
+  backend="${SDR_BACKEND:-soapy}"
+  backend_escaped="$(printf "%s" "${backend}" | sed "s/'/'\"'\"'/g")"
+  env_lines+=("SDR_BACKEND='${backend_escaped}'")
+
+  bluetooth_log_dir="${SDR_SHARK_BLUETOOTH_LOG_DIR:-${log_dir}}"
+  bluetooth_log_dir_escaped="$(printf "%s" "${bluetooth_log_dir}" | sed "s/'/'\"'\"'/g")"
+  env_lines+=("SDR_SHARK_BLUETOOTH_LOG_DIR='${bluetooth_log_dir_escaped}'")
+
+  if [[ -n "${SDR_SOAPY_LOG_FILE:-}" ]]; then
+    soapy_log_file_escaped="$(printf "%s" "${SDR_SOAPY_LOG_FILE}" | sed "s/'/'\"'\"'/g")"
+    env_lines+=("SDR_SOAPY_LOG_FILE='${soapy_log_file_escaped}'")
+  fi
+  if [[ -n "${SDR_SOAPY_LOG_STDERR:-}" ]]; then
+    soapy_log_stderr_escaped="$(printf "%s" "${SDR_SOAPY_LOG_STDERR}" | sed "s/'/'\"'\"'/g")"
+    env_lines+=("SDR_SOAPY_LOG_STDERR='${soapy_log_stderr_escaped}'")
+  fi
+
+  if [[ "${backend}" == "gateway" && -n "${SDR_GATEWAY_API_TOKEN:-}" ]]; then
     token_escaped="$(printf "%s" "${SDR_GATEWAY_API_TOKEN}" | sed "s/'/'\"'\"'/g")"
-    run_root sh -c "cat > '${ENV_FILE}' <<'EOF'
-SDR_GATEWAY_API_TOKEN='${token_escaped}'
-EOF"
+    env_lines+=("SDR_GATEWAY_API_TOKEN='${token_escaped}'")
+  fi
+  if [[ "${backend}" == "gateway" && -n "${SDR_SERVER_URL:-}" ]]; then
+    server_url_escaped="$(printf "%s" "${SDR_SERVER_URL}" | sed "s/'/'\"'\"'/g")"
+    env_lines+=("SDR_SERVER_URL='${server_url_escaped}'")
+  fi
+
+  if [[ "${#env_lines[@]}" -gt 0 ]]; then
+    {
+      for line in "${env_lines[@]}"; do
+        printf '%s\n' "${line}"
+      done
+    } | run_root tee "${ENV_FILE}" >/dev/null
     run_root chmod 0600 "${ENV_FILE}"
-    echo "Wrote token to ${ENV_FILE}"
+    echo "Wrote service environment to ${ENV_FILE}"
   else
-    echo "Note: SDR_GATEWAY_API_TOKEN not set. Service relies on scripts/start.sh token discovery."
+    run_root rm -f "${ENV_FILE}"
+    echo "Note: no service env vars were set. Service will use scripts/start.sh defaults."
   fi
 
   run_root systemctl daemon-reload

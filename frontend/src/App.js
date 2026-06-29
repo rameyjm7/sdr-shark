@@ -1,8 +1,10 @@
 // Author: Jacob M. Ramey
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Typography, CssBaseline, Tabs, Tab, Box, Chip } from '@mui/material';
+import { Typography, CssBaseline, Tabs, Tab, Box, Chip, Button, Dialog, DialogContent, DialogTitle, IconButton } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
+import CloseIcon from '@mui/icons-material/Close';
+import SettingsIcon from '@mui/icons-material/Settings';
 import Split from 'split.js';
 import ControlPanel from './components/ControlPanel';
 import Scanner from './components/Scanner';
@@ -10,8 +12,38 @@ import Plots from './components/Plots';
 import Analysis from './components/Analysis';
 import Classifiers from './components/ControlPanel/Classifiers';
 import MiniSpectrum from './components/MiniSpectrum';
+import DecodedEventsPanel from './components/DecodedEventsPanel';
 import axios from 'axios';
 import './App.css';
+
+const ACTIVITY_LOG_RETENTION_STORAGE_KEY = 'sdrshark_activity_log_retention_sec_v1';
+const LAST_SDR_STORAGE_KEY = 'sdrshark_last_selected_sdr_v1';
+
+const initialActivityLogRetentionSec = () => {
+  const saved = Number(localStorage.getItem(ACTIVITY_LOG_RETENTION_STORAGE_KEY));
+  return Number.isFinite(saved) ? Math.max(60, Math.min(3600, saved)) : 600;
+};
+
+const readLastSdr = () => {
+  try {
+    return localStorage.getItem(LAST_SDR_STORAGE_KEY) || '';
+  } catch (error) {
+    return '';
+  }
+};
+
+const writeLastSdr = (sdrId) => {
+  try {
+    if (sdrId) localStorage.setItem(LAST_SDR_STORAGE_KEY, sdrId);
+  } catch (error) {
+    // Non-fatal: storage may be disabled.
+  }
+};
+
+const toFinite = (value, fallback) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
 
 const theme = createTheme({
   palette: {
@@ -65,8 +97,9 @@ const App = () => {
     minPeakDistance: 0.1,
     numberOfPeaks: 5,
     showWaterfall: true,
-    waterfallSamples: 100,
+    waterfallSamples: 200,
     waterfallBinCount: 2048,
+    activityLogRetentionSec: initialActivityLogRetentionSec(),
     updateInterval: 500
   });
   const [showSecondTrace, setShowSecondTrace] = useState(false);
@@ -82,6 +115,7 @@ const App = () => {
   const [plotWidth, setPlotWidth] = useState(60); // Initial plot width in percentage
   const [verticalLines, setVerticalLines] = useState([]);  // State for vertical lines
   const [horizontalLines, setHorizontalLines] = useState([]);  // State for horizontal lines
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [telemetry, setTelemetry] = useState({
     sdr: 'n/a',
     hzPerBin: 0,
@@ -97,7 +131,10 @@ const App = () => {
     fftError: null,
     scannerError: null,
     waterfallRows: 0,
+    renderEngine: 'CPU',
     peaks: [],
+    bluetooth: null,
+    fm: null,
   });
 
 
@@ -113,6 +150,72 @@ const App = () => {
       setShowWaterfall(settings.showWaterfall);
     }
   }, [settings.showWaterfall]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const bootstrapSdr = async () => {
+      try {
+        const savedSdr = readLastSdr();
+        let response = await axios.get('/api/get_settings');
+        let data = response.data || {};
+        const currentSdr = data.sdr || '';
+        const targetSdr = savedSdr || currentSdr;
+
+        if (savedSdr && savedSdr !== currentSdr) {
+          try {
+            const selectResponse = await axios.post('/api/select_sdr', { sdr_name: savedSdr });
+            if (selectResponse?.data?.result) {
+              writeLastSdr(savedSdr);
+              response = await axios.get('/api/get_settings');
+              data = response.data || {};
+            }
+          } catch (error) {
+            console.error('Error selecting saved SDR on startup:', error);
+          }
+        } else if (targetSdr) {
+          writeLastSdr(targetSdr);
+        }
+
+        if (cancelled) return;
+        const selectedSdr = data.sdr || targetSdr || savedSdr || 'hackrf';
+        setSettings((prev) => ({
+          ...prev,
+          ...data,
+          sdr: selectedSdr,
+          frequency: toFinite(data.frequency, prev.frequency || 751),
+          gain: toFinite(data.gain, prev.gain || 10),
+          sampleRate: toFinite(data.sampleRate, prev.sampleRate || 20),
+          bandwidth: toFinite(data.bandwidth, prev.bandwidth || 20),
+          frequency_start: toFinite(data.frequency_start, prev.frequency_start || 700),
+          frequency_stop: toFinite(data.frequency_stop, prev.frequency_stop || 820),
+          waterfallBinCount: toFinite(data.waterfallBinCount, prev.waterfallBinCount || 2048),
+          waterfallSamples: toFinite(data.waterfallSamples, prev.waterfallSamples || 200),
+          updateInterval: toFinite(data.updateInterval, prev.updateInterval || 500),
+          activityLogRetentionSec: prev.activityLogRetentionSec,
+        }));
+        setShowSecondTrace(selectedSdr === 'hackrf');
+      } catch (error) {
+        console.error('Error bootstrapping SDR settings:', error);
+      }
+    };
+
+    bootstrapSdr();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const retentionSec = Number(settings.activityLogRetentionSec);
+    if (!Number.isFinite(retentionSec)) {
+      return;
+    }
+    localStorage.setItem(
+      ACTIVITY_LOG_RETENTION_STORAGE_KEY,
+      String(Math.max(60, Math.min(3600, retentionSec))),
+    );
+  }, [settings.activityLogRetentionSec]);
 
 
   const addVerticalLines = (frequency, bandwidth) => {
@@ -255,42 +358,11 @@ const App = () => {
     },
   };
   const telemetryWideChipSx = { ...telemetryChipSx, width: 170, minWidth: 170, maxWidth: 170, flex: '0 0 170px' };
-  const telemetryDetectChipSx = { ...telemetryChipSx, width: 280, minWidth: 280, maxWidth: 280, flex: '0 0 280px' };
-
-  const detectedSignalLabel = useMemo(() => {
-    const normalizeMHz = (value) => {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return NaN;
-      return Math.abs(n) > 1e6 ? (n / 1e6) : n;
-    };
-    const peaks = Array.isArray(telemetry.peaks) ? telemetry.peaks : [];
-    if (!peaks.length) return 'Detected: none';
-
-    const strongest = [...peaks].sort(
-      (a, b) => Number(b?.peak_power || -999) - Number(a?.peak_power || -999),
-    )[0];
-    const absCenterMHz = normalizeMHz(strongest?.absolute_frequency);
-    const relCenterMHz = normalizeMHz(strongest?.frequency);
-    const centerMHz = Number.isFinite(absCenterMHz)
-      ? absCenterMHz
-      : (Number.isFinite(relCenterMHz) ? relCenterMHz + Number(settings.frequency || 0) : NaN);
-    const bwMHz = normalizeMHz(strongest?.bandwidth);
-    if (!Number.isFinite(centerMHz) || !Number.isFinite(bwMHz)) return 'Detected: unknown';
-
-    const classes = Array.isArray(strongest?.classification) ? strongest.classification : [];
-    if (classes.length) {
-      const top = classes[0] || {};
-      const label = String(top.label || 'Signal');
-      const channel = String(top.channel || '').trim();
-      const channelText = channel && channel !== 'N/A' ? ` ${channel}` : '';
-      return `Detected: ${label}${channelText} (${centerMHz.toFixed(2)} MHz, ${bwMHz.toFixed(2)} MHz)`;
-    }
-
-    if (Math.abs(centerMHz - 2402) <= 3 && bwMHz >= 8 && bwMHz <= 14) {
-      return `Detected: WiFi Ch1 (${centerMHz.toFixed(2)} MHz, ${bwMHz.toFixed(2)} MHz)`;
-    }
-    return `Detected: ${centerMHz.toFixed(2)} MHz / ${bwMHz.toFixed(2)} MHz`;
-  }, [telemetry.peaks]);
+  const bluetoothEvents = Array.isArray(telemetry.bluetooth?.events) ? telemetry.bluetooth.events : [];
+  const bluetoothAdvCount = bluetoothEvents.filter((event) => event?.kind === 'ble_adv').length;
+  const bluetoothBtcCount = bluetoothEvents.filter((event) => String(event?.protocol || '').toLowerCase() === 'btc').length;
+  const fmStationCount = Number(telemetry.fm?.station_count || 0);
+  const fmPotentialCount = Number(telemetry.fm?.potential_count || 0);
 
   return (
     <ThemeProvider theme={theme}>
@@ -340,8 +412,18 @@ const App = () => {
               display: 'flex',
               alignItems: 'center',
               marginLeft: 'auto', // Push to the right
+              gap: 1,
             }}
           >
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<SettingsIcon />}
+              onClick={() => setSettingsOpen(true)}
+              sx={{ borderColor: '#3d556d', color: '#d9f0ff' }}
+            >
+              Settings
+            </Button>
             <Typography variant="h6" sx={{ marginRight: '10px' }}>
               SDR Shark
             </Typography>
@@ -372,17 +454,30 @@ const App = () => {
         >
           <Chip size="small" sx={telemetryWideChipSx} label={`SDR: ${telemetry.sdr || 'n/a'}`} />
           <Chip size="small" sx={telemetryWideChipSx} label={`Hz/bin: ${Number.isFinite(telemetry.hzPerBin) ? Math.round(telemetry.hzPerBin).toLocaleString() : 'n/a'}`} />
-          <Chip size="small" sx={telemetryChipSx} label={`FPS: ${Number.isFinite(telemetry.fps) ? telemetry.fps.toFixed(1) : '0.0'}`} />
+          <Chip
+            size="small"
+            sx={telemetryChipSx}
+            color={telemetry.renderEngine === 'GPU' ? 'success' : 'default'}
+            label={`Render: ${telemetry.renderEngine || 'CPU'}`}
+          />
           <Chip size="small" sx={telemetryChipSx} label={`Latency: ${Math.round(telemetry.latencyMs || 0)} ms`} />
-          <Chip size="small" sx={telemetryChipSx} color={telemetry.droppedFrames > 0 ? 'warning' : 'default'} label={`Drops: ${telemetry.droppedFrames || 0}`} />
           <Chip size="small" sx={telemetryWideChipSx} color={(telemetry.staleMs || 0) > 3000 ? 'error' : 'default'} label={`Last data age: ${Math.round(telemetry.staleMs || 0)} ms`} />
           <Chip size="small" sx={telemetryWideChipSx} label={`Time: ${telemetry.frameTime || 'n/a'}`} />
           <Chip size="small" sx={telemetryChipSx} label={`Sweep: ${telemetry.sweepEnabled ? 'On' : 'Off'}`} />
           <Chip size="small" sx={telemetryChipSx} label={`Main seq: ${telemetry.mainFrameSeq || 0}`} />
           <Chip size="small" sx={telemetryChipSx} label={`Scanner seq: ${telemetry.scannerFrameSeq || 0}`} />
-          <Chip size="small" sx={telemetryWideChipSx} color={telemetry.scannerFresh ? 'success' : 'default'} label={`Scanner fresh: ${telemetry.scannerFresh ? 'yes' : 'no'}`} />
-          <Chip size="small" sx={telemetryChipSx} label={`WF rows: ${telemetry.waterfallRows || 0}`} />
-          <Chip size="small" sx={telemetryDetectChipSx} color={detectedSignalLabel.includes('WiFi Ch1') ? 'success' : 'default'} label={detectedSignalLabel} />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={telemetry.bluetooth?.active ? 'success' : 'default'}
+            label={`BT: ${telemetry.bluetooth?.active ? 'on' : 'off'} BLE ${bluetoothAdvCount} BTC ${bluetoothBtcCount}`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={telemetry.fm?.active ? 'success' : 'default'}
+            label={`FM: ${telemetry.fm?.active ? 'on' : 'off'} ${fmStationCount} stn ${fmPotentialCount} pot`}
+          />
           {telemetry.fftError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`FFT err`} /> : null}
           {telemetry.scannerError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`Scanner err`} /> : null}
         </Box>
@@ -527,6 +622,36 @@ const App = () => {
               />
             )}
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <DecodedEventsPanel telemetry={telemetry} settings={settings} />
+            </Box>
+          </Box>
+        </Box>
+
+        <Dialog
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          fullWidth
+          maxWidth="lg"
+          PaperProps={{
+            sx: {
+              height: '86vh',
+              bgcolor: '#101418',
+              backgroundImage: 'linear-gradient(145deg, rgba(24, 45, 54, 0.96), rgba(8, 10, 12, 0.98))',
+              border: '1px solid rgba(144,202,249,0.18)',
+            },
+          }}
+        >
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 1 }}>
+            <Box>
+              <Typography variant="overline" color="text.secondary">SDR Shark</Typography>
+              <Typography variant="h6">Settings</Typography>
+            </Box>
+            <IconButton onClick={() => setSettingsOpen(false)} aria-label="Close settings">
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent sx={{ minHeight: 0, overflow: 'hidden', px: 1.5, pb: 1.5 }}>
+            <Box sx={{ height: '100%', minHeight: 0, overflow: 'auto', pr: 1 }}>
               <ControlPanel
                 settings={settings}
                 setSettings={setSettings}
@@ -534,10 +659,7 @@ const App = () => {
                 setMinY={setMinY}
                 maxY={maxY}
                 setMaxY={setMaxY}
-                // updateInterval={updateInterval}
                 setUpdateInterval={setUpdateInterval}
-                // waterfallSamples={waterfallSamples}
-                // setWaterfallSamples={setWaterfallSamples}
                 showWaterfall={showWaterfall}
                 setShowWaterfall={setShowWaterfall}
                 addVerticalLines={addVerticalLines}
@@ -547,8 +669,8 @@ const App = () => {
                 verticalLines={verticalLines}
               />
             </Box>
-          </Box>
-        </Box>
+          </DialogContent>
+        </Dialog>
 
       </Box>
     </ThemeProvider>
