@@ -48,6 +48,15 @@ SDR backend options:
 
 - Default: `SDR_BACKEND=soapy` uses local SoapySDR Python bindings directly and does not require `sdr-gateway`.
 - Gateway mode: `SDR_BACKEND=gateway` uses `sdr-gateway` at `SDR_SERVER_URL`.
+- Gateway helper: `./scripts/run_gateway.sh` starts SDR-Shark with `SDR_BACKEND=gateway` and requests the gateway's native IQ stream format.
+
+RF Sentinel Bluetooth decoding:
+
+- Enabled by default with `SDR_SHARK_BLUETOOTH_PLUGIN=1`; disable with `SDR_SHARK_BLUETOOTH_PLUGIN=0`.
+- In direct SoapySDR mode, SDR-Shark owns the radio and mirrors live IQ as `cs8` chunks to RF Sentinel. Bluetooth Classic is fed through a temporary FIFO in `/tmp`, while BLE uses the same mirrored chunks in-process.
+- The decoder starts only when the active receive window overlaps the Bluetooth range, 2402-2480 MHz.
+- Set `RF_SENTINEL_ROOT=/path/to/RF_Sentinel` if RF Sentinel is not at `/home/jake/workspace/SDR/RF_Sentinel`.
+- Bluetooth/BTC events are written to `/var/log/sdr-shark/bluetooth-events-current.jsonl`, and the BTC sniffer startup log is `/var/log/sdr-shark/btcexplorer-sniffer.log`. Override with `SDR_SHARK_BLUETOOTH_LOG_DIR=/path/to/logs`.
 
 For direct SoapySDR mode, install SoapySDR and the driver packages for your radio, then verify:
 
@@ -59,7 +68,7 @@ SDR_BACKEND=soapy ./scripts/start.sh
 
 Optional: limit direct discovery with `SDR_SOAPY_DRIVERS=hackrf,rtlsdr,airspy,bladerf,sidekiq`.
 
-SoapySDR/vendor probe and overflow warnings are written to `~/.sdr-shark/logs/soapysdr.log` by default instead of the service console. Override with `SDR_SOAPY_LOG_FILE=/path/to/soapysdr.log`, or set `SDR_SOAPY_LOG_STDERR=1` while debugging to show them on stderr again.
+SoapySDR/vendor probe and overflow warnings are written to `/var/log/sdr-shark/soapysdr.log` by default instead of the service console. Override with `SDR_SOAPY_LOG_FILE=/path/to/soapysdr.log`, or set `SDR_SOAPY_LOG_STDERR=1` while debugging to show them on stderr again.
 
 Backend startup auto-launches the React dev frontend when `frontend/node_modules` exists. If port `3000` is already in use, it skips auto-start instead of prompting for another port. Set `SDR_SHARK_AUTO_START_FRONTEND=0` to disable this behavior, or `SDR_SHARK_FRONTEND_PORT=3001` to use a different frontend port.
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import os
 from pathlib import Path
+import queue
 import threading
 import time
 import sys
@@ -15,6 +16,19 @@ try:
 except Exception:
     WebSocket = Any  # type: ignore[assignment]
     create_connection = None
+
+
+def _default_log_file(filename: str) -> Path:
+    for directory in (Path("/var/log/sdr-shark"), Path.home() / ".sdr-shark" / "logs"):
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            probe = directory / ".write-test"
+            probe.touch(exist_ok=True)
+            probe.unlink(missing_ok=True)
+            return directory / filename
+        except Exception:
+            continue
+    return Path.home() / ".sdr-shark" / "logs" / filename
 
 
 class SDRGeneric:
@@ -47,6 +61,8 @@ class SDRGeneric:
         self.api_base = base
         self.ws_base = base.replace("http://", "ws://").replace("https://", "wss://")
         self.gateway_token = (os.getenv("SDR_GATEWAY_API_TOKEN", "") or "").strip()
+        self.gateway_requested_iq_format = (os.getenv("SDR_GATEWAY_IQ_FORMAT", "native") or "native").strip().lower()
+        self.gateway_iq_format = self.gateway_requested_iq_format
 
         self._devices_cache: list[dict[str, Any]] = []
         self._selected_device_hint: str | None = None
@@ -58,12 +74,16 @@ class SDRGeneric:
         self._running = False
         self._lock = threading.Lock()
         self._latest_samples = np.zeros(self.size, dtype=np.complex64)
+        self._iq_tap_lock = threading.Lock()
+        self._iq_tap_subscribers: dict[str, queue.Queue[bytes | None]] = {}
+        self._iq_tap_last_publish = 0.0
+        self._iq_tap_interval_s = max(0.0, float(os.getenv("SDR_SHARK_IQ_TAP_INTERVAL_MS", "100") or "100") / 1000.0)
         self._soapy: Any = None
         self._soapy_device: Any = None
         self._soapy_stream: Any = None
         self._soapy_stream_format = ""
         self._soapy_device_args: dict[str, Any] | None = None
-        default_log = Path(os.path.expanduser("~")) / ".sdr-shark" / "logs" / "soapysdr.log"
+        default_log = _default_log_file("soapysdr.log")
         self._soapy_log_file = os.getenv("SDR_SOAPY_LOG_FILE", str(default_log))
 
     def _auth_headers(self) -> dict[str, str]:
@@ -83,6 +103,7 @@ class SDRGeneric:
     def stop(self) -> None:
         self._should_run = False
         self._running = False
+        self._close_iq_taps()
         if self._ws is not None:
             try:
                 self._ws.close()
@@ -129,9 +150,88 @@ class SDRGeneric:
             return
         self._restart_stream()
 
+    def configure_receiver(
+        self,
+        *,
+        frequency: float | None = None,
+        sample_rate: float | None = None,
+        bandwidth: float | None = None,
+        gain: float | None = None,
+    ) -> None:
+        """Apply related tuning settings with at most one stream restart."""
+        old_sample_rate = self.sample_rate
+        if frequency is not None:
+            self.frequency = float(frequency)
+        if sample_rate is not None:
+            self.sample_rate = float(sample_rate)
+        if bandwidth is not None:
+            self.bandwidth = float(bandwidth)
+        if gain is not None:
+            self.gain = float(gain)
+
+        if self.backend != "soapy":
+            self._restart_stream()
+            return
+
+        needs_restart = self._soapy_device is None or abs(float(old_sample_rate) - float(self.sample_rate)) > 1.0
+        if needs_restart:
+            self._restart_stream()
+            return
+
+        try:
+            with self._quiet_soapy():
+                self._soapy_device.setFrequency(self._soapy.SOAPY_SDR_RX, 0, self.frequency)
+        except Exception:
+            self._restart_stream()
+            return
+        try:
+            with self._quiet_soapy():
+                self._soapy_device.setBandwidth(self._soapy.SOAPY_SDR_RX, 0, self.bandwidth)
+        except Exception:
+            pass
+        self._apply_soapy_gain(self._soapy_device, self._soapy_driver(), self.gain)
+
     def get_latest_samples(self) -> np.ndarray:
         with self._lock:
             return self._latest_samples.copy()
+
+    def iq_tap_info(self) -> dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "source": "soapy_tap",
+            "device_id": self.device_id or self.name or "",
+            "iq_format": "i8",
+            "center_freq_hz": int(round(self.frequency)),
+            "sample_rate_sps": int(round(self.sample_rate)),
+            "bandwidth_hz": int(round(self.bandwidth)),
+            "gain_db": float(self.gain),
+        }
+
+    def subscribe_iq_tap(self, max_chunks: int = 32):
+        subscriber_id = f"tap-{time.time_ns()}"
+        chunks: queue.Queue[bytes | None] = queue.Queue(maxsize=max(1, int(max_chunks)))
+        with self._iq_tap_lock:
+            self._iq_tap_subscribers[subscriber_id] = chunks
+        return subscriber_id, chunks
+
+    def release_iq_tap(self, subscriber_id: str) -> None:
+        with self._iq_tap_lock:
+            self._iq_tap_subscribers.pop(subscriber_id, None)
+
+    def gateway_stream_info(self) -> dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "api_base": self.api_base,
+            "ws_base": self.ws_base,
+            "token": self.gateway_token,
+            "device_id": self.device_id or "",
+            "stream_id": self.stream_id or "",
+            "iq_format": self.gateway_iq_format,
+            "center_freq_hz": int(round(self.frequency)),
+            "sample_rate_sps": int(round(self.sample_rate)),
+            "bandwidth_hz": int(round(self.bandwidth)),
+            "gain_db": float(self.gain),
+        }
 
     def list_devices(self) -> list[dict[str, Any]]:
         if self.backend == "soapy":
@@ -283,7 +383,7 @@ class SDRGeneric:
             "sidekiq": 60e6,
             "hackrf": 20e6,
             "airspy": 10e6,
-            "bladerf": 20e6,
+            "bladerf": 60e6,
             "rtlsdr": 2.4e6,
             "antsdre200": 20e6,
         }.get(str(driver).lower(), 20e6)
@@ -466,6 +566,7 @@ class SDRGeneric:
             pass
         self._soapy_device = None
         self._soapy_stream = None
+        self._close_iq_taps()
 
     def _soapy_rx_loop(self) -> None:
         soapy = self._soapy
@@ -488,8 +589,13 @@ class SDRGeneric:
                     continue
                 if self._soapy_stream_format == "SOAPY_SDR_CF32":
                     iq = rx_buf[:n].astype(np.complex64, copy=True)
+                    if self._should_publish_iq_tap():
+                        self._publish_iq_tap(self._complex_to_cs8(iq))
                 else:
-                    iq16 = rx_buf[: n * 2].astype(np.float32)
+                    raw_iq16 = rx_buf[: n * 2]
+                    if self._should_publish_iq_tap():
+                        self._publish_iq_tap(self._cs16_to_cs8(raw_iq16))
+                    iq16 = raw_iq16.astype(np.float32)
                     iq = (iq16[0::2] + 1j * iq16[1::2]) / 32768.0
                 if iq.size >= self.size:
                     out = iq[: self.size]
@@ -508,6 +614,57 @@ class SDRGeneric:
                     except Exception:
                         time.sleep(0.5)
                 return
+
+    def _should_publish_iq_tap(self) -> bool:
+        with self._iq_tap_lock:
+            if not self._iq_tap_subscribers:
+                return False
+        now = time.monotonic()
+        if self._iq_tap_interval_s > 0 and (now - self._iq_tap_last_publish) < self._iq_tap_interval_s:
+            return False
+        self._iq_tap_last_publish = now
+        return True
+
+    def _publish_iq_tap(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        with self._iq_tap_lock:
+            subscribers = list(self._iq_tap_subscribers.values())
+        for chunks in subscribers:
+            try:
+                chunks.put_nowait(chunk)
+                continue
+            except queue.Full:
+                pass
+            try:
+                chunks.get_nowait()
+                chunks.task_done()
+            except queue.Empty:
+                pass
+            try:
+                chunks.put_nowait(chunk)
+            except queue.Full:
+                pass
+
+    def _close_iq_taps(self) -> None:
+        with self._iq_tap_lock:
+            subscribers = list(self._iq_tap_subscribers.values())
+            self._iq_tap_subscribers.clear()
+        for chunks in subscribers:
+            try:
+                chunks.put_nowait(None)
+            except queue.Full:
+                pass
+
+    def _cs16_to_cs8(self, raw_iq16: np.ndarray) -> bytes:
+        divisor = float(os.getenv("SDR_SHARK_SOAPY_TAP_CS16_TO_I8_DIVISOR", "256") or "256")
+        return np.clip(np.rint(raw_iq16.astype(np.float32) / divisor), -128, 127).astype(np.int8).tobytes()
+
+    def _complex_to_cs8(self, iq: np.ndarray) -> bytes:
+        interleaved = np.empty(iq.size * 2, dtype=np.float32)
+        interleaved[0::2] = iq.real
+        interleaved[1::2] = iq.imag
+        return np.clip(np.rint(interleaved * 127.0), -128, 127).astype(np.int8).tobytes()
 
     def _fetch_devices(self) -> list[dict[str, Any]]:
         try:
@@ -562,6 +719,7 @@ class SDRGeneric:
             "vga_gain_db": vga_gain,
             "amp_enable": True,
             "baseband_filter_hz": int(round(min(sample_rate, max(1_750_000, self.bandwidth)))),
+            "iq_format": self.gateway_requested_iq_format,
         }
 
     def _start_stream(self) -> None:
@@ -581,7 +739,11 @@ class SDRGeneric:
             timeout=10,
         )
         r.raise_for_status()
-        self.stream_id = r.json()["stream_id"]
+        stream_state = r.json()
+        self.stream_id = stream_state["stream_id"]
+        self.gateway_iq_format = (
+            stream_state.get("config", {}).get("iq_format") or self.gateway_iq_format or "i8"
+        ).strip().lower()
 
         ws_headers = None
         if self.gateway_token:
@@ -633,13 +795,7 @@ class SDRGeneric:
                 frame = self._ws.recv()
                 if not isinstance(frame, (bytes, bytearray)):
                     continue
-                iq_i8 = np.frombuffer(frame, dtype=np.int8)
-                if iq_i8.size < 2:
-                    continue
-
-                i = iq_i8[0::2].astype(np.float32)
-                q = iq_i8[1::2].astype(np.float32)
-                iq = (i + 1j * q) / 128.0
+                iq = self._decode_gateway_frame(frame)
 
                 if iq.size >= self.size:
                     out = iq[: self.size]
@@ -662,3 +818,21 @@ class SDRGeneric:
                 # A new stream spawns a new RX thread; exit this one.
                 return
                 break
+
+    def _decode_gateway_frame(self, frame: bytes | bytearray) -> np.ndarray:
+        iq_format = self.gateway_iq_format
+        if iq_format == "cs16":
+            iq_raw = np.frombuffer(frame, dtype=np.int16)
+            scale = 32768.0
+        else:
+            iq_raw = np.frombuffer(frame, dtype=np.int8)
+            scale = 128.0
+
+        if iq_raw.size < 2:
+            return np.empty(0, dtype=np.complex64)
+        if iq_raw.size % 2:
+            iq_raw = iq_raw[:-1]
+
+        i = iq_raw[0::2].astype(np.float32)
+        q = iq_raw[1::2].astype(np.float32)
+        return ((i + 1j * q) / scale).astype(np.complex64, copy=False)

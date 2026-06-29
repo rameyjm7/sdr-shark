@@ -12,6 +12,10 @@ import Actions from './Actions';
 const PROFILE_STORAGE_KEY = 'sdrshark_ui_profiles_v1';
 const RECENT_FREQ_STORAGE_KEY = 'sdrshark_recent_frequencies_v1';
 const MAX_WATERFALL_SAMPLES = 375;
+const SETTINGS_POST_CONFIG = {
+  headers: { 'Content-Type': 'application/json' },
+  timeout: 8000,
+};
 
 const ControlPanel = ({
   settings,
@@ -180,11 +184,10 @@ const ControlPanel = ({
 
   const updateSettings = async (newSettings) => {
     try {
-      await axios.post('/api/update_settings', newSettings, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      const response = await axios.post('/api/update_settings', newSettings, SETTINGS_POST_CONFIG);
+      if (response?.data?.success === false) {
+        throw new Error(response.data.error || 'Settings update failed');
+      }
       setSettings(newSettings);
       updateStatus('Settings updated', 'success');
 
@@ -338,11 +341,10 @@ const ControlPanel = ({
     updateStatus('Updating settings...', 'info');
 
     try {
-      await axios.post('/api/update_settings', enforcedSettings, {
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
+      const response = await axios.post('/api/update_settings', enforcedSettings, SETTINGS_POST_CONFIG);
+      if (response?.data?.success === false) {
+        throw new Error(response.data.error || 'Settings update failed');
+      }
       setSettings(enforcedSettings);
       setUpdateInterval(toFinite(enforcedSettings.updateInterval, preservedInterval));
 

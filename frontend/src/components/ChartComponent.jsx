@@ -19,6 +19,10 @@ const ChartComponent = ({
   horizontalLines,
   onTelemetryUpdate,
 }) => {
+  const settingsPostConfig = {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 8000,
+  };
   const toFinite = (value, fallback) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
@@ -64,6 +68,7 @@ const ChartComponent = ({
   const sseHealthyRef = useRef(false);
   const sseLastMessageAtRef = useRef(0);
   const spectrumPlotRef = useRef(null);
+  const waterfallEnabledAtRef = useRef(Date.now());
   const lastTuneRef = useRef({
     frequency: Number(settings.frequency),
     sampleRate: Number(settings.sampleRate),
@@ -194,28 +199,32 @@ const ChartComponent = ({
           }
           return next.slice(-safeWaterfallSamples);
         };
-        if (sanitizedWaterfallData.length > 0 && data?.waterfallMode !== 'derive' && (frameAdvanced || fftChanged)) {
-          const latestServerRow = sanitizedWaterfallData[sanitizedWaterfallData.length - 1];
-          const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, latestServerRow?.length || 2048)));
-          setWaterfallData((prev) => appendRowBurst(prev, latestServerRow, targetBins));
-        } else if (sanitizedFftData.length > 0 && (frameAdvanced || fftChanged)) {
-          const targetBins = data?.waterfallMode === 'derive'
-            ? sanitizedFftData.length
-            : Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, sanitizedFftData.length)));
-          const row = resampleRow(sanitizedFftData, targetBins);
-          setWaterfallData((prev) => appendRowBurst(prev, row, targetBins));
-        } else if (!frameAdvanced && !fftChanged && staleSeqCountRef.current >= 4) {
-          const targetBins = Math.max(
-            64,
-            Math.min(
-              8192,
-              toFinite(settings.waterfallBinCount, (waterfallData[0] && waterfallData[0].length) || sanitizedFftData.length || 2048),
-            ),
-          );
-          setWaterfallData((prev) => {
-            const bins = (Array.isArray(prev[0]) && prev[0].length > 0) ? prev[0].length : targetBins;
-            return appendRowBurst(prev, noSignalRow(bins), bins);
-          });
+        if (showWaterfall) {
+          if (sanitizedWaterfallData.length > 0 && data?.waterfallMode !== 'derive' && (frameAdvanced || fftChanged)) {
+            const latestServerRow = sanitizedWaterfallData[sanitizedWaterfallData.length - 1];
+            const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, latestServerRow?.length || 2048)));
+            setWaterfallData((prev) => appendRowBurst(prev, latestServerRow, targetBins));
+          } else if (sanitizedFftData.length > 0 && (frameAdvanced || fftChanged)) {
+            const targetBins = data?.waterfallMode === 'derive'
+              ? sanitizedFftData.length
+              : Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, sanitizedFftData.length)));
+            const row = resampleRow(sanitizedFftData, targetBins);
+            setWaterfallData((prev) => appendRowBurst(prev, row, targetBins));
+          } else if (!frameAdvanced && !fftChanged && staleSeqCountRef.current >= 4) {
+            const targetBins = Math.max(
+              64,
+              Math.min(
+                8192,
+                toFinite(settings.waterfallBinCount, (waterfallData[0] && waterfallData[0].length) || sanitizedFftData.length || 2048),
+              ),
+            );
+            setWaterfallData((prev) => {
+              const bins = (Array.isArray(prev[0]) && prev[0].length > 0) ? prev[0].length : targetBins;
+              return appendRowBurst(prev, noSignalRow(bins), bins);
+            });
+          }
+        } else if (waterfallData.length > 0) {
+          setWaterfallData([]);
         }
         setTime(data.time);
         const backendPeaks = fftFlatNoSignal ? [] : (Array.isArray(data.peaks) ? data.peaks : []);
@@ -286,6 +295,7 @@ const ChartComponent = ({
             scannerError: data?.scannerError || null,
             waterfallRows: Number(data?.waterfallRows || 0),
             peaks: telemetryPeaks.slice(0, 16),
+            bluetooth: data?.bluetooth || null,
           });
         }
       } catch (error) {
@@ -297,13 +307,17 @@ const ChartComponent = ({
           setSpectrumNoSignal(true);
         }
         const safeWaterfallSamples = Math.max(1, Math.min(maxWaterfallSamples, toFinite(settings.waterfallSamples, 200)));
-        setWaterfallData((prev) => {
-          const bins = (Array.isArray(prev[0]) && prev[0].length > 0)
-            ? prev[0].length
-            : Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, 2048)));
-          const row = Array.from({ length: bins }, () => -255);
-          return [...prev, row].slice(-safeWaterfallSamples);
-        });
+        if (showWaterfall) {
+          setWaterfallData((prev) => {
+            const bins = (Array.isArray(prev[0]) && prev[0].length > 0)
+              ? prev[0].length
+              : Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, 2048)));
+            const row = Array.from({ length: bins }, () => -255);
+            return [...prev, row].slice(-safeWaterfallSamples);
+          });
+        } else {
+          setWaterfallData([]);
+        }
         if (typeof onTelemetryUpdate === 'function') {
           onTelemetryUpdate((prev) => ({
             ...(prev || {}),
@@ -379,6 +393,16 @@ const ChartComponent = ({
     setQuickCenterMHz(toFinite(settings.frequency, 0));
     setQuickSpanMHz(Math.max(0.1, toFinite(settings.sampleRate, 1)));
   }, [settings.frequency, settings.sampleRate]);
+
+  useEffect(() => {
+    if (!showWaterfall) {
+      setWaterfallData([]);
+      setWaterfallNoSignal(false);
+      return;
+    }
+    waterfallEnabledAtRef.current = Date.now();
+    setWaterfallData([]);
+  }, [showWaterfall]);
 
   useEffect(() => {
     setTraceStyles((prev) => ({
@@ -496,6 +520,87 @@ const ChartComponent = ({
       .slice(0, 4);
   };
 
+  const getClassifiedSignalMarkers = (peaks) => {
+    if (!Array.isArray(peaks) || peaks.length === 0) return [];
+
+    return peaks
+      .flatMap((peak) => {
+        const classes = Array.isArray(peak?.classification) ? peak.classification : [];
+        const absFreq = Number(peak?.absolute_frequency);
+        const relFreq = Number(peak?.frequency);
+        const freqMHz = Number.isFinite(absFreq)
+          ? absFreq
+          : (Number.isFinite(relFreq) ? safeFrequencyMHz + relFreq : NaN);
+        if (!Number.isFinite(freqMHz)) return [];
+
+        const matched = classes
+          .map((item) => {
+            const classLabel = String(item?.label || '');
+            const classLabelLower = classLabel.toLowerCase();
+            const isWifi = classLabelLower.includes('wifi');
+            const isBluetooth = classLabelLower.includes('bluetooth') || classLabelLower.includes('ble') || classLabelLower.includes('btc');
+            if (!isWifi && !isBluetooth) return null;
+
+            const protocol = isWifi
+              ? 'WiFi'
+              : (classLabelLower.includes('classic') || classLabelLower.includes('btc') ? 'BTC' : 'BTLE');
+            const channel = String(item?.channel || '').replace(/^Channel\s+/i, 'Ch ');
+            const fallbackBandwidthMHz = protocol === 'WiFi' ? 22 : (protocol === 'BTLE' ? 2 : 1);
+            const bandwidthMHz = Math.max(0.25, toFinite(item?.bandwidth ?? peak?.bandwidth, fallbackBandwidthMHz));
+
+            return {
+              freqHz: freqMHz * 1e6,
+              bandwidthHz: bandwidthMHz * 1e6,
+              power: Number(peak?.peak_power),
+              protocol,
+              label: channel && channel !== 'N/A' ? `${protocol} ${channel}` : protocol,
+              color: protocol === 'WiFi' ? '#ff9f6e' : (protocol === 'BTC' ? '#ffd166' : '#7cf7d4'),
+              fillColor: protocol === 'WiFi'
+                ? 'rgba(255, 159, 110, 0.12)'
+                : (protocol === 'BTC' ? 'rgba(255, 209, 102, 0.14)' : 'rgba(124, 247, 212, 0.14)'),
+              bgColor: protocol === 'WiFi'
+                ? 'rgba(59, 25, 5, 0.86)'
+                : (protocol === 'BTC' ? 'rgba(56, 37, 0, 0.86)' : 'rgba(0, 43, 48, 0.86)'),
+              minScore: protocol === 'WiFi' ? 4 : 6,
+              minPeakOffset: protocol === 'WiFi' ? 5 : 8,
+              maxMarks: protocol === 'WiFi' ? 2 : 4,
+              yPadRatio: protocol === 'WiFi' ? 0.035 : 0.018,
+              xPadHz: protocol === 'WiFi' ? (bandwidthMHz * 1e6) / 2 : (bandwidthMHz * 1e6) * 0.75,
+            };
+          })
+          .filter(Boolean);
+
+        const hasWifi = matched.some((item) => item.protocol === 'WiFi');
+        const wifiCenters = [2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472, 2484];
+        const nearestWifi = wifiCenters
+          .map((center, idx) => ({ center, channel: idx + 1, delta: Math.abs(freqMHz - center) }))
+          .sort((a, b) => a.delta - b.delta)[0];
+        const estimatedBandwidthMHz = toFinite(peak?.bandwidth, 0);
+        if (!hasWifi && nearestWifi && nearestWifi.delta <= 3 && estimatedBandwidthMHz >= 8) {
+          matched.push({
+            freqHz: nearestWifi.center * 1e6,
+            bandwidthHz: 22e6,
+            power: Number(peak?.peak_power),
+            protocol: 'WiFi',
+            label: `WiFi Ch ${nearestWifi.channel}`,
+            color: '#ff9f6e',
+            fillColor: 'rgba(255, 159, 110, 0.12)',
+            bgColor: 'rgba(59, 25, 5, 0.86)',
+            minScore: 4,
+            minPeakOffset: 5,
+            maxMarks: 2,
+            yPadRatio: 0.035,
+            xPadHz: 11e6,
+          });
+        }
+
+        return matched;
+      })
+      .filter(Boolean)
+      .sort((a, b) => (Number(b.power) || -999) - (Number(a.power) || -999))
+      .slice(0, 10);
+  };
+
   const safeFrequencyMHz = toFinite(settings.frequency, 751);
   const safeSampleRateMHz = Math.max(0.1, toFinite(settings.sampleRate, 20));
   const safeSweepStartMHz = toFinite(sweepSettings.frequency_start, safeFrequencyMHz - safeSampleRateMHz / 2);
@@ -550,11 +655,117 @@ const ChartComponent = ({
     ? waterfallData.filter((_, idx) => idx % rowStride === 0)
     : waterfallData;
   const waterfallSmooth = cellCount <= 1800000 ? 'best' : false;
+  const waterfallWarmup = showWaterfall && (Date.now() - waterfallEnabledAtRef.current) < 1200;
   const peakAnnotations = generateAnnotations(peaks, baseFreq, freqStep);
   const peakNameAnnotations = generateSignalNameAnnotations(peaks);
+  const classifiedSignalMarkers = getClassifiedSignalMarkers(peaks);
   const waterfallCenterDb = ((Number(minY) + Number(maxY)) / 2) + waterfallLevelOffset;
   const waterfallZMin = waterfallCenterDb - (waterfallDbWindow / 2);
   const waterfallZMax = waterfallCenterDb + (waterfallDbWindow / 2);
+  const classifiedWaterfallMarks = useMemo(() => {
+    if (
+      !showWaterfall ||
+      waterfallWarmup ||
+      cellCount > 1200000 ||
+      !classifiedSignalMarkers.length ||
+      !renderedWaterfallData.length ||
+      waterfallFreqStep <= 0
+    ) {
+      return [];
+    }
+
+    const rowCount = renderedWaterfallData.length;
+    return classifiedSignalMarkers.flatMap((marker) => {
+      const centerBin = Math.round((marker.freqHz - baseFreq) / waterfallFreqStep);
+      if (centerBin < 0 || centerBin >= safeWaterfallBins) return [];
+
+      const halfBins = Math.max(2, Math.ceil((marker.bandwidthHz / 2) / waterfallFreqStep));
+      const startBin = Math.max(0, centerBin - halfBins);
+      const endBin = Math.min(safeWaterfallBins - 1, centerBin + halfBins);
+      const candidates = renderedWaterfallData
+        .map((row, rowIdx) => {
+          if (!Array.isArray(row) || row.length === 0) return null;
+          const values = row
+            .slice(startBin, endBin + 1)
+            .filter((value) => Number.isFinite(Number(value)))
+            .map(Number);
+          if (!values.length) return null;
+          const localPeak = Math.max(...values);
+          const sampled = [];
+          const sampleStep = Math.max(1, Math.floor(row.length / 96));
+          for (let i = 0; i < row.length; i += sampleStep) {
+            const value = Number(row[i]);
+            if (Number.isFinite(value)) sampled.push(value);
+          }
+          sampled.sort((a, b) => a - b);
+          const noise = sampled[Math.floor(sampled.length * 0.55)] ?? waterfallZMin;
+          const score = localPeak - noise;
+          return { rowIdx, score, localPeak };
+        })
+        .filter((item) => item && item.score >= marker.minScore && item.localPeak >= waterfallZMin + marker.minPeakOffset)
+        .sort((a, b) => b.score - a.score);
+
+      const picked = [];
+      for (const candidate of candidates) {
+        const minRowSpacing = marker.protocol === 'WiFi' ? 18 : 8;
+        if (picked.every((existing) => Math.abs(existing.rowIdx - candidate.rowIdx) > minRowSpacing)) {
+          picked.push(candidate);
+        }
+        if (picked.length >= marker.maxMarks) break;
+      }
+
+      return picked.map((candidate) => {
+        const yPad = Math.max(3, Math.round(rowCount * marker.yPadRatio));
+        const xPad = Math.max(waterfallFreqStep * 2, marker.xPadHz);
+        return {
+          ...marker,
+          x0: marker.freqHz - xPad,
+          x1: marker.freqHz + xPad,
+          y0: Math.max(0, candidate.rowIdx - yPad),
+          y1: Math.min(requestedWaterfallRows, candidate.rowIdx + yPad),
+          score: candidate.score,
+        };
+      });
+    }).slice(0, 12);
+  }, [
+    classifiedSignalMarkers,
+    renderedWaterfallData,
+    baseFreq,
+    safeWaterfallBins,
+    waterfallFreqStep,
+    requestedWaterfallRows,
+    waterfallZMin,
+    showWaterfall,
+    waterfallWarmup,
+    cellCount,
+  ]);
+  const classifiedWaterfallTraces = classifiedWaterfallMarks.map((mark, idx) => ({
+    x: [mark.x0, mark.x1, mark.x1, mark.x0, mark.x0],
+    y: [mark.y0, mark.y0, mark.y1, mark.y1, mark.y0],
+    type: 'scatter',
+    mode: 'lines',
+    line: { color: mark.color, width: 2 },
+    fill: 'toself',
+    fillcolor: mark.fillColor,
+    hovertemplate: `${mark.label}<br>%{x:.0f} Hz<extra></extra>`,
+    showlegend: idx === 0,
+    name: 'Signal mark',
+  }));
+  const classifiedWaterfallAnnotations = classifiedWaterfallMarks.map((mark, idx) => ({
+    x: mark.freqHz,
+    y: mark.y1 + 2,
+    xref: 'x',
+    yref: 'y',
+    text: mark.label,
+    showarrow: false,
+    bgcolor: mark.bgColor,
+    bordercolor: mark.color,
+    borderwidth: 1,
+    borderpad: 2,
+    font: { size: 10, color: '#f5fffb' },
+    align: 'center',
+    ay: idx,
+  }));
 
   useEffect(() => {
     if (!Array.isArray(fftData) || fftData.length === 0) {
@@ -763,9 +974,10 @@ const ChartComponent = ({
       setSettings(nextSettings);
     }
     try {
-      await axios.post('/api/update_settings', nextSettings, {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const response = await axios.post('/api/update_settings', nextSettings, settingsPostConfig);
+      if (response?.data?.success === false) {
+        throw new Error(response.data.error || 'Settings update failed');
+      }
     } catch (error) {
       console.error('Error updating settings patch:', error);
     }
@@ -982,6 +1194,9 @@ const ChartComponent = ({
               checked={Boolean(showWaterfall)}
               onChange={(e) => {
                 const checked = Boolean(e.target.checked);
+                waterfallEnabledAtRef.current = Date.now();
+                setWaterfallData([]);
+                setWaterfallNoSignal(false);
                 pushSettings({ showWaterfall: checked });
               }}
             />
@@ -1239,6 +1454,7 @@ const ChartComponent = ({
                 zmax: waterfallZMax,
                 showscale: false, // Remove the color scale
               },
+              ...classifiedWaterfallTraces,
             ]}
             layout={{
               title: '',
@@ -1265,13 +1481,15 @@ const ChartComponent = ({
               },
               autosize: true,  // Let Plotly auto size
               uirevision: `waterfall-${requestedWaterfallRows}-${safeWaterfallBins}`,
+              showlegend: false,
               paper_bgcolor: '#000',
               plot_bgcolor: '#000',
               font: {
                 color: 'white',
               },
-              annotations: waterfallNoSignal
-                ? [{
+              annotations: [
+                ...classifiedWaterfallAnnotations,
+                ...(waterfallNoSignal ? [{
                   xref: 'paper',
                   yref: 'paper',
                   x: 0.5,
@@ -1283,8 +1501,8 @@ const ChartComponent = ({
                   bordercolor: 'rgba(255,128,128,0.75)',
                   borderwidth: 1,
                   borderpad: 4,
-                }]
-                : [],
+                }] : []),
+              ],
             }}
             config={{
               displayModeBar: false, // Hide the mode bar

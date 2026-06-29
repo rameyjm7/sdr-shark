@@ -4,6 +4,8 @@ import Box from '@mui/material/Box';
 import { DataGrid } from '@mui/x-data-grid';
 import { FormControlLabel, Slider, Switch, Typography, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper, Button } from '@mui/material';
 
+const SETTINGS_POST_CONFIG = { timeout: 8000 };
+
 const FoldableSection = ({ title, defaultOpen = true, children }) => (
   <Box
     sx={{
@@ -70,7 +72,10 @@ const Analysis = ({ settings, setSettings, addVerticalLines, clearVerticalLines,
 
   const updateSettings = async (newSettings) => {
     try {
-      await axios.post('/api/update_settings', newSettings);
+      const response = await axios.post('/api/update_settings', newSettings, SETTINGS_POST_CONFIG);
+      if (response?.data?.success === false) {
+        throw new Error(response.data.error || 'Settings update failed');
+      }
     } catch (error) {
       console.error('Error updating settings:', error);
     }

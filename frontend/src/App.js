@@ -98,6 +98,7 @@ const App = () => {
     scannerError: null,
     waterfallRows: 0,
     peaks: [],
+    bluetooth: null,
   });
 
 
@@ -256,6 +257,9 @@ const App = () => {
   };
   const telemetryWideChipSx = { ...telemetryChipSx, width: 170, minWidth: 170, maxWidth: 170, flex: '0 0 170px' };
   const telemetryDetectChipSx = { ...telemetryChipSx, width: 280, minWidth: 280, maxWidth: 280, flex: '0 0 280px' };
+  const bluetoothEvents = Array.isArray(telemetry.bluetooth?.events) ? telemetry.bluetooth.events : [];
+  const bluetoothAdvCount = bluetoothEvents.filter((event) => event?.kind === 'ble_adv').length;
+  const bluetoothBtcCount = bluetoothEvents.filter((event) => String(event?.protocol || '').toLowerCase() === 'btc').length;
 
   const detectedSignalLabel = useMemo(() => {
     const normalizeMHz = (value) => {
@@ -382,6 +386,12 @@ const App = () => {
           <Chip size="small" sx={telemetryChipSx} label={`Scanner seq: ${telemetry.scannerFrameSeq || 0}`} />
           <Chip size="small" sx={telemetryWideChipSx} color={telemetry.scannerFresh ? 'success' : 'default'} label={`Scanner fresh: ${telemetry.scannerFresh ? 'yes' : 'no'}`} />
           <Chip size="small" sx={telemetryChipSx} label={`WF rows: ${telemetry.waterfallRows || 0}`} />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={telemetry.bluetooth?.active ? 'success' : 'default'}
+            label={`BT: ${telemetry.bluetooth?.active ? 'on' : 'off'} BLE ${bluetoothAdvCount} BTC ${bluetoothBtcCount}`}
+          />
           <Chip size="small" sx={telemetryDetectChipSx} color={detectedSignalLabel.includes('WiFi Ch1') ? 'success' : 'default'} label={detectedSignalLabel} />
           {telemetry.fftError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`FFT err`} /> : null}
           {telemetry.scannerError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`Scanner err`} /> : null}

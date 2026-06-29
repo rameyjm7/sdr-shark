@@ -32,6 +32,8 @@ Environment overrides:
   SDR_SHARK_ENV_FILE      (default: /etc/default/<service>)
   SDR_SHARK_START_SCRIPT  (default: <repo>/scripts/start.sh)
   SDR_BACKEND             (default: soapy; written to env file on install)
+  SDR_SHARK_LOG_DIR       (default: /var/log/sdr-shark; created on install)
+  SDR_SHARK_BLUETOOTH_LOG_DIR (optional; written to env file on install)
   SDR_SOAPY_LOG_FILE      (optional; written to env file on install)
   SDR_SOAPY_LOG_STDERR    (optional; written to env file on install)
   SDR_GATEWAY_API_TOKEN   (optional; written to env file on install)
@@ -62,6 +64,8 @@ install_unit() {
     echo "Run: chmod +x ${REPO_ROOT}/scripts/start.sh" >&2
     exit 1
   fi
+  log_dir="${SDR_SHARK_LOG_DIR:-/var/log/sdr-shark}"
+  run_root install -d -o "${RUN_USER}" -g "${RUN_GROUP}" -m 0755 "${log_dir}"
 
   cat >"/tmp/${SERVICE_NAME}.service" <<EOF
 [Unit]
@@ -93,6 +97,10 @@ EOF
   backend="${SDR_BACKEND:-soapy}"
   backend_escaped="$(printf "%s" "${backend}" | sed "s/'/'\"'\"'/g")"
   env_lines+=("SDR_BACKEND='${backend_escaped}'")
+
+  bluetooth_log_dir="${SDR_SHARK_BLUETOOTH_LOG_DIR:-${log_dir}}"
+  bluetooth_log_dir_escaped="$(printf "%s" "${bluetooth_log_dir}" | sed "s/'/'\"'\"'/g")"
+  env_lines+=("SDR_SHARK_BLUETOOTH_LOG_DIR='${bluetooth_log_dir_escaped}'")
 
   if [[ -n "${SDR_SOAPY_LOG_FILE:-}" ]]; then
     soapy_log_file_escaped="$(printf "%s" "${SDR_SOAPY_LOG_FILE}" | sed "s/'/'\"'\"'/g")"

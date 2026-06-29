@@ -254,12 +254,13 @@ class sdr_scheduler_config:
             self.validate_settings()
 
 
-            # Always drive the active gateway-backed SDR instance.
-            self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
             sr = self.sdr_sampleRate()
-            self.sdr0.set_sample_rate(sr)
-            self.sdr0.set_bandwidth(sr)
-            self.sdr0.set_gain(self.sdr_gain())
+            self.sdr0.configure_receiver(
+                frequency=self.sdr_settings[self.sdr_name].frequency,
+                sample_rate=sr,
+                bandwidth=sr,
+                gain=self.sdr_gain(),
+            )
         except Exception as e:
             print(e)
             pass
@@ -288,7 +289,7 @@ class sdr_scheduler_config:
                     "hackrf": 20e6,
                     "sidekiq": 60e6,
                     "airspy": 10e6,
-                    "bladerf": 20e6,
+                    "bladerf": 60e6,
                     "rtlsdr": 2.4e6,
                     "antsdre200": 20e6,
                 }.get(driver, self.sdr_settings[self.sdr_name].sampleRate)
@@ -300,10 +301,12 @@ class sdr_scheduler_config:
                     max(self.sdr_settings[self.sdr_name].frequency, float(getattr(self.sdr0, "min_frequency", 1e6))),
                     float(getattr(self.sdr0, "max_frequency", 6e9)),
                 )
-                self.sdr0.set_frequency(self.sdr_settings[self.sdr_name].frequency)
-                self.sdr0.set_sample_rate(self.sdr_settings[self.sdr_name].sampleRate)
-                self.sdr0.set_bandwidth(self.sdr_settings[self.sdr_name].bandwidth)
-                self.sdr0.set_gain(self.sdr_settings[self.sdr_name].gain)
+                self.sdr0.configure_receiver(
+                    frequency=self.sdr_settings[self.sdr_name].frequency,
+                    sample_rate=self.sdr_settings[self.sdr_name].sampleRate,
+                    bandwidth=self.sdr_settings[self.sdr_name].bandwidth,
+                    gain=self.sdr_settings[self.sdr_name].gain,
+                )
                 return 1
             return 0
         except Exception as e:

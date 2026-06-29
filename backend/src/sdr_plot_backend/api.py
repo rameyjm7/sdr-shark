@@ -9,6 +9,7 @@ import numpy as np
 import json
 from flask import Blueprint, jsonify, request, current_app, Response
 
+from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
 
@@ -36,8 +37,10 @@ main_frame_seq = 0
 scanner_frame_seq = 0
 analysis_peak_memory = {}
 analysis_memory_lock = threading.Lock()
+settings_update_lock = threading.Lock()
 fft_failure_count = 0
 scanner_failure_count = 0
+bluetooth_plugin = BluetoothGatewayPlugin()
 
 
 def _quantize_mhz(value, step_mhz=0.05):
@@ -168,6 +171,7 @@ def generate_fft_data():
 
             # Capture and process FFT samples
             capture_samples()
+            bluetooth_plugin.update(vars.sdr0)
             current_fft = process_fft(sample_buffer)
 
             # Suppress DC spike if enabled
@@ -472,6 +476,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'scannerFresh': bool(scanner_available),
         'fftError': fft_error,
         'scannerError': scanner_error,
+        'bluetooth': bluetooth_plugin.snapshot(max_events=20),
     }
 
     # Convert all settings values to native Python types
@@ -538,6 +543,12 @@ def stream_data():
         'Connection': 'keep-alive',
     }
     return Response(event_stream(), mimetype='text/event-stream', headers=headers)
+
+
+@api_blueprint.route('/api/bluetooth/events')
+def bluetooth_events():
+    max_events = _safe_int(request.args.get('limit', 50), default=50, min_value=1, max_value=200)
+    return jsonify(_to_builtin(bluetooth_plugin.snapshot(max_events=max_events)))
 
 
 @api_blueprint.route('/api/analytics')
@@ -838,10 +849,26 @@ def get_settings():
 
 @api_blueprint.route('/api/update_settings', methods=['POST'])
 def update_settings():
+    if not settings_update_lock.acquire(timeout=2.0):
+        return jsonify({'success': False, 'error': 'Settings update already in progress'}), 429
     try:
         settings = request.json
         if settings['frequency'] == 0 or  settings['frequency'] is None or  settings['sampleRate'] is None or settings['bandwidth'] is None:
             return jsonify(_to_builtin({'success': True, 'settings': settings}))
+        requested_sdr = str(settings.get('sdr') or '').strip()
+        if requested_sdr and requested_sdr != (vars.sdr0.device_id or vars.radio_name):
+            supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
+            driver = requested_sdr.split(':', 1)[0]
+            if driver not in supported_drivers:
+                return jsonify({
+                    'success': False,
+                    'error': f"SDR '{requested_sdr}' is not stream-capable in SDR Shark."
+                }), 400
+            if not vars.reselect_radio(requested_sdr):
+                return jsonify({
+                    'success': False,
+                    'error': f"Failed to switch SDR to {requested_sdr}"
+                }), 400
         new_settings = settings.copy()
         # Update vars with the new settings and save them
         new_settings['frequency'] = settings['frequency'] * 1e6
@@ -856,6 +883,8 @@ def update_settings():
     except Exception as e:
         print(e)
         return jsonify({'success': False, 'error': str(e)})
+    finally:
+        settings_update_lock.release()
 
 @api_blueprint.route('/api/start_sweep', methods=['POST'])
 def start_sweep():
@@ -871,6 +900,7 @@ def stop_sweep():
 def cleanup():
     global running
     running = False
+    bluetooth_plugin.stop()
     try:
         vars.sdr0.stop()
     except Exception:
