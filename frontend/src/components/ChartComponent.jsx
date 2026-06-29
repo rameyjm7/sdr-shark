@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import axios from 'axios';
 import Plot from 'react-plotly.js';
+import GpuSpectrum from './GpuSpectrum';
+import GpuWaterfall from './GpuWaterfall';
 import '../App.css';
 
 const ChartComponent = ({
@@ -28,6 +30,22 @@ const ChartComponent = ({
     return Number.isFinite(n) ? n : fallback;
   };
   const maxWaterfallSamples = 375;
+  const chartRendererMode = String(process.env.REACT_APP_SDR_SHARK_CHART_RENDERER || 'plotly').trim().toLowerCase();
+  const useGpuCharts = ['gpu', 'webgl', 'opengl'].includes(chartRendererMode);
+  const signalClassificationOverlaysEnabled = false;
+  const signalMarkerHoldMs = 15000;
+  const plotMargin = {
+    l: 50,
+    r: 50,
+    b: 50,
+    t: 50,
+    pad: 4,
+    autoexpand: false,
+  };
+  const waterfallMargin = {
+    ...plotMargin,
+    t: 0,
+  };
 
   const [fftData, setFftData] = useState([]);
   const [fftMaxData, setFftMaxData] = useState([]);
@@ -52,11 +70,17 @@ const ChartComponent = ({
   const [autoscaleMode, setAutoscaleMode] = useState('manual');
   const [markerPrimary, setMarkerPrimary] = useState(null);
   const [markerSecondary, setMarkerSecondary] = useState(null);
+  const [heldClassifiedSignalMarkers, setHeldClassifiedSignalMarkers] = useState([]);
   const [traceStyles, setTraceStyles] = useState({
     live: { visible: true, width: 1, opacity: 1.0 },
     max: { visible: true, width: 1, opacity: 0.9 },
     persist: { visible: true, width: 1, opacity: 0.25 },
   });
+  const [gpuRenderer, setGpuRenderer] = useState({
+    mode: useGpuCharts ? 'GPU' : 'CPU',
+    detail: useGpuCharts ? 'WebGL initializing' : 'Plotly scattergl',
+  });
+  const renderEngine = useGpuCharts ? (gpuRenderer.mode || 'CPU') : 'GPU';
   const lastFrameTsRef = useRef(null);
   const lastDataTsRef = useRef(Date.now());
   const droppedFramesRef = useRef(0);
@@ -69,6 +93,8 @@ const ChartComponent = ({
   const sseLastMessageAtRef = useRef(0);
   const spectrumPlotRef = useRef(null);
   const waterfallEnabledAtRef = useRef(Date.now());
+  const startupAutoscaleDoneRef = useRef(false);
+  const startupAutoscaleAttemptsRef = useRef(0);
   const lastTuneRef = useRef({
     frequency: Number(settings.frequency),
     sampleRate: Number(settings.sampleRate),
@@ -89,6 +115,41 @@ const ChartComponent = ({
     const avgDiff = count > 0 ? diffSum / count : 0;
     return avgDiff > 0.15;
   };
+
+  const usableFftValues = (values) => (
+    Array.isArray(values)
+      ? values.filter((value) => Number.isFinite(value) && value > -220 && value < 200)
+      : []
+  );
+
+  const rangeFromFftValues = (values) => {
+    const usable = usableFftValues(values);
+    if (usable.length < 32) return null;
+    const sorted = [...usable].sort((a, b) => a - b);
+    const p20 = sorted[Math.floor(sorted.length * 0.2)];
+    const p99 = sorted[Math.floor(sorted.length * 0.99)];
+    const peak = sorted[sorted.length - 1];
+    if (![p20, p99, peak].every(Number.isFinite)) return null;
+    if ((peak - p20) < 1.5) return null;
+    const nextMin = Math.floor((p20 - 18) / 5) * 5;
+    const nextMax = Math.ceil((Math.max(p99 + 12, peak + 6)) / 5) * 5;
+    if (!Number.isFinite(nextMin) || !Number.isFinite(nextMax) || nextMax <= nextMin) return null;
+    return {
+      min: Math.max(-180, nextMin),
+      max: Math.min(120, nextMax),
+    };
+  };
+
+  const signalFootprintLabel = (protocol) => {
+    if (protocol === 'BTC') return '~1 MHz hop';
+    if (protocol === 'BTLE') return '~2 MHz ch';
+    if (protocol === 'WiFi') return '~22 MHz ch';
+    return '';
+  };
+
+  const classifiedMarkerKey = (marker) => (
+    `${marker.protocol || 'signal'}-${Math.round(Number(marker.freqHz || 0) / 500000)}-${marker.label || ''}`
+  );
 
   useEffect(() => {
     const adjustPlotHeight = () => {
@@ -294,8 +355,10 @@ const ChartComponent = ({
             fftError: data?.fftError || null,
             scannerError: data?.scannerError || null,
             waterfallRows: Number(data?.waterfallRows || 0),
+            renderEngine,
             peaks: telemetryPeaks.slice(0, 16),
             bluetooth: data?.bluetooth || null,
+            fm: data?.fm || null,
           });
         }
       } catch (error) {
@@ -457,6 +520,8 @@ const ChartComponent = ({
         const freq = freqMHz * 1e6;
         const power = peak.peak_power.toFixed(2);
         const powerColor = generateColor(power);
+        const positionRatio = (freq - startFreq) / Math.max(1, endFreq - startFreq);
+        const edgeAnchor = positionRatio > 0.82 ? 'right' : (positionRatio < 0.18 ? 'left' : 'center');
         return {
           x: freq,
           y: parseFloat(power),
@@ -465,8 +530,9 @@ const ChartComponent = ({
           text: `${(freq / 1e6).toFixed(2)} MHz<br><span style="color:${powerColor}">${power} dB</span>`,
           showarrow: true,
           arrowhead: 2,
-          ax: 0,
+          ax: edgeAnchor === 'right' ? -36 : (edgeAnchor === 'left' ? 36 : 0),
           ay: -40,
+          xanchor: edgeAnchor,
           font: {
             size: 12,
             color: 'white',
@@ -495,16 +561,28 @@ const ChartComponent = ({
 
         const top = classes[0] || {};
         const label = String(top.label || 'Signal');
+        const labelLower = label.toLowerCase();
+        const annotationProtocol = labelLower.includes('wifi')
+          ? 'WiFi'
+          : (labelLower.includes('classic') || labelLower.includes('btc') ? 'BTC' : (labelLower.includes('bluetooth') || labelLower.includes('ble') ? 'BTLE' : ''));
+        const footprintLabel = signalFootprintLabel(annotationProtocol);
         const channel = String(top.channel || '').trim();
         const tag = channel && channel !== 'N/A' ? `${label} ${channel}` : label;
+        const text = footprintLabel ? `${tag}<br>${footprintLabel}` : tag;
+        const startFreq = baseFreq;
+        const endFreq = baseFreq + freqStep * (fftData.length - 1);
+        const xHz = freqMHz * 1e6;
+        const positionRatio = (xHz - startFreq) / Math.max(1, endFreq - startFreq);
+        const edgeAnchor = positionRatio > 0.82 ? 'right' : (positionRatio < 0.18 ? 'left' : 'center');
 
         return {
-          x: freqMHz * 1e6,
+          x: xHz,
           y: power + 4 + (idx % 2) * 2,
           xref: 'x',
           yref: 'y',
-          text: tag,
+          text,
           showarrow: false,
+          xanchor: edgeAnchor,
           bgcolor: 'rgba(8, 16, 24, 0.82)',
           bordercolor: '#7ec8ff',
           borderwidth: 1,
@@ -546,7 +624,10 @@ const ChartComponent = ({
               : (classLabelLower.includes('classic') || classLabelLower.includes('btc') ? 'BTC' : 'BTLE');
             const channel = String(item?.channel || '').replace(/^Channel\s+/i, 'Ch ');
             const fallbackBandwidthMHz = protocol === 'WiFi' ? 22 : (protocol === 'BTLE' ? 2 : 1);
-            const bandwidthMHz = Math.max(0.25, toFinite(item?.bandwidth ?? peak?.bandwidth, fallbackBandwidthMHz));
+            const bandwidthMHz = protocol === 'WiFi'
+              ? Math.max(8, toFinite(item?.bandwidth ?? peak?.bandwidth, fallbackBandwidthMHz))
+              : fallbackBandwidthMHz;
+            const footprintLabel = signalFootprintLabel(protocol);
 
             return {
               freqHz: freqMHz * 1e6,
@@ -554,6 +635,7 @@ const ChartComponent = ({
               power: Number(peak?.peak_power),
               protocol,
               label: channel && channel !== 'N/A' ? `${protocol} ${channel}` : protocol,
+              footprintLabel,
               color: protocol === 'WiFi' ? '#ff9f6e' : (protocol === 'BTC' ? '#ffd166' : '#7cf7d4'),
               fillColor: protocol === 'WiFi'
                 ? 'rgba(255, 159, 110, 0.12)'
@@ -565,24 +647,28 @@ const ChartComponent = ({
               minPeakOffset: protocol === 'WiFi' ? 5 : 8,
               maxMarks: protocol === 'WiFi' ? 2 : 4,
               yPadRatio: protocol === 'WiFi' ? 0.035 : 0.018,
-              xPadHz: protocol === 'WiFi' ? (bandwidthMHz * 1e6) / 2 : (bandwidthMHz * 1e6) * 0.75,
+              xPadHz: protocol === 'WiFi'
+                ? (bandwidthMHz * 1e6) / 2
+                : (bandwidthMHz * 1e6) / 2,
             };
           })
           .filter(Boolean);
 
         const hasWifi = matched.some((item) => item.protocol === 'WiFi');
+        const hasBluetooth = matched.some((item) => item.protocol === 'BTC' || item.protocol === 'BTLE');
         const wifiCenters = [2412, 2417, 2422, 2427, 2432, 2437, 2442, 2447, 2452, 2457, 2462, 2467, 2472, 2484];
         const nearestWifi = wifiCenters
           .map((center, idx) => ({ center, channel: idx + 1, delta: Math.abs(freqMHz - center) }))
           .sort((a, b) => a.delta - b.delta)[0];
         const estimatedBandwidthMHz = toFinite(peak?.bandwidth, 0);
-        if (!hasWifi && nearestWifi && nearestWifi.delta <= 3 && estimatedBandwidthMHz >= 8) {
+        if (!hasWifi && !hasBluetooth && nearestWifi && nearestWifi.delta <= 3 && estimatedBandwidthMHz >= 12) {
           matched.push({
             freqHz: nearestWifi.center * 1e6,
             bandwidthHz: 22e6,
             power: Number(peak?.peak_power),
             protocol: 'WiFi',
             label: `WiFi Ch ${nearestWifi.channel}`,
+            footprintLabel: signalFootprintLabel('WiFi'),
             color: '#ff9f6e',
             fillColor: 'rgba(255, 159, 110, 0.12)',
             bgColor: 'rgba(59, 25, 5, 0.86)',
@@ -624,6 +710,10 @@ const ChartComponent = ({
   const baseFreq = sweepSettings.sweeping_enabled
     ? safeSweepStartMHz * 1e6
     : (safeFrequencyMHz - safeSampleRateMHz / 2) * 1e6;
+  const xAxisRangeHz = useMemo(
+    () => [baseFreq, baseFreq + safeBandwidthHz],
+    [baseFreq, safeBandwidthHz],
+  );
   const freqStep = safeBandwidthHz / safeBins;
   const waterfallFreqStep = safeBandwidthHz / safeWaterfallBins;
   const fftX = useMemo(
@@ -647,6 +737,10 @@ const ChartComponent = ({
   );
   const waterfallRows = waterfallData.length;
   const waterfallCols = safeWaterfallBins;
+  const sharedPlotStyle = {
+    width: `${plotWidth}vw`,
+    maxWidth: '100%',
+  };
   const cellCount = waterfallRows * waterfallCols;
   const requestedWaterfallRows = Math.max(1, Math.min(maxWaterfallSamples, toFinite(settings.waterfallSamples, 200)));
   const maxWaterfallCells = Math.max(1800000, requestedWaterfallRows * waterfallCols);
@@ -654,11 +748,50 @@ const ChartComponent = ({
   const renderedWaterfallData = rowStride > 1
     ? waterfallData.filter((_, idx) => idx % rowStride === 0)
     : waterfallData;
+  const renderedWaterfallCellCount = renderedWaterfallData.length * waterfallCols;
+  const maxClassifiedWaterfallCells = 4_000_000;
   const waterfallSmooth = cellCount <= 1800000 ? 'best' : false;
   const waterfallWarmup = showWaterfall && (Date.now() - waterfallEnabledAtRef.current) < 1200;
   const peakAnnotations = generateAnnotations(peaks, baseFreq, freqStep);
-  const peakNameAnnotations = generateSignalNameAnnotations(peaks);
-  const classifiedSignalMarkers = getClassifiedSignalMarkers(peaks);
+  const peakNameAnnotations = signalClassificationOverlaysEnabled ? generateSignalNameAnnotations(peaks) : [];
+  const classifiedSignalMarkers = useMemo(
+    () => (signalClassificationOverlaysEnabled ? getClassifiedSignalMarkers(peaks) : []),
+    [peaks, safeFrequencyMHz],
+  );
+  useEffect(() => {
+    const now = Date.now();
+    if (!classifiedSignalMarkers.length) return;
+    setHeldClassifiedSignalMarkers((prev) => {
+      const byKey = new Map();
+      prev
+        .filter((marker) => now - Number(marker.seenAtMs || 0) <= signalMarkerHoldMs)
+        .forEach((marker) => byKey.set(classifiedMarkerKey(marker), marker));
+      classifiedSignalMarkers.forEach((marker) => {
+        const key = classifiedMarkerKey(marker);
+        const existing = byKey.get(key) || {};
+        byKey.set(key, {
+          ...existing,
+          ...marker,
+          seenAtMs: now,
+        });
+      });
+      return Array.from(byKey.values())
+        .sort((a, b) => Number(b.seenAtMs || 0) - Number(a.seenAtMs || 0))
+        .slice(0, 16);
+    });
+  }, [classifiedSignalMarkers]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setHeldClassifiedSignalMarkers((prev) => (
+        prev.filter((marker) => now - Number(marker.seenAtMs || 0) <= signalMarkerHoldMs)
+      ));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+  const activeClassifiedSignalMarkers = heldClassifiedSignalMarkers.length
+    ? heldClassifiedSignalMarkers
+    : classifiedSignalMarkers;
   const waterfallCenterDb = ((Number(minY) + Number(maxY)) / 2) + waterfallLevelOffset;
   const waterfallZMin = waterfallCenterDb - (waterfallDbWindow / 2);
   const waterfallZMax = waterfallCenterDb + (waterfallDbWindow / 2);
@@ -666,8 +799,8 @@ const ChartComponent = ({
     if (
       !showWaterfall ||
       waterfallWarmup ||
-      cellCount > 1200000 ||
-      !classifiedSignalMarkers.length ||
+      renderedWaterfallCellCount > maxClassifiedWaterfallCells ||
+      !activeClassifiedSignalMarkers.length ||
       !renderedWaterfallData.length ||
       waterfallFreqStep <= 0
     ) {
@@ -675,7 +808,7 @@ const ChartComponent = ({
     }
 
     const rowCount = renderedWaterfallData.length;
-    return classifiedSignalMarkers.flatMap((marker) => {
+    return activeClassifiedSignalMarkers.flatMap((marker) => {
       const centerBin = Math.round((marker.freqHz - baseFreq) / waterfallFreqStep);
       if (centerBin < 0 || centerBin >= safeWaterfallBins) return [];
 
@@ -728,7 +861,7 @@ const ChartComponent = ({
       });
     }).slice(0, 12);
   }, [
-    classifiedSignalMarkers,
+    activeClassifiedSignalMarkers,
     renderedWaterfallData,
     baseFreq,
     safeWaterfallBins,
@@ -737,7 +870,7 @@ const ChartComponent = ({
     waterfallZMin,
     showWaterfall,
     waterfallWarmup,
-    cellCount,
+    renderedWaterfallCellCount,
   ]);
   const classifiedWaterfallTraces = classifiedWaterfallMarks.map((mark, idx) => ({
     x: [mark.x0, mark.x1, mark.x1, mark.x0, mark.x0],
@@ -747,7 +880,7 @@ const ChartComponent = ({
     line: { color: mark.color, width: 2 },
     fill: 'toself',
     fillcolor: mark.fillColor,
-    hovertemplate: `${mark.label}<br>%{x:.0f} Hz<extra></extra>`,
+    hovertemplate: `${mark.label}${mark.footprintLabel ? `<br>${mark.footprintLabel}` : ''}<br>%{x:.0f} Hz<extra></extra>`,
     showlegend: idx === 0,
     name: 'Signal mark',
   }));
@@ -756,7 +889,7 @@ const ChartComponent = ({
     y: mark.y1 + 2,
     xref: 'x',
     yref: 'y',
-    text: mark.label,
+    text: `${mark.label}${mark.footprintLabel ? `<br>${mark.footprintLabel}` : ''}`,
     showarrow: false,
     bgcolor: mark.bgColor,
     bordercolor: mark.color,
@@ -771,13 +904,29 @@ const ChartComponent = ({
     if (!Array.isArray(fftData) || fftData.length === 0) {
       return;
     }
-    if (autoscaleMode === 'manual' || autoscaleMode === 'hold') {
-      return;
-    }
     if (typeof setMinY !== 'function' || typeof setMaxY !== 'function') {
       return;
     }
-    const sorted = [...fftData].sort((a, b) => a - b);
+    const range = rangeFromFftValues(fftData);
+    if (!range) {
+      if (!startupAutoscaleDoneRef.current) {
+        startupAutoscaleAttemptsRef.current += 1;
+      }
+      return;
+    }
+    if (autoscaleMode === 'manual') {
+      if (startupAutoscaleDoneRef.current) {
+        return;
+      }
+      startupAutoscaleDoneRef.current = true;
+      setMinY(range.min);
+      setMaxY(range.max);
+      return;
+    }
+    if (autoscaleMode === 'hold') {
+      return;
+    }
+    const sorted = usableFftValues(fftData).sort((a, b) => a - b);
     const p20 = sorted[Math.floor(sorted.length * 0.2)] ?? minY;
     const p99 = sorted[Math.floor(sorted.length * 0.99)] ?? maxY;
     const peak = sorted[sorted.length - 1] ?? maxY;
@@ -1017,6 +1166,8 @@ const ChartComponent = ({
       )
     ) {
       clearTraceDataSilent('all');
+      startupAutoscaleDoneRef.current = false;
+      startupAutoscaleAttemptsRef.current = 0;
     }
     lastTuneRef.current = curr;
   }, [settings.frequency, settings.sampleRate, settings.bandwidth]);
@@ -1052,6 +1203,20 @@ const ChartComponent = ({
     };
     const shiftPressed = Boolean(event?.event?.shiftKey);
     if (shiftPressed && markerPrimary) {
+      setMarkerSecondary(marker);
+    } else {
+      setMarkerPrimary(marker);
+      setMarkerSecondary(null);
+    }
+  };
+
+  const handleGpuSpectrumPick = ({ x, y, shiftKey }) => {
+    const marker = {
+      x: Number(x),
+      y: Number(y),
+    };
+    if (!Number.isFinite(marker.x) || !Number.isFinite(marker.y)) return;
+    if (shiftKey && markerPrimary) {
       setMarkerSecondary(marker);
     } else {
       setMarkerPrimary(marker);
@@ -1236,8 +1401,29 @@ const ChartComponent = ({
             <button type="button" style={quickTuneButtonStyle} onClick={clearMarkers}>Clear Markers</button>
           </div>
         )}
-        <Plot
-          data={[
+        {useGpuCharts ? (
+          <GpuSpectrum
+            data={traceStyles.live.visible ? fftData : []}
+            minDb={minY}
+            maxDb={maxY}
+            palette={waterfallColorScale}
+            freqStartHz={baseFreq}
+            freqStopHz={baseFreq + safeBandwidthHz}
+            margin={plotMargin}
+            width={`${plotWidth}vw`}
+            height={showWaterfall ? '42vh' : '78vh'}
+            opacity={traceStyles.live.opacity}
+            widthScale={traceStyles.live.width}
+            markers={[markerPrimary, markerSecondary]}
+            verticalLines={verticalLines}
+            horizontalLines={horizontalLines}
+            noSignal={spectrumNoSignal}
+            onPick={handleGpuSpectrumPick}
+            onRendererChange={setGpuRenderer}
+          />
+        ) : (
+          <Plot
+            data={[
             traceStyles.live.visible && {
               x: Array.isArray(fftData) ? fftX : [],
               y: Array.isArray(fftData) ? fftData : [],
@@ -1308,21 +1494,19 @@ const ChartComponent = ({
             gridcolor: '#444',
             tickvals: prevTickValsRef.current,
             ticktext: prevTickTextRef.current,
+            domain: [0, 1],
+            range: xAxisRangeHz,
+            automargin: false,
           },
           yaxis: {
             title: 'Amplitude (dB)',
             range: [minY, maxY],
             color: 'white',
             gridcolor: '#444',
-            zeroline: false // Remove the white line across the 0 mark
+            zeroline: false, // Remove the white line across the 0 mark
+            automargin: false,
           },
-          margin: {
-            l: 50,
-            r: 50,
-            b: 50,
-            t: 50,
-            pad: 4
-          },
+          margin: plotMargin,
           autosize: true,  // Let Plotly auto size
             paper_bgcolor: '#000',
             plot_bgcolor: '#000',
@@ -1347,7 +1531,8 @@ const ChartComponent = ({
               }] : []),
             ].filter(Boolean),
           }}
-          style={{ width: `${plotWidth}vw`, height: showWaterfall ? '42vh' : '78vh' }}
+          config={{ responsive: true }}
+          style={{ ...sharedPlotStyle, height: showWaterfall ? '42vh' : '78vh' }}
           onClick={handlePlotClick}
           onInitialized={(figure, graphDiv) => {
             spectrumPlotRef.current = graphDiv;
@@ -1355,7 +1540,8 @@ const ChartComponent = ({
           onUpdate={(figure, graphDiv) => {
             spectrumPlotRef.current = graphDiv;
           }}
-        />
+          />
+        )}
       </div>
       {showWaterfall && (
         <div style={{ position: 'relative' }}>
@@ -1442,8 +1628,22 @@ const ChartComponent = ({
               <button type="button" style={quickTuneButtonStyle} onClick={() => setWaterfallData([])}>Clear</button>
             </div>
           </div>
-          <Plot
-            data={[
+          {useGpuCharts ? (
+            <GpuWaterfall
+              data={renderedWaterfallData}
+              minDb={waterfallZMin}
+              maxDb={waterfallZMax}
+              palette={waterfallColorScale}
+              freqStartHz={baseFreq}
+              freqStopHz={baseFreq + safeBandwidthHz}
+              noSignal={waterfallNoSignal}
+              width={`${plotWidth}vw`}
+              height="36vh"
+              margin={plotMargin}
+            />
+          ) : (
+            <Plot
+              data={[
               {
                 x: waterfallX,
                 z: renderedWaterfallData,
@@ -1465,20 +1665,18 @@ const ChartComponent = ({
                 zeroline: false, // Remove the white line across the 0 mark
                 tickvals: prevTickValsRef.current,
                 ticktext: prevTickTextRef.current,
+                domain: [0, 1],
+                range: xAxisRangeHz,
+                automargin: false,
               },
               yaxis: {
                 title: 'Samples',
                 color: 'white',
                 gridcolor: '#444',
                 range: [0, requestedWaterfallRows],
+                automargin: false,
               },
-              margin: {
-                l: 50,
-                r: 50,
-                b: 50,
-                t: 0,
-                pad: 4
-              },
+              margin: waterfallMargin,
               autosize: true,  // Let Plotly auto size
               uirevision: `waterfall-${requestedWaterfallRows}-${safeWaterfallBins}`,
               showlegend: false,
@@ -1506,10 +1704,12 @@ const ChartComponent = ({
             }}
             config={{
               displayModeBar: false, // Hide the mode bar
+              responsive: true,
             }}
-            style={{ width: `${plotWidth}vw` }}
+            style={{ ...sharedPlotStyle, height: '36vh' }}
             onRelayout={handleRelayout} // Attach the relayout event handler
-          />
+            />
+          )}
         </div>
       )}
       {contextMenu && (
