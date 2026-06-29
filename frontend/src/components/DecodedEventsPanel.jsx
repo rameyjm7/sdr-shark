@@ -41,6 +41,14 @@ const normalizedLap = (event) => {
 const isBtcEvent = (event) => String(event?.protocol || '').toLowerCase() === 'btc';
 const isFmEvent = (event) => String(event?.protocol || '').toLowerCase() === 'fm' || event?.kind === 'fm_station';
 
+const protocolKey = (event) => {
+  const protocol = String(event?.protocol || '').toLowerCase();
+  if (protocol === 'btc') return 'BTC';
+  if (protocol === 'ble') return 'BTLE';
+  if (protocol === 'fm' || event?.kind === 'fm_station') return 'FM';
+  return protocol ? protocol.toUpperCase() : 'RF';
+};
+
 const candidateMac = (event) => {
   if (event?.full_mac || event?.mac || event?.address) return event.full_mac || event.mac || event.address;
   const lap = normalizedLap(event);
@@ -130,11 +138,58 @@ const eventTitle = (event) => {
 };
 
 const protocolLabel = (event) => {
-  const protocol = String(event?.protocol || '').toLowerCase();
-  if (protocol === 'btc') return 'BTC';
-  if (protocol === 'ble') return 'BTLE';
-  if (protocol === 'fm') return 'FM';
-  return protocol ? protocol.toUpperCase() : 'RF';
+  return protocolKey(event);
+};
+
+const protocolGroupLabel = (protocol) => {
+  const labels = {
+    BTC: 'Bluetooth Classic',
+    BTLE: 'Bluetooth Low Energy',
+    FM: 'FM Broadcast',
+    RF: 'Radio Events',
+  };
+  return labels[String(protocol || 'RF').toUpperCase()] || String(protocol || 'RF');
+};
+
+const protocolSortRank = (protocol) => {
+  const rank = ['BTC', 'BTLE', 'FM', 'RF'].indexOf(String(protocol || '').toUpperCase());
+  return rank < 0 ? 999 : rank;
+};
+
+const groupRowsBy = (rows, labelFn) => rows.reduce((groups, row) => {
+  const label = labelFn(row);
+  if (!groups.has(label)) groups.set(label, []);
+  groups.get(label).push(row);
+  return groups;
+}, new Map());
+
+const manufacturerGroupLabel = (event) => {
+  if (isFmEvent(event)) return 'FM Broadcast';
+  if (isBtcEvent(event)) return 'BT Classic / manufacturer unknown';
+  const manufacturer = String(
+    event?.manufacturer?.company_name ||
+    event?.manufacturer_name ||
+    event?.company_name ||
+    '',
+  ).trim();
+  if (manufacturer) return manufacturer;
+  if (event?.name || event?.identity) return event.name || event.identity;
+  return 'Manufacturer unknown';
+};
+
+const summaryStats = (rows) => {
+  const detections = rows.reduce(
+    (sum, row) => sum + Math.max(1, Number(row?.detections || row?.group_count || row?.sightings || 1)),
+    0,
+  );
+  const bestRssi = Math.max(
+    ...rows
+      .map((row) => Number(row?.rssi_dbfs ?? row?.power_dbfs ?? row?.last_rssi_dbfs))
+      .filter(Number.isFinite),
+    -120,
+  );
+  const lastSeen = Math.max(...rows.map(eventSeenAt));
+  return { detections, bestRssi, lastSeen };
 };
 
 const eventFootprintLabel = (event) => {
@@ -226,6 +281,19 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
   const emptyText = filterMode === 'devices'
     ? 'No identified devices in the retained activity window yet. Burst-only detections are hidden in this view.'
     : 'No decoded signal activity yet. Tune into an active band and decoded packets will appear here.';
+  const protocolGroups = useMemo(() => {
+    const groups = Array.from(groupRowsBy(filteredEvents, protocolKey).entries())
+      .sort(([a], [b]) => protocolSortRank(a) - protocolSortRank(b) || String(a).localeCompare(String(b)));
+    return groups.map(([protocol, rows]) => ({
+      protocol,
+      rows: [...rows].sort((a, b) => {
+        if (isFmEvent(a) && isFmEvent(b)) return Number(a?.frequency_mhz || 0) - Number(b?.frequency_mhz || 0);
+        return eventSeenAt(b) - eventSeenAt(a);
+      }),
+      stats: summaryStats(rows),
+    }));
+  }, [filteredEvents]);
+  const foldProtocolGroups = protocolGroups.length > 1 || filteredEvents.length > 3;
 
   const ensureAudio = async () => {
     if (!audioCtxRef.current) audioCtxRef.current = new AudioContext({ sampleRate: 48000 });
@@ -327,6 +395,172 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
     fetch('/api/fm/stop', { method: 'POST' }).catch(() => {});
   }, []);
 
+  const renderEventCard = (event, idx) => {
+    const isBtc = String(event?.protocol || '').toLowerCase() === 'btc';
+    const isFm = isFmEvent(event);
+    const accent = isFm ? '#ffb347' : (isBtc ? '#ffd166' : '#64f0d2');
+    const EventIcon = isFm ? RadioIcon : BluetoothIcon;
+    const uaps = Array.isArray(event?.uap_options) ? event.uap_options : [];
+    const footprintLabel = eventFootprintLabel(event);
+    return (
+      <Paper
+        key={eventKey(event, idx)}
+        elevation={0}
+        sx={{
+          mb: 1,
+          p: 1.25,
+          borderRadius: 2,
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderLeft: `4px solid ${accent}`,
+          bgcolor: 'rgba(8, 10, 12, 0.9)',
+        }}
+      >
+        <Stack direction="row" justifyContent="space-between" spacing={1}>
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+            <EventIcon fontSize="small" sx={{ color: accent, flexShrink: 0 }} />
+            <Typography variant="subtitle2" sx={{ fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis' }}>{eventTitle(event)}</Typography>
+          </Stack>
+          <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
+            {isFm && event?.decode_status === 'station' ? (
+              <Tooltip title={playingFrequency === Number(event?.frequency_mhz) ? 'Stop FM audio' : 'Play FM audio'}>
+                <IconButton
+                  size="small"
+                  onClick={() => startPlayback(event)}
+                  sx={{ color: accent, p: 0.25 }}
+                  aria-label={playingFrequency === Number(event?.frequency_mhz) ? 'Stop FM audio' : 'Play FM audio'}
+                >
+                  {playingFrequency === Number(event?.frequency_mhz) ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
+                </IconButton>
+              </Tooltip>
+            ) : null}
+            <Typography variant="caption" color="text.secondary">{formatAge(event?.seen_at)}</Typography>
+          </Stack>
+        </Stack>
+        <Stack direction="row" spacing={0.5} sx={{ mt: 0.75, flexWrap: 'wrap', gap: 0.5 }}>
+          <Chip
+            size="small"
+            icon={<EventIcon />}
+            label={protocolLabel(event)}
+            sx={{ bgcolor: `${accent}22`, color: '#fff', '& .MuiChip-icon': { color: accent } }}
+          />
+          {footprintLabel ? <Chip size="small" label={footprintLabel} /> : null}
+          {isFm && event?.frequency_mhz !== undefined ? <Chip size="small" label={`${Number(event.frequency_mhz).toFixed(1)} MHz`} /> : null}
+          {isFm ? <Chip size="small" color={event?.decode_status === 'station' ? 'success' : 'warning'} label={event?.decode_status === 'station' ? 'station' : 'potential'} /> : null}
+          {event?.kind === 'ble_adv' ? <Chip size="small" label="ADV" /> : null}
+          {isBtc && normalizeUap(event?.uap || event?.uap_hex) ? <Chip size="small" label={`UAP ${normalizeUap(event?.uap || event?.uap_hex)}`} /> : null}
+          {isBtc && normalizedLap(event) ? <Chip size="small" label={`LAP ${normalizedLap(event)}`} /> : null}
+          {event?.channel !== undefined ? <Chip size="small" label={`CH ${event.channel}`} /> : null}
+          {isBtc && Number(event?.candidate_count || 0) > 1 ? <Chip size="small" label={`${Number(event.candidate_count)} UAP candidates`} /> : null}
+          {isBtc && Number(event?.detections || 0) > 1 ? <Chip size="small" label={`${Number(event.detections)} sightings`} /> : null}
+          {isBtc && uaps.length > 1 ? <Chip size="small" label={`UAPs ${uaps.slice(0, 4).join(' ')}`} /> : null}
+          {event?.rssi_dbfs !== undefined ? <Chip size="small" label={`${Number(event.rssi_dbfs).toFixed(1)} dBFS`} /> : null}
+          {isFm && event?.excess_db !== undefined ? <Chip size="small" label={`+${Number(event.excess_db).toFixed(1)} dB`} /> : null}
+          {isFm && event?.pilot_db !== undefined ? <Chip size="small" label={`pilot ${Number(event.pilot_db).toFixed(1)} dB`} /> : null}
+          {isFm && event?.rds_likely ? <Chip size="small" label="RDS likely" /> : null}
+          {isFm && Number(event?.sightings || 0) > 1 ? <Chip size="small" label={`${Number(event.sightings)} sightings`} /> : null}
+          {event?.confidence !== undefined ? <Chip size="small" label={`${Math.round(Number(event.confidence) * 100)}%`} /> : null}
+        </Stack>
+        <Divider sx={{ my: 1, borderColor: 'rgba(255,255,255,0.08)' }} />
+        <Typography variant="body2" color="text.secondary">{eventDetail(event)}</Typography>
+        {isFm && playbackError && playingFrequency === Number(event?.frequency_mhz) ? (
+          <Typography variant="caption" color="error" sx={{ mt: 0.75, display: 'block' }}>
+            {playbackError}
+          </Typography>
+        ) : null}
+        {event?.address ? (
+          <Typography variant="caption" sx={{ mt: 0.75, display: 'block', fontFamily: 'monospace' }}>
+            {event.address}
+          </Typography>
+        ) : null}
+        {!event?.address && isBtc ? (
+          <Typography variant="caption" sx={{ mt: 0.75, display: 'block', fontFamily: 'monospace' }}>
+            {event?.full_mac || candidateMac(event)}
+          </Typography>
+        ) : null}
+      </Paper>
+    );
+  };
+
+  const renderGroupedEvents = () => protocolGroups.map(({ protocol, rows, stats }, groupIndex) => {
+    const accent = protocol === 'FM' ? '#ffb347' : (protocol === 'BTC' ? '#ffd166' : '#64f0d2');
+    const defaultOpen = !foldProtocolGroups || groupIndex < 1;
+    const body = protocol === 'BTLE'
+      ? Array.from(groupRowsBy(rows, manufacturerGroupLabel).entries())
+        .sort(([a], [b]) => String(a).localeCompare(String(b)))
+        .map(([label, manufacturerRows], idx) => {
+          const subgroupStats = summaryStats(manufacturerRows);
+          return (
+            <Paper
+              key={`${protocol}-${label}`}
+              component="details"
+              defaultOpen={idx < 2}
+              elevation={0}
+              sx={{
+                mb: 1,
+                borderRadius: 2,
+                border: '1px solid rgba(100,240,210,0.18)',
+                bgcolor: 'rgba(255,255,255,0.025)',
+                overflow: 'hidden',
+                '& summary': { cursor: 'pointer', listStyle: 'none', p: 1, '&::-webkit-details-marker': { display: 'none' } },
+              }}
+            >
+              <Stack component="summary" direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+                <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+                  <BluetoothIcon fontSize="small" sx={{ color: accent }} />
+                  <Typography variant="subtitle2" sx={{ fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
+                </Stack>
+                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <Chip size="small" label={`${manufacturerRows.length} device${manufacturerRows.length === 1 ? '' : 's'}`} />
+                  <Chip size="small" label={`${subgroupStats.detections} detections`} />
+                  <Chip size="small" label={`${subgroupStats.bestRssi.toFixed(1)} dBFS`} />
+                  <Chip size="small" label={formatAge(subgroupStats.lastSeen)} />
+                </Stack>
+              </Stack>
+              <Box sx={{ px: 1, pb: 1 }}>
+                {manufacturerRows.map(renderEventCard)}
+              </Box>
+            </Paper>
+          );
+        })
+      : rows.map(renderEventCard);
+
+    return (
+      <Paper
+        key={`protocol-${protocol}`}
+        component="details"
+        defaultOpen={defaultOpen}
+        elevation={0}
+        sx={{
+          mb: 1.25,
+          borderRadius: 2,
+          border: `1px solid ${accent}44`,
+          bgcolor: 'rgba(6, 12, 16, 0.82)',
+          overflow: 'hidden',
+          '& summary': { cursor: 'pointer', listStyle: 'none', p: 1.1, '&::-webkit-details-marker': { display: 'none' } },
+        }}
+      >
+        <Stack component="summary" direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
+            {protocol === 'FM' ? <RadioIcon fontSize="small" sx={{ color: accent }} /> : <BluetoothIcon fontSize="small" sx={{ color: accent }} />}
+            <Typography variant="subtitle1" sx={{ fontWeight: 900, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {protocolGroupLabel(protocol)}
+            </Typography>
+          </Stack>
+          <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <Chip size="small" sx={{ bgcolor: `${accent}22`, color: '#fff' }} label={protocol} />
+            <Chip size="small" label={`${rows.length} card${rows.length === 1 ? '' : 's'}`} />
+            <Chip size="small" label={`${stats.detections} detections`} />
+            <Chip size="small" label={`${stats.bestRssi.toFixed(1)} dBFS`} />
+            <Chip size="small" label={formatAge(stats.lastSeen)} />
+          </Stack>
+        </Stack>
+        <Box sx={{ px: 1, pb: 1 }}>
+          {body}
+        </Box>
+      </Paper>
+    );
+  });
+
   return (
     <Box sx={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
       <Paper
@@ -383,93 +617,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
               {emptyText}
             </Typography>
           </Paper>
-        ) : (
-          filteredEvents.map((event, idx) => {
-            const isBtc = String(event?.protocol || '').toLowerCase() === 'btc';
-            const isFm = isFmEvent(event);
-            const accent = isFm ? '#ffb347' : (isBtc ? '#ffd166' : '#64f0d2');
-            const EventIcon = isFm ? RadioIcon : BluetoothIcon;
-            const uaps = Array.isArray(event?.uap_options) ? event.uap_options : [];
-            const footprintLabel = eventFootprintLabel(event);
-            return (
-              <Paper
-                key={eventKey(event, idx)}
-                elevation={0}
-                sx={{
-                  mb: 1,
-                  p: 1.25,
-                  borderRadius: 2,
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  borderLeft: `4px solid ${accent}`,
-                  bgcolor: 'rgba(8, 10, 12, 0.9)',
-                }}
-              >
-                <Stack direction="row" justifyContent="space-between" spacing={1}>
-                  <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                    <EventIcon fontSize="small" sx={{ color: accent, flexShrink: 0 }} />
-                    <Typography variant="subtitle2" sx={{ fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis' }}>{eventTitle(event)}</Typography>
-                  </Stack>
-                  <Stack direction="row" spacing={0.5} alignItems="center" sx={{ flexShrink: 0 }}>
-                    {isFm && event?.decode_status === 'station' ? (
-                      <Tooltip title={playingFrequency === Number(event?.frequency_mhz) ? 'Stop FM audio' : 'Play FM audio'}>
-                        <IconButton
-                          size="small"
-                          onClick={() => startPlayback(event)}
-                          sx={{ color: accent, p: 0.25 }}
-                          aria-label={playingFrequency === Number(event?.frequency_mhz) ? 'Stop FM audio' : 'Play FM audio'}
-                        >
-                          {playingFrequency === Number(event?.frequency_mhz) ? <StopIcon fontSize="small" /> : <PlayArrowIcon fontSize="small" />}
-                        </IconButton>
-                      </Tooltip>
-                    ) : null}
-                    <Typography variant="caption" color="text.secondary">{formatAge(event?.seen_at)}</Typography>
-                  </Stack>
-                </Stack>
-                <Stack direction="row" spacing={0.5} sx={{ mt: 0.75, flexWrap: 'wrap', gap: 0.5 }}>
-                  <Chip
-                    size="small"
-                    icon={<EventIcon />}
-                    label={protocolLabel(event)}
-                    sx={{ bgcolor: `${accent}22`, color: '#fff', '& .MuiChip-icon': { color: accent } }}
-                  />
-                  {footprintLabel ? <Chip size="small" label={footprintLabel} /> : null}
-                  {isFm && event?.frequency_mhz !== undefined ? <Chip size="small" label={`${Number(event.frequency_mhz).toFixed(1)} MHz`} /> : null}
-                  {isFm ? <Chip size="small" color={event?.decode_status === 'station' ? 'success' : 'warning'} label={event?.decode_status === 'station' ? 'station' : 'potential'} /> : null}
-                  {event?.kind === 'ble_adv' ? <Chip size="small" label="ADV" /> : null}
-                  {isBtc && normalizeUap(event?.uap || event?.uap_hex) ? <Chip size="small" label={`UAP ${normalizeUap(event?.uap || event?.uap_hex)}`} /> : null}
-                  {isBtc && normalizedLap(event) ? <Chip size="small" label={`LAP ${normalizedLap(event)}`} /> : null}
-                  {event?.channel !== undefined ? <Chip size="small" label={`CH ${event.channel}`} /> : null}
-                  {isBtc && Number(event?.candidate_count || 0) > 1 ? <Chip size="small" label={`${Number(event.candidate_count)} UAP candidates`} /> : null}
-                  {isBtc && Number(event?.detections || 0) > 1 ? <Chip size="small" label={`${Number(event.detections)} sightings`} /> : null}
-                  {isBtc && uaps.length > 1 ? <Chip size="small" label={`UAPs ${uaps.slice(0, 4).join(' ')}`} /> : null}
-                  {event?.rssi_dbfs !== undefined ? <Chip size="small" label={`${Number(event.rssi_dbfs).toFixed(1)} dBFS`} /> : null}
-                  {isFm && event?.excess_db !== undefined ? <Chip size="small" label={`+${Number(event.excess_db).toFixed(1)} dB`} /> : null}
-                  {isFm && event?.pilot_db !== undefined ? <Chip size="small" label={`pilot ${Number(event.pilot_db).toFixed(1)} dB`} /> : null}
-                  {isFm && event?.rds_likely ? <Chip size="small" label="RDS likely" /> : null}
-                  {isFm && Number(event?.sightings || 0) > 1 ? <Chip size="small" label={`${Number(event.sightings)} sightings`} /> : null}
-                  {event?.confidence !== undefined ? <Chip size="small" label={`${Math.round(Number(event.confidence) * 100)}%`} /> : null}
-                </Stack>
-                <Divider sx={{ my: 1, borderColor: 'rgba(255,255,255,0.08)' }} />
-                <Typography variant="body2" color="text.secondary">{eventDetail(event)}</Typography>
-                {isFm && playbackError && playingFrequency === Number(event?.frequency_mhz) ? (
-                  <Typography variant="caption" color="error" sx={{ mt: 0.75, display: 'block' }}>
-                    {playbackError}
-                  </Typography>
-                ) : null}
-                {event?.address ? (
-                  <Typography variant="caption" sx={{ mt: 0.75, display: 'block', fontFamily: 'monospace' }}>
-                    {event.address}
-                  </Typography>
-                ) : null}
-                {!event?.address && isBtc ? (
-                  <Typography variant="caption" sx={{ mt: 0.75, display: 'block', fontFamily: 'monospace' }}>
-                    {event?.full_mac || candidateMac(event)}
-                  </Typography>
-                ) : null}
-              </Paper>
-            );
-          })
-        )}
+        ) : renderGroupedEvents()}
       </Box>
     </Box>
   );
