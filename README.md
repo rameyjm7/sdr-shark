@@ -2,7 +2,7 @@
 A React application with a Python backend for SIGINT applications with applied ML using PyTorch and TensorFlow
 
 Signal Intelligence platform at your fingertips...
-<img width="1663" height="922" alt="image" src="https://github.com/user-attachments/assets/1ac44e57-5adc-4a71-ba10-3a4783bd558f" />
+<img width="1866" height="904" alt="image" src="https://github.com/user-attachments/assets/d6798fa3-953b-47dd-bf76-a702983a7d4c" />
 
 
 # How to install
