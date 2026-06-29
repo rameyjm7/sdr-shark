@@ -30,7 +30,7 @@ const ChartComponent = ({
     return Number.isFinite(n) ? n : fallback;
   };
   const maxWaterfallSamples = 375;
-  const chartRendererMode = String(process.env.REACT_APP_SDR_SHARK_CHART_RENDERER || 'plotly').trim().toLowerCase();
+  const chartRendererMode = String(process.env.REACT_APP_SDR_SHARK_CHART_RENDERER || 'gpu').trim().toLowerCase();
   const useGpuCharts = ['gpu', 'webgl', 'opengl'].includes(chartRendererMode);
   const signalClassificationOverlaysEnabled = false;
   const signalMarkerHoldMs = 15000;
