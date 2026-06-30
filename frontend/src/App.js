@@ -135,6 +135,8 @@ const App = () => {
     peaks: [],
     bluetooth: null,
     fm: null,
+    wifi: null,
+    zigbee: null,
   });
 
 
@@ -363,6 +365,9 @@ const App = () => {
   const bluetoothBtcCount = bluetoothEvents.filter((event) => String(event?.protocol || '').toLowerCase() === 'btc').length;
   const fmStationCount = Number(telemetry.fm?.station_count || 0);
   const fmPotentialCount = Number(telemetry.fm?.potential_count || 0);
+  const wifiActivityCount = Number(telemetry.wifi?.activity_count || telemetry.wifi?.event_count || 0);
+  const wifiFrameCount = Number(telemetry.wifi?.frame_count || 0);
+  const zigbeeFrameCount = Number(telemetry.zigbee?.frame_count || telemetry.zigbee?.event_count || 0);
 
   return (
     <ThemeProvider theme={theme}>
@@ -477,6 +482,18 @@ const App = () => {
             sx={telemetryWideChipSx}
             color={telemetry.fm?.active ? 'success' : 'default'}
             label={`FM: ${telemetry.fm?.active ? 'on' : 'off'} ${fmStationCount} stn ${fmPotentialCount} pot`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={telemetry.wifi?.active ? 'success' : 'default'}
+            label={`WiFi: ${telemetry.wifi?.active ? 'on' : 'off'} ${wifiActivityCount} act ${wifiFrameCount} frm`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={telemetry.zigbee?.active ? 'success' : 'default'}
+            label={`ZB: ${telemetry.zigbee?.active ? 'on' : 'off'} ${zigbeeFrameCount} frames`}
           />
           {telemetry.fftError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`FFT err`} /> : null}
           {telemetry.scannerError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`Scanner err`} /> : null}

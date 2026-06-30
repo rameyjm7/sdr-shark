@@ -13,6 +13,8 @@ from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
 from sdr_plot_backend.fm_plugin import FmBroadcastPlugin
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
+from sdr_plot_backend.wifi_plugin import WiFiGatewayPlugin
+from sdr_plot_backend.zigbee_plugin import ZigbeeGatewayPlugin
 
 api_blueprint = Blueprint('api', __name__)
 
@@ -43,6 +45,8 @@ fft_failure_count = 0
 scanner_failure_count = 0
 bluetooth_plugin = BluetoothGatewayPlugin()
 fm_plugin = FmBroadcastPlugin()
+wifi_plugin = WiFiGatewayPlugin()
+zigbee_plugin = ZigbeeGatewayPlugin()
 
 
 def _quantize_mhz(value, step_mhz=0.05):
@@ -175,6 +179,8 @@ def generate_fft_data():
             # Capture and process FFT samples
             capture_samples()
             bluetooth_plugin.update(vars.sdr0)
+            wifi_plugin.update(vars.sdr0)
+            zigbee_plugin.update(vars.sdr0)
             current_fft = process_fft(sample_buffer)
             fm_plugin.update_from_iq_and_fft(
                 sample_buffer,
@@ -487,6 +493,8 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'scannerError': scanner_error,
         'bluetooth': bluetooth_plugin.snapshot(max_events=20),
         'fm': fm_plugin.snapshot(max_events=20),
+        'wifi': wifi_plugin.snapshot(max_events=20),
+        'zigbee': zigbee_plugin.snapshot(max_events=20),
     }
 
     # Convert all settings values to native Python types
@@ -951,6 +959,8 @@ def cleanup():
     global running
     running = False
     bluetooth_plugin.stop()
+    wifi_plugin.stop()
+    zigbee_plugin.stop()
     try:
         vars.sdr0.stop()
     except Exception:

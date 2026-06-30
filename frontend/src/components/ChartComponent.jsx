@@ -359,6 +359,8 @@ const ChartComponent = ({
             peaks: telemetryPeaks.slice(0, 16),
             bluetooth: data?.bluetooth || null,
             fm: data?.fm || null,
+            wifi: data?.wifi || null,
+            zigbee: data?.zigbee || null,
           });
         }
       } catch (error) {
