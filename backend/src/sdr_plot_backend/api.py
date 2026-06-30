@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request, current_app, Response
 
 from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
 from sdr_plot_backend.fm_plugin import FmBroadcastPlugin
+from sdr_plot_backend.iq_session import IQReplaySDR, IQSessionRecorder
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
 from sdr_plot_backend.wifi_plugin import WiFiGatewayPlugin
@@ -47,6 +48,11 @@ bluetooth_plugin = BluetoothGatewayPlugin()
 fm_plugin = FmBroadcastPlugin()
 wifi_plugin = WiFiGatewayPlugin()
 zigbee_plugin = ZigbeeGatewayPlugin()
+iq_recorder = IQSessionRecorder()
+live_sdr = None
+replay_sdr = None
+live_state = None
+replay_lock = threading.Lock()
 
 
 def _quantize_mhz(value, step_mhz=0.05):
@@ -124,6 +130,13 @@ def _to_builtin(value):
     if isinstance(value, np.generic):
         return value.item()
     return value
+
+
+def _stop_protocol_plugins():
+    bluetooth_plugin.stop()
+    wifi_plugin.stop()
+    zigbee_plugin.stop()
+    fm_plugin.stop_playback()
 
 
 def downsample(data, target_length=256):
@@ -495,6 +508,10 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'fm': fm_plugin.snapshot(max_events=20),
         'wifi': wifi_plugin.snapshot(max_events=20),
         'zigbee': zigbee_plugin.snapshot(max_events=20),
+        'iqSession': {
+            'recording': iq_recorder.status(),
+            'replay': replay_sdr.iq_tap_info() if replay_sdr is not None else None,
+        },
     }
 
     # Convert all settings values to native Python types
@@ -607,6 +624,109 @@ def fm_audio_batch():
     if not pcm:
         return Response(b'', mimetype='application/octet-stream', status=204)
     return Response(pcm, mimetype='application/octet-stream')
+
+
+@api_blueprint.route('/api/iq/record/start', methods=['POST'])
+def iq_record_start():
+    payload = request.get_json(silent=True) or {}
+    label = str(payload.get('label') or '').strip()
+    max_seconds = max(0.0, float(payload.get('max_seconds') or 0.0))
+    max_mb = max(0.0, float(payload.get('max_mb') or 0.0))
+    try:
+        status = iq_recorder.start(vars.sdr0, label=label, max_seconds=max_seconds, max_mb=max_mb)
+    except Exception as exc:
+        return jsonify({'ok': False, 'error': str(exc)}), 400
+    return jsonify({'ok': True, 'recording': _to_builtin(status)})
+
+
+@api_blueprint.route('/api/iq/record/stop', methods=['POST'])
+def iq_record_stop():
+    return jsonify({'ok': True, 'recording': _to_builtin(iq_recorder.stop())})
+
+
+@api_blueprint.route('/api/iq/record/status')
+def iq_record_status():
+    return jsonify({'ok': True, 'recording': _to_builtin(iq_recorder.status())})
+
+
+@api_blueprint.route('/api/iq/sessions')
+def iq_sessions():
+    return jsonify({'ok': True, 'sessions': _to_builtin(iq_recorder.list_sessions())})
+
+
+@api_blueprint.route('/api/iq/replay/start', methods=['POST'])
+def iq_replay_start():
+    global live_sdr, replay_sdr, live_state
+    payload = request.get_json(silent=True) or {}
+    session_id = str(payload.get('id') or payload.get('session_id') or '').strip()
+    loop = bool(payload.get('loop', True))
+    speed = max(0.01, min(float(payload.get('speed') or 1.0), 20.0))
+    if not session_id:
+        return jsonify({'ok': False, 'error': 'Missing session id'}), 400
+
+    sessions = {str(session.get('id') or ''): session for session in iq_recorder.list_sessions()}
+    session = sessions.get(session_id)
+    if not session:
+        return jsonify({'ok': False, 'error': f'Unknown IQ session {session_id}'}), 404
+
+    with replay_lock:
+        try:
+            iq_recorder.stop()
+            _stop_protocol_plugins()
+            if replay_sdr is not None:
+                replay_sdr.stop()
+                replay_sdr = None
+            if live_sdr is None and getattr(vars.sdr0, 'backend', '') != 'replay':
+                live_sdr = vars.sdr0
+                live_state = {
+                    'sdr_name': vars.sdr_name,
+                    'radio_name': vars.radio_name,
+                }
+            replay_sdr = IQReplaySDR(
+                session_dir=os.path.abspath(str(session.get('path'))),
+                loop=loop,
+                speed=speed,
+                size=vars.sample_size,
+            )
+            vars._ensure_radio_settings('replay')
+            vars.sdr_name = 'replay'
+            vars.sdr_settings['replay'].frequency = replay_sdr.frequency
+            vars.sdr_settings['replay'].sampleRate = replay_sdr.sample_rate
+            vars.sdr_settings['replay'].bandwidth = replay_sdr.bandwidth
+            vars.sdr_settings['replay'].gain = replay_sdr.gain
+            vars.sdr0 = replay_sdr
+            vars.radio_name = replay_sdr.device_id
+            replay_sdr.start()
+        except Exception as exc:
+            return jsonify({'ok': False, 'error': str(exc)}), 400
+    return jsonify({'ok': True, 'replay': _to_builtin(replay_sdr.iq_tap_info())})
+
+
+@api_blueprint.route('/api/iq/replay/stop', methods=['POST'])
+def iq_replay_stop():
+    global live_sdr, replay_sdr, live_state
+    with replay_lock:
+        _stop_protocol_plugins()
+        if replay_sdr is not None:
+            replay_sdr.stop()
+            replay_sdr = None
+        if live_sdr is not None:
+            vars.sdr0 = live_sdr
+            if live_state is not None:
+                vars.sdr_name = live_state.get('sdr_name') or vars.sdr_name
+                vars.radio_name = live_state.get('radio_name') or vars.radio_name
+            else:
+                vars.radio_name = live_sdr.device_id or live_sdr.name or vars.sdr_name
+            live_sdr = None
+            live_state = None
+    return jsonify({'ok': True})
+
+
+@api_blueprint.route('/api/iq/replay/status')
+def iq_replay_status():
+    with replay_lock:
+        replay = replay_sdr.iq_tap_info() if replay_sdr is not None else None
+    return jsonify({'ok': True, 'active': replay is not None, 'replay': _to_builtin(replay)})
 
 
 @api_blueprint.route('/api/analytics')
@@ -841,7 +961,7 @@ def upload_classifier():
 @api_blueprint.route('/api/select_sdr', methods=['POST'])
 def select_sdr():
     sdr_name = request.json.get('sdr_name', 'hackrf')
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay'}
     driver = str(sdr_name).split(':', 1)[0]
     if driver not in supported_drivers:
         return jsonify({
@@ -849,6 +969,8 @@ def select_sdr():
             'result': 0,
             'message': f"SDR '{sdr_name}' is discovered but not stream-capable in SDR Shark yet."
         }), 400
+    if driver == 'replay':
+        return jsonify({'status': 'success', 'result': int(getattr(vars.sdr0, "backend", "") == "replay")})
     result = vars.reselect_radio(sdr_name)
     if result:
         return jsonify({'status': 'success', 'result': result})
@@ -857,7 +979,7 @@ def select_sdr():
 
 @api_blueprint.route('/api/sdr_devices', methods=['GET'])
 def get_sdr_devices():
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay'}
 
     def _filter_supported(devices):
         return [d for d in devices if str(d.get('driver', '')).lower() in supported_drivers]
@@ -915,7 +1037,7 @@ def update_settings():
             return jsonify(_to_builtin({'success': True, 'settings': settings}))
         requested_sdr = str(settings.get('sdr') or '').strip()
         if requested_sdr and requested_sdr != (vars.sdr0.device_id or vars.radio_name):
-            supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200'}
+            supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay'}
             driver = requested_sdr.split(':', 1)[0]
             if driver not in supported_drivers:
                 return jsonify({
@@ -958,9 +1080,15 @@ def stop_sweep():
 def cleanup():
     global running
     running = False
+    iq_recorder.stop()
     bluetooth_plugin.stop()
     wifi_plugin.stop()
     zigbee_plugin.stop()
+    if replay_sdr is not None:
+        try:
+            replay_sdr.stop()
+        except Exception:
+            pass
     try:
         vars.sdr0.stop()
     except Exception:

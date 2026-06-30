@@ -122,7 +122,7 @@ class ZigbeeGatewayPlugin:
 
     def _should_decode(self, info: dict[str, Any]) -> bool:
         backend = info.get("backend")
-        if backend not in {"gateway", "soapy"}:
+        if backend not in {"gateway", "soapy", "replay"}:
             return False
         center = int(info.get("center_freq_hz") or 0)
         rate = int(info.get("sample_rate_sps") or 0)
@@ -291,6 +291,9 @@ class ZigbeeGatewayPlugin:
             event["source_stream_id"] = info.get("stream_id", "")
             event["rssi_dbfs"] = round(peak_dbfs, 1)
             event["duration_ms"] = round(duration_ms, 3)
+            decoded_text = self._printable_payload_text(str(event.get("mac", {}).get("payload_hex") or ""))
+            if decoded_text:
+                event["decoded_text"] = decoded_text
             self._decoded_count += 1
             self._append_event(event)
 
@@ -302,6 +305,27 @@ class ZigbeeGatewayPlugin:
 
     def _set_error(self, message: str) -> None:
         self._last_error = str(message or "")
+
+    @staticmethod
+    def _printable_payload_text(payload_hex: str) -> str:
+        try:
+            payload = bytes.fromhex(str(payload_hex or ""))
+        except ValueError:
+            return ""
+        runs: list[bytes] = []
+        current = bytearray()
+        for value in payload:
+            if 0x20 <= value <= 0x7E:
+                current.append(value)
+                continue
+            if len(current) >= 3:
+                runs.append(bytes(current))
+            current.clear()
+        if len(current) >= 3:
+            runs.append(bytes(current))
+        if not runs:
+            return ""
+        return max(runs, key=len).decode("ascii", errors="replace")
 
     @staticmethod
     def _dbfs(value: float) -> float:

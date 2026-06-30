@@ -1,15 +1,19 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
   AccordionSummary,
   Box,
+  Button,
+  Chip,
   FormControlLabel,
+  MenuItem,
   Switch,
   TextField,
   Typography,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import axios from 'axios';
 
 const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, setSettings }) => {
   const toFinite = (value, fallback) => {
@@ -30,6 +34,10 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
   const lockBandwidthSampleRate = typeof settings.lockBandwidthSampleRate === 'boolean' ? settings.lockBandwidthSampleRate : false;
   const dcSuppress = typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : false;
   const sweepingEnabled = typeof settings.sweeping_enabled === 'boolean' ? settings.sweeping_enabled : false;
+  const [iqSessions, setIqSessions] = useState([]);
+  const [selectedIqSession, setSelectedIqSession] = useState('');
+  const [iqStatus, setIqStatus] = useState(null);
+  const [iqBusy, setIqBusy] = useState(false);
   const selectedMaxSampleRateMHz = Math.max(
     0.25,
     toFinite(selectedDevice ? Number(selectedDevice.max_sample_rate_sps) / 1e6 : sampleRate, 20),
@@ -53,6 +61,89 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
       showSecondTrace: e.target.checked,
     }));
   };
+
+  const loadIqSessions = async () => {
+    try {
+      const [sessionsResponse, statusResponse, replayResponse] = await Promise.all([
+        axios.get('/api/iq/sessions'),
+        axios.get('/api/iq/record/status'),
+        axios.get('/api/iq/replay/status'),
+      ]);
+      const sessions = sessionsResponse.data?.sessions || [];
+      setIqSessions(sessions);
+      if (!selectedIqSession && sessions.length > 0) {
+        setSelectedIqSession(sessions[0].id || '');
+      }
+      setIqStatus({
+        recording: statusResponse.data?.recording || null,
+        replay: replayResponse.data?.replay || null,
+      });
+    } catch (error) {
+      console.error('Error loading IQ sessions:', error);
+    }
+  };
+
+  useEffect(() => {
+    loadIqSessions();
+    const timer = setInterval(loadIqSessions, 2500);
+    return () => clearInterval(timer);
+  }, []);
+
+  const startIqRecording = async () => {
+    setIqBusy(true);
+    try {
+      await axios.post('/api/iq/record/start', {
+        label: `${selectedDevice?.id || settings.sdr || 'sdr'}-${Math.round(frequency)}MHz`,
+        max_seconds: 0,
+        max_mb: 0,
+      });
+      await loadIqSessions();
+    } catch (error) {
+      console.error('Error starting IQ recording:', error);
+    } finally {
+      setIqBusy(false);
+    }
+  };
+
+  const stopIqRecording = async () => {
+    setIqBusy(true);
+    try {
+      await axios.post('/api/iq/record/stop');
+      await loadIqSessions();
+    } catch (error) {
+      console.error('Error stopping IQ recording:', error);
+    } finally {
+      setIqBusy(false);
+    }
+  };
+
+  const startIqReplay = async () => {
+    if (!selectedIqSession) return;
+    setIqBusy(true);
+    try {
+      await axios.post('/api/iq/replay/start', { id: selectedIqSession, loop: true, speed: 1 });
+      await loadIqSessions();
+    } catch (error) {
+      console.error('Error starting IQ replay:', error);
+    } finally {
+      setIqBusy(false);
+    }
+  };
+
+  const stopIqReplay = async () => {
+    setIqBusy(true);
+    try {
+      await axios.post('/api/iq/replay/stop');
+      await loadIqSessions();
+    } catch (error) {
+      console.error('Error stopping IQ replay:', error);
+    } finally {
+      setIqBusy(false);
+    }
+  };
+
+  const recordingActive = Boolean(iqStatus?.recording?.active);
+  const replayActive = Boolean(iqStatus?.replay);
 
   return (
     <Box>
@@ -148,6 +239,66 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               label="Suppress DC Spike"
             />
           </Box>
+        </AccordionDetails>
+      </Accordion>
+
+      <Accordion disableGutters sx={{ mt: 1, borderRadius: 2, overflow: 'hidden' }}>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 2 }}>
+          <Typography variant="h6">IQ Capture / Replay</Typography>
+        </AccordionSummary>
+        <AccordionDetails sx={{ px: 1.5, pb: 1.5 }}>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center', mb: 1 }}>
+            <Chip
+              size="small"
+              color={recordingActive ? 'error' : 'default'}
+              label={recordingActive ? `recording ${(Number(iqStatus?.recording?.bytes || 0) / 1048576).toFixed(1)} MB` : 'recorder idle'}
+            />
+            <Chip
+              size="small"
+              color={replayActive ? 'success' : 'default'}
+              label={replayActive ? 'replay active' : 'live source'}
+            />
+          </Box>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1 }}>
+            <Button size="small" variant="contained" disabled={iqBusy || recordingActive || replayActive} onClick={startIqRecording}>
+              Record Session
+            </Button>
+            <Button size="small" variant="outlined" disabled={iqBusy || !recordingActive} onClick={stopIqRecording}>
+              Stop Recording
+            </Button>
+            <Button size="small" variant="outlined" disabled={iqBusy} onClick={loadIqSessions}>
+              Refresh
+            </Button>
+          </Box>
+          <TextField
+            select
+            fullWidth
+            size="small"
+            label="Replay Session"
+            value={selectedIqSession}
+            onChange={(event) => setSelectedIqSession(event.target.value)}
+            sx={{ mb: 1 }}
+            InputLabelProps={{ shrink: true }}
+          >
+            {iqSessions.length === 0 ? (
+              <MenuItem value="">No IQ sessions recorded</MenuItem>
+            ) : iqSessions.map((session) => (
+              <MenuItem key={session.id} value={session.id}>
+                {session.id} · {(Number(session.bytes || 0) / 1048576).toFixed(1)} MB
+              </MenuItem>
+            ))}
+          </TextField>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+            <Button size="small" variant="contained" disabled={iqBusy || !selectedIqSession || recordingActive || replayActive} onClick={startIqReplay}>
+              Replay Into SDR Shark
+            </Button>
+            <Button size="small" variant="outlined" disabled={iqBusy || !replayActive} onClick={stopIqReplay}>
+              Return To Live Radio
+            </Button>
+          </Box>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            Saves raw CS8 IQ plus metadata under ~/.sdr-shark/iq-sessions for offline decoder verification.
+          </Typography>
         </AccordionDetails>
       </Accordion>
 

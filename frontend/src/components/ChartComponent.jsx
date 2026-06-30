@@ -1168,14 +1168,25 @@ const ChartComponent = ({
       )
     ) {
       clearTraceDataSilent('all');
-      startupAutoscaleDoneRef.current = false;
-      startupAutoscaleAttemptsRef.current = 0;
     }
     lastTuneRef.current = curr;
   }, [settings.frequency, settings.sampleRate, settings.bandwidth]);
 
   const nudgeFrequency = (deltaMHz) => {
-    applyQuickTune(quickCenterMHz + deltaMHz, quickSpanMHz);
+    applyQuickTune(toFinite(quickCenterMHz, safeFrequencyMHz) + deltaMHz, quickSpanMHz);
+  };
+
+  const handleQuickTuneKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      applyQuickTune(quickCenterMHz, quickSpanMHz);
+      event.currentTarget.blur();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      setQuickCenterMHz(safeFrequencyMHz);
+      setQuickSpanMHz(safeSampleRateMHz);
+      event.currentTarget.blur();
+    }
   };
 
   const applyYLimits = (nextMin, nextMax) => {
@@ -1293,7 +1304,8 @@ const ChartComponent = ({
           type="number"
           step="0.1"
           value={quickCenterMHz}
-          onChange={(e) => setQuickCenterMHz(toFinite(e.target.value, quickCenterMHz))}
+          onChange={(e) => setQuickCenterMHz(e.target.value)}
+          onKeyDown={handleQuickTuneKeyDown}
           onBlur={() => applyQuickTune(quickCenterMHz, quickSpanMHz)}
           style={quickTuneInputStyle}
         />
@@ -1302,7 +1314,8 @@ const ChartComponent = ({
           type="number"
           step="0.1"
           value={quickSpanMHz}
-          onChange={(e) => setQuickSpanMHz(Math.max(0.2, toFinite(e.target.value, quickSpanMHz)))}
+          onChange={(e) => setQuickSpanMHz(e.target.value)}
+          onKeyDown={handleQuickTuneKeyDown}
           onBlur={() => applyQuickTune(quickCenterMHz, quickSpanMHz)}
           style={quickTuneInputStyle}
         />

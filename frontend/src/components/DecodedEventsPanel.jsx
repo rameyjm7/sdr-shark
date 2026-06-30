@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Chip, Divider, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Chip, Divider, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import BluetoothIcon from '@mui/icons-material/Bluetooth';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RadioIcon from '@mui/icons-material/Radio';
@@ -350,6 +350,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
   const retentionSec = Math.max(60, Math.min(3600, Number(settings?.activityLogRetentionSec) || 600));
   const maxHistoryEvents = Math.max(500, Math.min(5000, Math.round((retentionSec / 60) * 240)));
   const [historyEvents, setHistoryEvents] = useState([]);
+  const [clearedAt, setClearedAt] = useState(0);
   const [filterMode, setFilterMode] = useState('all');
   const [playingFrequency, setPlayingFrequency] = useState(null);
   const [playbackError, setPlaybackError] = useState('');
@@ -363,19 +364,28 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
     setHistoryEvents((prev) => {
       const byKey = new Map();
       prev.forEach((event, idx) => {
-        byKey.set(eventKey(event, idx), event);
+        if (eventSeenAt(event) > clearedAt) {
+          byKey.set(eventKey(event, idx), event);
+        }
       });
       events.forEach((event, idx) => {
-        byKey.set(eventKey(event, idx), event);
+        if (eventSeenAt(event) > clearedAt) {
+          byKey.set(eventKey(event, idx), event);
+        }
       });
 
-      const cutoff = (Date.now() / 1000) - retentionSec;
+      const cutoff = Math.max((Date.now() / 1000) - retentionSec, clearedAt);
       return Array.from(byKey.values())
         .filter((event) => eventSeenAt(event) >= cutoff)
         .sort((a, b) => eventSeenAt(b) - eventSeenAt(a))
         .slice(0, maxHistoryEvents);
     });
-  }, [events, retentionSec, maxHistoryEvents]);
+  }, [events, retentionSec, maxHistoryEvents, clearedAt]);
+
+  const clearActivity = () => {
+    setClearedAt(Date.now() / 1000);
+    setHistoryEvents([]);
+  };
 
   const sortedEvents = historyEvents;
   const displayEvents = useMemo(() => mergeDisplayEvents(sortedEvents), [sortedEvents]);
@@ -731,9 +741,20 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
         }}
       >
         <Typography variant="overline" color="text.secondary">Decoded Intelligence</Typography>
-        <Stack direction="row" spacing={1} alignItems="center">
-          <RadioIcon fontSize="small" sx={{ color: '#64f0d2' }} />
-          <Typography variant="h6" sx={{ lineHeight: 1.15 }}>Signal Activity</Typography>
+        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+            <RadioIcon fontSize="small" sx={{ color: '#64f0d2' }} />
+            <Typography variant="h6" sx={{ lineHeight: 1.15 }}>Signal Activity</Typography>
+          </Stack>
+          <Button
+            size="small"
+            variant="outlined"
+            disabled={historyEvents.length === 0}
+            onClick={clearActivity}
+            sx={{ minWidth: 0, px: 1.25, py: 0.25 }}
+          >
+            Clear
+          </Button>
         </Stack>
         <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.75 }}>
           <Chip size="small" color={decoderActive ? 'success' : 'default'} label={decoderActive ? 'decoder on' : 'decoder idle'} />

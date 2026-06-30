@@ -135,7 +135,7 @@ class BluetoothGatewayPlugin:
         }
 
     def _stream_info(self, sdr: Any) -> dict[str, Any]:
-        if getattr(sdr, "backend", "") == "soapy" and hasattr(sdr, "iq_tap_info"):
+        if getattr(sdr, "backend", "") in {"soapy", "replay"} and hasattr(sdr, "iq_tap_info"):
             return dict(sdr.iq_tap_info())
         if hasattr(sdr, "gateway_stream_info"):
             return dict(sdr.gateway_stream_info())
@@ -143,7 +143,7 @@ class BluetoothGatewayPlugin:
 
     def _should_decode(self, info: dict[str, Any]) -> bool:
         backend = info.get("backend")
-        if backend not in {"gateway", "soapy"}:
+        if backend not in {"gateway", "soapy", "replay"}:
             return False
         if backend == "gateway" and not info.get("stream_id"):
             return False
@@ -156,7 +156,7 @@ class BluetoothGatewayPlugin:
         return high >= BT_LOW_HZ and low <= BT_HIGH_HZ
 
     def _run(self, sdr: Any, info: dict[str, Any], stop: threading.Event) -> None:
-        if info.get("source") == "soapy_tap":
+        if info.get("source") in {"soapy_tap", "iq_replay"}:
             self._run_soapy_tap(sdr, info, stop)
             return
         self._run_gateway_stream(info, stop)

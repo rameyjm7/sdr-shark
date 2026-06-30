@@ -295,8 +295,7 @@ const ControlPanel = ({
 
   const handleChange = async (e) => {
     const { name, value, type, checked } = e.target;
-    const parsed = parseFloat(value);
-    const newValue = type === 'checkbox' ? checked : (Number.isFinite(parsed) ? parsed : settings[name]);
+    const newValue = type === 'checkbox' ? checked : value;
     const newSettings = { ...settings, [name]: newValue };
     setSettings(newSettings);
 
