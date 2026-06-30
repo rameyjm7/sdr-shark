@@ -48,6 +48,7 @@ const normalizedLap = (event) => {
 const isBtcEvent = (event) => String(event?.protocol || '').toLowerCase() === 'btc';
 const isFmEvent = (event) => String(event?.protocol || '').toLowerCase() === 'fm' || event?.kind === 'fm_station';
 const isWifiEvent = (event) => String(event?.protocol || '').toLowerCase() === 'wifi' || ['wifi_activity', 'wifi_frame'].includes(event?.kind);
+const isWifiFrame = (event) => isWifiEvent(event) && event?.kind === 'wifi_frame';
 const isZigbeeEvent = (event) => String(event?.protocol || '').toLowerCase() === 'zigbee' || event?.kind === 'zigbee_frame';
 
 const protocolKey = (event) => {
@@ -107,10 +108,59 @@ const mergeBtcRows = (rows) => {
   });
 };
 
+const wifiIdentity = (event) => (
+  event?.ssid ||
+  event?.bssid ||
+  event?.source_mac ||
+  event?.transmitter ||
+  event?.destination ||
+  event?.receiver ||
+  ''
+);
+
+const mergeWifiRows = (rows) => {
+  const groups = new Map();
+  rows.filter(isWifiFrame).forEach((row, idx) => {
+    const key = wifiIdentity(row) || eventKey(row, idx);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+
+  return Array.from(groups.values()).map((groupRows) => {
+    const latest = groupRows.reduce(
+      (winner, row) => (eventSeenAt(row) > eventSeenAt(winner) ? row : winner),
+      groupRows[0],
+    );
+    const named = groupRows.find((row) => row?.ssid) || latest;
+    const channels = Array.from(new Set(groupRows.map((row) => row?.channel).filter(hasValue))).sort((a, b) => Number(a) - Number(b));
+    const sourceMacs = Array.from(new Set(groupRows.map((row) => row?.source_mac || row?.transmitter).filter(Boolean))).slice(0, 4);
+    return {
+      ...latest,
+      ...named,
+      protocol: 'wifi',
+      kind: 'wifi_frame',
+      detections: groupRows.length,
+      group_count: groupRows.length,
+      channels,
+      source_macs: sourceMacs,
+      seen_at: eventSeenAt(latest),
+      rssi_dbfs: latest?.rssi_dbfs ?? named?.rssi_dbfs,
+      rssi_dbm: latest?.rssi_dbm ?? named?.rssi_dbm,
+      channel: latest?.channel ?? named?.channel,
+    };
+  });
+};
+
 const mergeDisplayEvents = (events) => {
   const btcRows = mergeBtcRows(events);
-  const nonBtcRows = events.filter((event) => !isBtcEvent(event));
-  return [...nonBtcRows, ...btcRows].sort((a, b) => {
+  const wifiRows = mergeWifiRows(events);
+  const hasWifiFrames = wifiRows.length > 0;
+  const nonMergedRows = events.filter((event) => (
+    !isBtcEvent(event) &&
+    !isWifiFrame(event) &&
+    !(hasWifiFrames && event?.kind === 'wifi_activity')
+  ));
+  return [...nonMergedRows, ...wifiRows, ...btcRows].sort((a, b) => {
     const aFm = isFmEvent(a);
     const bFm = isFmEvent(b);
     if (aFm && bFm) return Number(a?.frequency_mhz || 0) - Number(b?.frequency_mhz || 0);
@@ -122,7 +172,7 @@ const mergeDisplayEvents = (events) => {
 const eventIdentity = (event) => {
   if (isBtcEvent(event)) return event?.full_mac || candidateMac(event);
   if (event?.address) return event.address;
-  if (isWifiEvent(event)) return event?.ssid || event?.source_mac || event?.destination || event?.bssid || event?.transmitter || event?.receiver || `wifi-${event?.channel || event?.likely_center_freq_hz || ''}`;
+  if (isWifiEvent(event)) return wifiIdentity(event) || `wifi-${event?.channel || event?.likely_center_freq_hz || ''}`;
   if (isZigbeeEvent(event)) return event?.mac?.source_address || event?.mac?.destination_address || event?.psdu_hex || '';
   if (event?.identity) return event.identity;
   if (event?.name) return event.name;
@@ -148,7 +198,7 @@ const eventTitle = (event) => {
   if (isBtcEvent(event)) return event?.full_mac || candidateMac(event);
   if (isFmEvent(event)) return event?.identity || `FM ${Number(event?.frequency_mhz || 0).toFixed(1)} MHz`;
   if (isWifiEvent(event)) {
-    if (event?.kind === 'wifi_frame') return event?.ssid ? `WiFi ${event.ssid}` : (event?.source_mac || event?.destination || event?.bssid || event?.transmitter || event?.receiver || 'WiFi frame');
+    if (event?.kind === 'wifi_frame') return event?.ssid ? `WiFi ${event.ssid}` : (wifiIdentity(event) || 'WiFi frame');
     return `WiFi activity${event?.channel ? ` CH ${event.channel}` : ''}`;
   }
   if (isZigbeeEvent(event)) {
@@ -263,6 +313,7 @@ const eventDetail = (event) => {
     const mac = event?.mac || {};
     const parts = [];
     if (mac.frame_type) parts.push(`${mac.frame_type} frame`);
+    if (event?.decoded_text) parts.push(`text "${event.decoded_text}"`);
     if (mac.source_address) parts.push(`src ${mac.source_address}`);
     if (mac.destination_address) parts.push(`dst ${mac.destination_address}`);
     if (event?.fcs_ok) parts.push('FCS OK');
@@ -520,16 +571,18 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           {isWifi && event?.source_mac ? <Chip size="small" label={`SA ${event.source_mac}`} /> : null}
           {isWifi && event?.destination ? <Chip size="small" label={`DA ${event.destination}`} /> : null}
           {isWifi && event?.bssid ? <Chip size="small" label={`BSSID ${event.bssid}`} /> : null}
+          {isWifi && Array.isArray(event?.channels) && event.channels.length > 1 ? <Chip size="small" label={`CH ${event.channels.join(', ')}`} /> : null}
           {isWifi && event?.score !== undefined ? <Chip size="small" label={`score ${Number(event.score).toFixed(2)}`} /> : null}
           {isZigbee && event?.fcs_ok !== undefined ? <Chip size="small" color={event.fcs_ok ? 'success' : 'warning'} label={event.fcs_ok ? 'FCS OK' : 'FCS bad'} /> : null}
           {isZigbee && event?.mac?.frame_type ? <Chip size="small" label={String(event.mac.frame_type)} /> : null}
           {isZigbee && event?.mac?.source_pan_id !== undefined && event?.mac?.source_pan_id !== null ? <Chip size="small" label={`PAN ${event.mac.source_pan_id}`} /> : null}
+          {isZigbee && event?.decoded_text ? <Chip size="small" label={`Text ${event.decoded_text}`} /> : null}
           {event?.kind === 'ble_adv' ? <Chip size="small" label="ADV" /> : null}
           {isBtc && normalizeUap(event?.uap || event?.uap_hex) ? <Chip size="small" label={`UAP ${normalizeUap(event?.uap || event?.uap_hex)}`} /> : null}
           {isBtc && normalizedLap(event) ? <Chip size="small" label={`LAP ${normalizedLap(event)}`} /> : null}
           {hasValue(event?.channel) ? <Chip size="small" label={`CH ${event.channel}`} /> : null}
           {isBtc && Number(event?.candidate_count || 0) > 1 ? <Chip size="small" label={`${Number(event.candidate_count)} UAP candidates`} /> : null}
-          {isBtc && Number(event?.detections || 0) > 1 ? <Chip size="small" label={`${Number(event.detections)} sightings`} /> : null}
+          {(isBtc || isWifi) && Number(event?.detections || 0) > 1 ? <Chip size="small" label={`${Number(event.detections)} sightings`} /> : null}
           {isBtc && uaps.length > 1 ? <Chip size="small" label={`UAPs ${uaps.slice(0, 4).join(' ')}`} /> : null}
           {event?.rssi_dbm !== undefined ? <Chip size="small" label={`RSSI ${Number(event.rssi_dbm).toFixed(0)} dBm`} /> : null}
           {event?.rssi_dbm === undefined && event?.rssi_dbfs !== undefined ? <Chip size="small" label={`RSSI ${Number(event.rssi_dbfs).toFixed(1)} dBFS`} /> : null}
@@ -559,6 +612,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
         {isZigbee && (event?.mac?.source_address || event?.mac?.destination_address || event?.psdu_hex) ? (
           <Typography variant="caption" sx={{ mt: 0.75, display: 'block', fontFamily: 'monospace' }}>
             {[
+              event?.decoded_text ? `text "${event.decoded_text}"` : '',
               event?.mac?.source_address ? `src ${event.mac.source_address}` : '',
               event?.mac?.destination_address ? `dst ${event.mac.destination_address}` : '',
               event?.psdu_hex ? `psdu ${String(event.psdu_hex).slice(0, 48)}${String(event.psdu_hex).length > 48 ? '...' : ''}` : '',
@@ -571,6 +625,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
               event?.source_mac ? `SA ${event.source_mac}` : '',
               event?.destination ? `DA ${event.destination}` : '',
               event?.ssid ? `SSID ${event.ssid}` : '',
+              Array.isArray(event?.source_macs) && event.source_macs.length > 1 ? `SA ${event.source_macs.join(', ')}` : '',
               hasValue(event?.channel) ? `CH ${event.channel}` : '',
               event?.rssi_dbm !== undefined ? `RSSI ${Number(event.rssi_dbm).toFixed(0)} dBm` : '',
               event?.rssi_dbm === undefined && event?.rssi_dbfs !== undefined ? `RSSI ${Number(event.rssi_dbfs).toFixed(1)} dBFS` : '',

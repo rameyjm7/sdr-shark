@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import json
+import math
+import subprocess
 import sys
 import threading
 import time
@@ -8,9 +11,17 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 
 WIFI_24_LOW_HZ = 2_401_000_000
 WIFI_24_HIGH_HZ = 2_495_000_000
+WIFI_24_CHANNELS_HZ = {
+    channel: 2_412_000_000 + ((channel - 1) * 5_000_000)
+    for channel in range(1, 14)
+}
+WIFI_24_CHANNELS_HZ[14] = 2_484_000_000
+WIFI_DECODE_RATE_SPS = 20_000_000
 
 
 class WiFiGatewayPlugin:
@@ -39,6 +50,10 @@ class WiFiGatewayPlugin:
         self._frame_pcap_count = 0
         self._next_frame_poll_at = 0.0
         self._last_activity_by_channel: dict[int, dict[str, Any]] = {}
+        self._mac_decoders: dict[int, subprocess.Popen[bytes]] = {}
+        self._mac_decoder_readers: dict[int, threading.Thread] = {}
+        self._mac_decoder_backoff_until: dict[int, float] = {}
+        self._channelizer_sample_index = 0
 
     def update(self, sdr: Any) -> None:
         if not self.enabled:
@@ -76,6 +91,7 @@ class WiFiGatewayPlugin:
             self._thread.join(timeout=1.0)
         self._thread = None
         self._active_key = None
+        self._stop_mac_decoders()
 
     def snapshot(self, max_events: int = 50) -> dict[str, Any]:
         with self._lock:
@@ -99,6 +115,7 @@ class WiFiGatewayPlugin:
             "frame_jsonl": str(self._frame_jsonl_path),
             "frame_jsonl_offset": self._frame_jsonl_offset,
             "frame_jsonl_exists": self._frame_jsonl_path.exists(),
+            "mac_decoder_channels": sorted(self._mac_decoders.keys()),
             "last_error": self._last_error,
         }
 
@@ -151,6 +168,7 @@ class WiFiGatewayPlugin:
                     source_device_id=str(info.get("device_id") or ""),
                 ):
                     self._append_event(event, info=info)
+                self._feed_mac_decoders(cs8, info)
                 self._poll_frame_sources(info)
         except Exception as exc:
             if not stop.is_set():
@@ -161,6 +179,7 @@ class WiFiGatewayPlugin:
                     sdr.release_iq_tap(subscriber_id)
                 except Exception:
                     pass
+            self._stop_mac_decoders()
 
     def _build_demodulator(self) -> Any | None:
         src = self.rf_sentinel_root / "rf_platform" / "plugins" / "wifi-80211" / "src"
@@ -228,6 +247,233 @@ class WiFiGatewayPlugin:
         with self._lock:
             self._events.append(item)
 
+    def _feed_mac_decoders(self, raw_i8: bytes, info: dict[str, Any]) -> None:
+        if str(os.getenv("SDR_SHARK_WIFI_MAC_DECODER", "1")).strip().lower() in {"0", "false", "no"}:
+            return
+        sample_rate = int(info.get("sample_rate_sps") or 0)
+        center_freq = int(info.get("center_freq_hz") or 0)
+        if sample_rate < WIFI_DECODE_RATE_SPS or center_freq <= 0:
+            return
+        active_channels = self._active_decode_channels(info)
+        self._ensure_mac_decoders(active_channels, info)
+        if not self._mac_decoders:
+            return
+
+        samples = self._cs8_to_complex(raw_i8)
+        if samples.size < 1024:
+            return
+        start_index = self._channelizer_sample_index
+        self._channelizer_sample_index += int(samples.size)
+        for channel, proc in list(self._mac_decoders.items()):
+            if proc.poll() is not None or proc.stdin is None:
+                self._close_mac_decoder(channel)
+                continue
+            channel_freq = WIFI_24_CHANNELS_HZ.get(channel)
+            if channel_freq is None:
+                continue
+            try:
+                fc32 = self._extract_wifi_channel(samples, sample_rate, center_freq, channel_freq, start_index)
+                if fc32.size:
+                    proc.stdin.write(fc32.astype(np.complex64, copy=False).tobytes())
+            except BrokenPipeError:
+                self._close_mac_decoder(channel)
+            except Exception as exc:
+                self._set_error(f"WiFi channelizer CH {channel} failed: {exc}")
+
+    def _active_decode_channels(self, info: dict[str, Any]) -> list[int]:
+        now = time.time()
+        ttl = float(os.getenv("SDR_SHARK_WIFI_MAC_DECODER_ACTIVITY_TTL", "20") or "20")
+        channels = [
+            channel
+            for channel, event in self._last_activity_by_channel.items()
+            if now - float(event.get("seen_at") or 0.0) <= ttl
+        ]
+        center_channel = self._channel_from_frequency_hz(info.get("center_freq_hz"))
+        if center_channel is not None:
+            channels.append(center_channel)
+        visible = set(self._visible_wifi_channels(info))
+        deduped = sorted({int(channel) for channel in channels if int(channel) in visible})
+        max_decoders = max(1, int(os.getenv("SDR_SHARK_WIFI_MAC_DECODER_MAX_CHANNELS", "4") or "4"))
+        center_freq = float(info.get("center_freq_hz") or 0)
+        deduped.sort(key=lambda channel: abs(float(WIFI_24_CHANNELS_HZ[channel]) - center_freq))
+        return deduped[:max_decoders]
+
+    def _visible_wifi_channels(self, info: dict[str, Any]) -> list[int]:
+        center_freq = float(info.get("center_freq_hz") or 0)
+        sample_rate = float(info.get("sample_rate_sps") or 0)
+        if center_freq <= 0 or sample_rate <= 0:
+            return []
+        low = center_freq - (sample_rate / 2.0)
+        high = center_freq + (sample_rate / 2.0)
+        return [
+            channel
+            for channel, freq in WIFI_24_CHANNELS_HZ.items()
+            if (freq - 8_000_000) >= low and (freq + 8_000_000) <= high
+        ]
+
+    def _ensure_mac_decoders(self, channels: list[int], info: dict[str, Any]) -> None:
+        wanted = set(channels)
+        for channel in list(self._mac_decoders.keys()):
+            if channel not in wanted:
+                self._close_mac_decoder(channel)
+        for channel in channels:
+            if time.time() < self._mac_decoder_backoff_until.get(channel, 0.0):
+                continue
+            proc = self._mac_decoders.get(channel)
+            if proc is not None and proc.poll() is None:
+                continue
+            self._start_mac_decoder(channel, info)
+
+    def _start_mac_decoder(self, channel: int, info: dict[str, Any]) -> None:
+        src = self.rf_sentinel_root / "rf_platform" / "plugins" / "wifi-80211" / "src"
+        stack_root = Path(os.getenv("WIFI_80211_STACK_ROOT", "/home/jake/workspace/SDR/wifi_80211_sdr_stack")).expanduser()
+        env = os.environ.copy()
+        stack_python = stack_root / "local" / "lib" / "python3.12" / "dist-packages"
+        stack_lib = stack_root / "local" / "lib" / "x86_64-linux-gnu"
+        env["PYTHONPATH"] = f"{src}:{stack_root}:{stack_python}:{env.get('PYTHONPATH', '')}".rstrip(":")
+        env["LD_LIBRARY_PATH"] = f"{stack_lib}:{env.get('LD_LIBRARY_PATH', '')}".rstrip(":")
+        env["WIFI_80211_STACK_ROOT"] = str(stack_root)
+        log_dir = Path(os.getenv("SDR_SHARK_LOG_DIR", "/var/log/sdr-shark")).expanduser()
+        try:
+            log_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            log_dir = Path("/tmp")
+        channel_freq = WIFI_24_CHANNELS_HZ[channel]
+        pcap_path = log_dir / f"wifi-ch{channel}-{os.getpid()}.pcap"
+        decoder_script = Path(
+            os.getenv("SDR_SHARK_WIFI_DECODER_SCRIPT", str(stack_root / "scripts" / "wifi_rx_bladerf_gr.py"))
+        ).expanduser()
+        cmd = [
+            sys.executable,
+            str(decoder_script),
+            "--freq",
+            str(float(channel_freq)),
+            "--rate",
+            str(float(WIFI_DECODE_RATE_SPS)),
+            "--bandwidth",
+            str(float(WIFI_DECODE_RATE_SPS)),
+            "--input-stdin",
+            "--pcap",
+            str(pcap_path),
+            "--jsonl",
+            str(self._frame_jsonl_path),
+        ]
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                cwd=str(stack_root),
+                env=env,
+                bufsize=0,
+            )
+        except Exception as exc:
+            self._set_error(f"WiFi MAC decoder CH {channel} start failed: {exc}")
+            self._mac_decoder_backoff_until[channel] = time.time() + 30.0
+            return
+        self._mac_decoders[channel] = proc
+        reader = threading.Thread(target=self._read_mac_decoder_stdout, args=(channel, proc, dict(info)), daemon=True)
+        self._mac_decoder_readers[channel] = reader
+        reader.start()
+
+    def _read_mac_decoder_stdout(self, channel: int, proc: subprocess.Popen[bytes], info: dict[str, Any]) -> None:
+        if proc.stdout is None:
+            return
+        for raw_line in proc.stdout:
+            text = raw_line.decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            if not text.startswith("{"):
+                if str(os.getenv("SDR_SHARK_WIFI_MAC_DECODER_LOG", "0")).strip() in {"1", "true", "yes"}:
+                    self._set_error(f"WiFi MAC CH {channel}: {text[:160]}")
+                continue
+            try:
+                event = json.loads(text)
+            except json.JSONDecodeError:
+                continue
+            if "decoded_frames" in event:
+                continue
+            event.setdefault("channel", channel)
+            event.setdefault("frequency_mhz", float(WIFI_24_CHANNELS_HZ[channel]) / 1e6)
+            try:
+                from wifi_80211 import normalize_frame_event
+                event = normalize_frame_event(event, source=f"wifi_mac_ch{channel}")
+            except Exception:
+                event.update({"protocol": "wifi", "kind": "wifi_frame", "source": f"wifi_mac_ch{channel}"})
+            self._append_event(event, info=info)
+        code = proc.poll()
+        if code not in {None, 0}:
+            self._set_error(f"WiFi MAC decoder CH {channel} exited with {code}")
+            self._mac_decoder_backoff_until[channel] = time.time() + 30.0
+
+    def _close_mac_decoder(self, channel: int) -> None:
+        proc = self._mac_decoders.pop(channel, None)
+        self._mac_decoder_readers.pop(channel, None)
+        if proc is None:
+            return
+        try:
+            if proc.stdin is not None:
+                proc.stdin.close()
+        except Exception:
+            pass
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=1.0)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    def _stop_mac_decoders(self) -> None:
+        for channel in list(self._mac_decoders.keys()):
+            self._close_mac_decoder(channel)
+
+    @staticmethod
+    def _cs8_to_complex(raw_i8: bytes) -> np.ndarray:
+        raw = np.frombuffer(raw_i8, dtype=np.int8)
+        if raw.size < 2:
+            return np.empty(0, dtype=np.complex64)
+        raw = raw[: raw.size - (raw.size % 2)].astype(np.float32)
+        return ((raw[0::2] + 1j * raw[1::2]) / 128.0).astype(np.complex64, copy=False)
+
+    @staticmethod
+    def _extract_wifi_channel(
+        samples: np.ndarray,
+        sample_rate_sps: int,
+        center_freq_hz: int,
+        channel_freq_hz: int,
+        start_index: int,
+    ) -> np.ndarray:
+        offset_hz = float(channel_freq_hz - center_freq_hz)
+        if abs(offset_hz) > 1.0:
+            n = np.arange(samples.size, dtype=np.float64) + float(start_index)
+            samples = samples * np.exp((-2j * math.pi * offset_hz / float(sample_rate_sps)) * n)
+        if int(sample_rate_sps) == WIFI_DECODE_RATE_SPS:
+            return samples.astype(np.complex64, copy=False)
+        out_len = max(1, int(round(samples.size * (WIFI_DECODE_RATE_SPS / float(sample_rate_sps)))))
+        return WiFiGatewayPlugin._resample_complex_fft(samples, out_len)
+
+    @staticmethod
+    def _resample_complex_fft(samples: np.ndarray, out_len: int) -> np.ndarray:
+        in_len = int(samples.size)
+        out_len = int(out_len)
+        if in_len <= 0 or out_len <= 0:
+            return np.empty(0, dtype=np.complex64)
+        if in_len == out_len:
+            return samples.astype(np.complex64, copy=False)
+        spectrum = np.fft.fftshift(np.fft.fft(samples))
+        if out_len < in_len:
+            start = (in_len - out_len) // 2
+            spectrum = spectrum[start : start + out_len]
+        else:
+            pad_before = (out_len - in_len) // 2
+            pad_after = out_len - in_len - pad_before
+            spectrum = np.pad(spectrum, (pad_before, pad_after), mode="constant")
+        return (np.fft.ifft(np.fft.ifftshift(spectrum)) * (out_len / in_len)).astype(np.complex64, copy=False)
+
     def _set_error(self, message: str) -> None:
         self._last_error = str(message or "")
 
@@ -275,11 +521,6 @@ class WiFiGatewayPlugin:
             if channel is not None:
                 event["channel"] = channel
                 return
-        tuned_center = self._coerce_float(info.get("center_freq_hz") or event.get("center_freq_hz"))
-        channel = self._channel_from_frequency_hz(tuned_center)
-        if channel is not None:
-            event["channel"] = channel
-            event["likely_center_freq_hz"] = int(tuned_center)
 
     @staticmethod
     def _coerce_int(value: Any) -> int | None:

@@ -368,6 +368,12 @@ const App = () => {
   const wifiActivityCount = Number(telemetry.wifi?.activity_count || telemetry.wifi?.event_count || 0);
   const wifiFrameCount = Number(telemetry.wifi?.frame_count || 0);
   const zigbeeFrameCount = Number(telemetry.zigbee?.frame_count || telemetry.zigbee?.event_count || 0);
+  const zigbeeBurstCount = Number(telemetry.zigbee?.burst_count || 0);
+  const zigbeeChunkCount = Number(telemetry.zigbee?.chunk_count || 0);
+  const zigbeeRuntimeChannels = Array.isArray(telemetry.zigbee?.runtime_channels) ? telemetry.zigbee.runtime_channels : [];
+  const zigbeeChannelLabel = zigbeeRuntimeChannels.length > 0
+    ? `${zigbeeRuntimeChannels[0]}-${zigbeeRuntimeChannels[zigbeeRuntimeChannels.length - 1]}`
+    : '-';
 
   return (
     <ThemeProvider theme={theme}>
@@ -493,7 +499,7 @@ const App = () => {
             size="small"
             sx={telemetryWideChipSx}
             color={telemetry.zigbee?.active ? 'success' : 'default'}
-            label={`ZB: ${telemetry.zigbee?.active ? 'on' : 'off'} ${zigbeeFrameCount} frames`}
+            label={`ZB: ${telemetry.zigbee?.active ? 'on' : 'off'} ch ${zigbeeChannelLabel} ${zigbeeFrameCount}f ${zigbeeBurstCount}b ${zigbeeChunkCount}iq`}
           />
           {telemetry.fftError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`FFT err`} /> : null}
           {telemetry.scannerError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`Scanner err`} /> : null}

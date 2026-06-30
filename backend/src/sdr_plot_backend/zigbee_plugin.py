@@ -39,8 +39,15 @@ class ZigbeeGatewayPlugin:
         self._last_start_attempt = 0.0
         self._decode_interval_s = max(
             0.0,
-            float(os.getenv("SDR_SHARK_ZIGBEE_DECODE_INTERVAL_MS", "100") or "100") / 1000.0,
+            float(os.getenv("SDR_SHARK_ZIGBEE_DECODE_INTERVAL_MS", "0") or "0") / 1000.0,
         )
+        self._runtime_channels: list[int] = []
+        self._burst_count = 0
+        self._decoded_count = 0
+        self._reject_count = 0
+        self._chunk_count = 0
+        self._decode_chunk_count = 0
+        self._last_diagnostics: dict[str, Any] = {}
 
     def update(self, sdr: Any) -> None:
         if not self.enabled:
@@ -78,6 +85,7 @@ class ZigbeeGatewayPlugin:
             self._thread.join(timeout=1.0)
         self._thread = None
         self._active_key = None
+        self._runtime_channels = []
 
     def snapshot(self, max_events: int = 50) -> dict[str, Any]:
         with self._lock:
@@ -89,6 +97,13 @@ class ZigbeeGatewayPlugin:
             "event_count": len(events),
             "frame_count": sum(1 for event in events if event.get("kind") == "zigbee_frame"),
             "channels": channels,
+            "runtime_channels": list(self._runtime_channels),
+            "burst_count": int(self._burst_count),
+            "decoded_count": int(self._decoded_count),
+            "reject_count": int(self._reject_count),
+            "chunk_count": int(self._chunk_count),
+            "decode_chunk_count": int(self._decode_chunk_count),
+            "last_diagnostics": dict(self._last_diagnostics),
             "events": events,
             "last_error": self._last_error,
         }
@@ -122,10 +137,26 @@ class ZigbeeGatewayPlugin:
         if not runtimes:
             self._set_error("No Zigbee channels overlap the current receive window")
             return
+        self._runtime_channels = [int(getattr(runtime.plan, "channel", 0)) for runtime in runtimes]
+        self._chunk_count = 0
+        self._burst_count = 0
+        self._decoded_count = 0
+        self._reject_count = 0
+        self._decode_chunk_count = 0
+        self._last_diagnostics = {}
+        aggregate_ms = max(0.0, float(os.getenv("SDR_SHARK_ZIGBEE_AGGREGATE_MS", "3.5") or "3.5"))
+        sample_rate_sps = int(info.get("sample_rate_sps") or 0)
+        aggregate_bytes = int(round((float(sample_rate_sps) * aggregate_ms / 1000.0) * 2.0))
+        aggregate_bytes = max(2, aggregate_bytes + (aggregate_bytes % 2))
+        max_aggregate_bytes = max(aggregate_bytes, int(os.getenv("SDR_SHARK_ZIGBEE_MAX_AGGREGATE_BYTES", "524288") or "524288"))
+        pending = bytearray()
 
         subscriber_id = ""
+        old_tap_interval = getattr(sdr, "_iq_tap_interval_s", None)
         try:
-            subscriber_id, chunks = sdr.subscribe_iq_tap(max_chunks=32)
+            if old_tap_interval is not None:
+                setattr(sdr, "_iq_tap_interval_s", 0.0)
+            subscriber_id, chunks = sdr.subscribe_iq_tap(max_chunks=256)
             self._set_error("")
             next_decode_at = 0.0
             while not stop.is_set():
@@ -135,11 +166,19 @@ class ZigbeeGatewayPlugin:
                     continue
                 if not cs8:
                     break
+                self._chunk_count += 1
+                pending.extend(cs8)
+                if len(pending) < aggregate_bytes:
+                    continue
+                if len(pending) > max_aggregate_bytes:
+                    del pending[: max(0, len(pending) - max_aggregate_bytes)]
                 now = time.monotonic()
                 if now < next_decode_at:
                     continue
                 next_decode_at = now + self._decode_interval_s
-                self._process_cs8_chunk(cs8, info, runtimes)
+                self._process_cs8_chunk(bytes(pending), info, runtimes)
+                self._decode_chunk_count += 1
+                pending.clear()
         except Exception as exc:
             if not stop.is_set():
                 self._set_error(str(exc))
@@ -147,6 +186,11 @@ class ZigbeeGatewayPlugin:
             if subscriber_id and hasattr(sdr, "release_iq_tap"):
                 try:
                     sdr.release_iq_tap(subscriber_id)
+                except Exception:
+                    pass
+            if old_tap_interval is not None:
+                try:
+                    setattr(sdr, "_iq_tap_interval_s", old_tap_interval)
                 except Exception:
                     pass
 
@@ -211,21 +255,33 @@ class ZigbeeGatewayPlugin:
             return
 
         sample_rate_sps = int(info.get("sample_rate_sps") or 0)
+        min_duration_ms = float(os.getenv("SDR_SHARK_ZIGBEE_MIN_BURST_MS", "0.05") or "0.05")
+        min_peak_dbfs = float(os.getenv("SDR_SHARK_ZIGBEE_MIN_PEAK_DBFS", "-80") or "-80")
         for runtime, burst in detect_wideband_bursts(
             raw_chunk=cs8,
             input_sample_rate_sps=sample_rate_sps,
             runtimes=runtimes,
         ):
+            self._burst_count += 1
             duration_ms = float(burst.duration_seconds * 1000.0)
             peak_dbfs = self._dbfs(float(getattr(burst, "peak", 0.0)))
-            if duration_ms < 0.8 or peak_dbfs < -30.0:
+            if duration_ms < min_duration_ms or peak_dbfs < min_peak_dbfs:
+                self._reject_count += 1
                 continue
             try:
                 frame = runtime.decoder.decode(burst)
             except Exception as exc:
                 self._set_error(f"Zigbee decoder error: {exc}")
+                self._reject_count += 1
                 continue
             if frame is None or not bool(getattr(frame, "fcs_ok", False)):
+                diag = getattr(runtime.decoder, "last_diagnostics", None)
+                if diag is not None and hasattr(diag, "to_dict"):
+                    try:
+                        self._last_diagnostics = dict(diag.to_dict())
+                    except Exception:
+                        self._last_diagnostics = {}
+                self._reject_count += 1
                 continue
             event = json.loads(frame.to_json())
             event["protocol"] = "zigbee"
@@ -235,6 +291,7 @@ class ZigbeeGatewayPlugin:
             event["source_stream_id"] = info.get("stream_id", "")
             event["rssi_dbfs"] = round(peak_dbfs, 1)
             event["duration_ms"] = round(duration_ms, 3)
+            self._decoded_count += 1
             self._append_event(event)
 
     def _append_event(self, event: dict[str, Any]) -> None:
