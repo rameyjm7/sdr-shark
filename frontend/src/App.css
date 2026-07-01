@@ -97,3 +97,31 @@ html, body, #root, .control-panel {
     cursor: ew-resize;
     background-color: #444;
 }
+
+.gutter {
+    flex: 0 0 auto;
+    background: linear-gradient(90deg, transparent, rgba(80, 160, 210, 0.28), transparent);
+    position: relative;
+}
+
+.gutter.gutter-horizontal {
+    cursor: col-resize;
+}
+
+.gutter.gutter-horizontal::after {
+    content: "";
+    position: absolute;
+    top: 10px;
+    bottom: 10px;
+    left: 50%;
+    width: 2px;
+    transform: translateX(-50%);
+    border-radius: 2px;
+    background: rgba(144, 202, 249, 0.42);
+}
+
+.gutter.gutter-horizontal:hover::after {
+    width: 4px;
+    background: rgba(144, 202, 249, 0.92);
+    box-shadow: 0 0 12px rgba(144, 202, 249, 0.55);
+}

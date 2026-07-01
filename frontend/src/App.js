@@ -20,6 +20,7 @@ import './App.css';
 
 const ACTIVITY_LOG_RETENTION_STORAGE_KEY = 'sdrshark_activity_log_retention_sec_v1';
 const LAST_SDR_STORAGE_KEY = 'sdrshark_last_selected_sdr_v1';
+const PANEL_SPLIT_STORAGE_KEY = 'sdrshark_panel_split_v1';
 
 const initialActivityLogRetentionSec = () => {
   const saved = Number(localStorage.getItem(ACTIVITY_LOG_RETENTION_STORAGE_KEY));
@@ -274,19 +275,39 @@ const App = () => {
 
   useEffect(() => {
     const adjustPlotWidth = () => {
-      const leftPanelWidth = document.getElementById('leftPanel').clientWidth;
-      const totalWidth = document.getElementById('plotsContainer').clientWidth;
+      const leftPanelWidth = document.getElementById('leftPanel')?.clientWidth || 0;
+      const totalWidth = document.getElementById('plotsContainer')?.clientWidth || 1;
       const newPlotWidth = (leftPanelWidth / totalWidth) * 100;
 
       setPlotWidth(newPlotWidth);
     };
 
+    const savedSizes = (() => {
+      try {
+        const parsed = JSON.parse(localStorage.getItem(PANEL_SPLIT_STORAGE_KEY) || 'null');
+        if (
+          Array.isArray(parsed) &&
+          parsed.length === 2 &&
+          parsed.every((value) => Number.isFinite(Number(value)))
+        ) {
+          return parsed.map(Number);
+        }
+      } catch (_error) {
+        // Ignore invalid local storage and use the default split.
+      }
+      return [70, 30];
+    })();
+
     const splitInstance = Split(['#leftPanel', '#rightPanel'], {
-      sizes: [74, 26], // Keep the right panel narrower by default.
-      minSize: 100,    // Allow more shrinking of panels
-      gutterSize: 10,  // Size of the gutter (resize handle)
+      sizes: savedSizes,
+      minSize: [520, 320],
+      gutterSize: 12,
       cursor: 'col-resize',
       onDrag: adjustPlotWidth,
+      onDragEnd: (sizes) => {
+        localStorage.setItem(PANEL_SPLIT_STORAGE_KEY, JSON.stringify(sizes));
+        adjustPlotWidth();
+      },
     });
 
     adjustPlotWidth(); // Adjust the width on initial load
@@ -511,12 +532,11 @@ const App = () => {
           <Box
             id="leftPanel"
             sx={{
-              pr: '10px',
-              borderRight: '2px solid #444',
+              pr: '8px',
               height: '100%',
               minHeight: 0,
               overflow: 'hidden',
-              flex: '0 1 auto',
+              flex: '0 0 auto',
             }}
           >
             <Plots
@@ -541,13 +561,13 @@ const App = () => {
           <Box
             id="rightPanel"
             sx={{
-              pl: '10px',
+              pl: '8px',
               height: '100%',
               minHeight: 0,
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'column',
-              flex: '0 1 auto',
+              flex: '0 0 auto',
             }}
           >
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
