@@ -1,7 +1,7 @@
 // Author: Jacob M. Ramey
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Typography, CssBaseline, Tabs, Tab, Box, Chip, Button, Dialog, DialogContent, DialogTitle, IconButton } from '@mui/material';
+import { Typography, CssBaseline, Box, Chip, Button, Dialog, DialogContent, DialogTitle, IconButton } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -11,7 +11,6 @@ import Scanner from './components/Scanner';
 import Plots from './components/Plots';
 import Analysis from './components/Analysis';
 import Classifiers from './components/ControlPanel/Classifiers';
-import MiniSpectrum from './components/MiniSpectrum';
 import DecodedEventsPanel from './components/DecodedEventsPanel';
 import axios from 'axios';
 import './App.css';
@@ -64,27 +63,6 @@ const theme = createTheme({
   },
 });
 
-function TabPanel(props) {
-  const { children, value, index, ...other } = props;
-
-  return (
-    <div
-      role="tabpanel"
-      hidden={value !== index}
-      id={`tabpanel-${index}`}
-      aria-labelledby={`tab-${index}`}
-      {...other}
-      style={{ height: '100%', minHeight: 0, overflow: 'hidden' }}
-    >
-      {value === index && (
-        <Box sx={{ p: 1, height: '100%', minHeight: 0, overflow: 'hidden' }}>
-          {children}
-        </Box>
-      )}
-    </div>
-  );
-}
-
 const App = () => {
   const [settings, setSettings] = useState({
     frequency: 0,
@@ -107,11 +85,7 @@ const App = () => {
   const [maxY, setMaxY] = useState(0);
   // const [waterfallSamples, setWaterfallSamples] = useState(100);
   const [showWaterfall, setShowWaterfall] = useState(true);
-  const [tabValue, setTabValue] = useState(0);
-  const [files, setFiles] = useState([]);
-  const [currentPath, setCurrentPath] = useState('/');
-  const [metadata, setMetadata] = useState(null);
-  const [fftData, setFftData] = useState([]);
+  const [modalView, setModalView] = useState(null);
   const [plotWidth, setPlotWidth] = useState(60); // Initial plot width in percentage
   const [verticalLines, setVerticalLines] = useState([]);  // State for vertical lines
   const [horizontalLines, setHorizontalLines] = useState([]);  // State for horizontal lines
@@ -125,6 +99,7 @@ const App = () => {
     droppedFrames: 0,
     staleMs: 0,
     sweepEnabled: false,
+    scannerMode: null,
     mainFrameSeq: 0,
     scannerFrameSeq: 0,
     scannerFresh: false,
@@ -291,29 +266,6 @@ const App = () => {
       });
   };
 
-  const handleTabChange = (event, newValue) => {
-    setTabValue(newValue);
-  };
-
-  const handleAnalyze = (file) => {
-    const relativePath = currentPath + file.name;
-
-    axios.get(`/api/file_manager/files/metadata`, {
-      params: {
-        path: file.name,
-        current_dir: currentPath,
-      }
-    })
-      .then(response => {
-        setMetadata(response.data.metadata);
-        setFftData(response.data.fft_data);
-        setTabValue(2);  // Switch to Analysis tab
-      })
-      .catch(error => {
-        console.error('Error analyzing file:', error);
-      });
-  };
-
   useEffect(() => {
     const adjustPlotWidth = () => {
       const leftPanelWidth = document.getElementById('leftPanel').clientWidth;
@@ -374,6 +326,20 @@ const App = () => {
   const zigbeeChannelLabel = zigbeeRuntimeChannels.length > 0
     ? `${zigbeeRuntimeChannels[0]}-${zigbeeRuntimeChannels[zigbeeRuntimeChannels.length - 1]}`
     : '-';
+  const scannerModeActive = Boolean(telemetry.scannerMode?.active);
+  const scannerModeLabel = telemetry.scannerMode?.step?.label || 'Idle';
+  const modalTitles = {
+    scanner: 'Scanner',
+    analysis: 'Analysis',
+    classifiers: 'Classifiers',
+    about: 'About SDR Shark',
+  };
+  const navButtons = [
+    { key: 'scanner', label: 'Scanner' },
+    { key: 'analysis', label: 'Analysis' },
+    { key: 'classifiers', label: 'Classifiers' },
+    { key: 'about', label: 'About' },
+  ];
 
   return (
     <ThemeProvider theme={theme}>
@@ -395,34 +361,34 @@ const App = () => {
           sx={{
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between',
+            justifyContent: 'flex-end',
+            gap: 1,
             padding: '0 16px',
             width: '100%',
           }}
         >
-          {/* Tabs on the left */}
-          <Tabs
-            value={tabValue}
-            onChange={handleTabChange}
-            variant="scrollable"
-            scrollButtons="auto"
-            sx={{
-              flexGrow: 1, // Ensure tabs take up available space
-            }}
-          >
-            <Tab label="MAIN" />
-            <Tab label="SCANNER" />
-            <Tab label="ANALYSIS" />
-            <Tab label="CLASSIFIERS" />
-            <Tab label="ABOUT" />
-          </Tabs>
-
-          {/* SDR Shark text and icon on the right */}
+          {navButtons.map((item) => (
+            <Button
+              key={item.key}
+              size="small"
+              variant="text"
+              onClick={() => setModalView(item.key)}
+              sx={{
+                color: '#d9f0ff',
+                borderRadius: '3px',
+                px: 1.25,
+                '&:hover': {
+                  bgcolor: 'rgba(144, 202, 249, 0.10)',
+                },
+              }}
+            >
+              {item.label}
+            </Button>
+          ))}
           <Box
             sx={{
               display: 'flex',
               alignItems: 'center',
-              marginLeft: 'auto', // Push to the right
               gap: 1,
             }}
           >
@@ -474,7 +440,12 @@ const App = () => {
           <Chip size="small" sx={telemetryChipSx} label={`Latency: ${Math.round(telemetry.latencyMs || 0)} ms`} />
           <Chip size="small" sx={telemetryWideChipSx} color={(telemetry.staleMs || 0) > 3000 ? 'error' : 'default'} label={`Last data age: ${Math.round(telemetry.staleMs || 0)} ms`} />
           <Chip size="small" sx={telemetryWideChipSx} label={`Time: ${telemetry.frameTime || 'n/a'}`} />
-          <Chip size="small" sx={telemetryChipSx} label={`Sweep: ${telemetry.sweepEnabled ? 'On' : 'Off'}`} />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={scannerModeActive ? 'success' : (telemetry.sweepEnabled ? 'primary' : 'default')}
+            label={scannerModeActive ? `Scan: ${scannerModeLabel}` : `Sweep: ${telemetry.sweepEnabled ? 'On' : 'Off'}`}
+          />
           <Chip size="small" sx={telemetryChipSx} label={`Main seq: ${telemetry.mainFrameSeq || 0}`} />
           <Chip size="small" sx={telemetryChipSx} label={`Scanner seq: ${telemetry.scannerFrameSeq || 0}`} />
           <Chip
@@ -518,110 +489,24 @@ const App = () => {
               flex: '0 1 auto',
             }}
           >
-            <TabPanel value={tabValue} index={0}>
-              <Plots
-                settings={settings}
-                setSettings={setSettings}
-                minY={minY}
-                maxY={maxY}
-                setMinY={setMinY}
-                setMaxY={setMaxY}
-                // updateInterval={updateInterval}
-                // waterfallSamples={waterfallSamples}
-                showWaterfall={showWaterfall}
-                showSecondTrace={showSecondTrace}
-                plotWidth={plotWidth}
-                addVerticalLines={addVerticalLines}
-                verticalLines={verticalLines}
-                addHorizontalLines={addHorizontalLines}
-                horizontalLines={horizontalLines}
-                onTelemetryUpdate={setTelemetry}
-              />
-            </TabPanel>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 0, textAlign: 'center', overflow: 'hidden' }}>
-            <TabPanel
-              value={tabValue}
-              index={4}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textAlign: 'center',
-                height: '100%',
-                padding: '20px'
-              }}
-            >
-              <Typography variant="h6" sx={{ marginBottom: '20px' }}>
-                About SDR Shark
-              </Typography>
-
-              <img
-                src="shark_icon.png"
-                alt="Shark Icon"
-                style={{ width: '150px', height: '150px', marginBottom: '20px' }}
-              />
-
-              <Typography variant="body1" style={{ marginBottom: '10px' }}>
-                Author: Jacob M. Ramey
-              </Typography>
-              <Typography variant="body1" style={{ marginBottom: '10px' }}>
-                Github Repo: <a href="https://github.com/rameyjm7/SDR-Shark" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7/SDR-Shark</a>
-              </Typography>
-              <Typography variant="body1" style={{ marginBottom: '10px' }}>
-                Github: <a href="https://github.com/rameyjm7" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7</a>
-              </Typography>
-              <Typography variant="body1" style={{ marginBottom: '10px' }}>
-                LinkedIn: <a href="https://www.linkedin.com/in/rameyjm/" target="_blank" rel="noopener noreferrer">https://www.linkedin.com/in/rameyjm/</a>
-              </Typography>
-              <Typography variant="body1" style={{ marginBottom: '10px' }}>
-                License: <a href="https://github.com/rameyjm7/SDR-Shark/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">View License</a>
-              </Typography>
-              <Typography variant="body2" style={{ marginTop: '20px' }}>
-                Copyright (c) 2024 Jacob M. Ramey
-              </Typography>
-            </TabPanel>
-
-            <TabPanel
-              value={tabValue}
-              index={1}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'flex-start', // Start content at the top
-                alignItems: 'stretch', // Stretch content to full width
-                height: '100%', // Occupy full height of the tab
-                width: '100%', // Occupy full width of the tab
-                padding: '0', // Remove extra padding
-                boxSizing: 'border-box',
-                overflow: 'hidden', // Prevent unwanted scrollbars
-              }}
-            >
-              <Scanner settings={settings} setSettings={setSettings} />
-            </TabPanel>
-            <TabPanel value={tabValue} index={2}>
-              <Analysis
-                settings={settings}
-                setSettings={setSettings}
-                addVerticalLines={addVerticalLines}
-                clearVerticalLines={clearVerticalLines}
-                addHorizontalLines={addHorizontalLines}
-                clearHorizontalLines={clearHorizontalLines}
-              />
-            </TabPanel>
-            <TabPanel value={tabValue} index={3}>
-              <Classifiers
-                settings={settings}
-                setSettings={setSettings}
-                addVerticalLines={addVerticalLines}
-                clearVerticalLines={clearVerticalLines}
-                addHorizontalLines={addHorizontalLines}
-                clearHorizontalLines={clearHorizontalLines}
-              />
-            </TabPanel>
-
-
-            </Box>
+            <Plots
+              settings={settings}
+              setSettings={setSettings}
+              minY={minY}
+              maxY={maxY}
+              setMinY={setMinY}
+              setMaxY={setMaxY}
+              // updateInterval={updateInterval}
+              // waterfallSamples={waterfallSamples}
+              showWaterfall={showWaterfall}
+              showSecondTrace={showSecondTrace}
+              plotWidth={plotWidth}
+              addVerticalLines={addVerticalLines}
+              verticalLines={verticalLines}
+              addHorizontalLines={addHorizontalLines}
+              horizontalLines={horizontalLines}
+              onTelemetryUpdate={setTelemetry}
+            />
           </Box>
           <Box
             id="rightPanel"
@@ -635,20 +520,95 @@ const App = () => {
               flex: '0 1 auto',
             }}
           >
-            {tabValue !== 0 && (
-              <MiniSpectrum
-                settings={settings}
-                minY={minY}
-                maxY={maxY}
-                verticalLines={verticalLines}
-                horizontalLines={horizontalLines}
-              />
-            )}
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
               <DecodedEventsPanel telemetry={telemetry} settings={settings} />
             </Box>
           </Box>
         </Box>
+
+        <Dialog
+          open={Boolean(modalView)}
+          onClose={() => setModalView(null)}
+          fullWidth
+          maxWidth={modalView === 'about' ? 'sm' : 'lg'}
+          PaperProps={{
+            sx: {
+              height: modalView === 'about' ? 'auto' : '82vh',
+              maxHeight: '88vh',
+              bgcolor: '#101418',
+              backgroundImage: 'linear-gradient(145deg, rgba(20, 40, 50, 0.96), rgba(6, 8, 10, 0.98))',
+              border: '1px solid rgba(144,202,249,0.18)',
+            },
+          }}
+        >
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 1 }}>
+            <Box>
+              <Typography variant="overline" color="text.secondary">SDR Shark</Typography>
+              <Typography variant="h6">{modalTitles[modalView] || 'SDR Shark'}</Typography>
+            </Box>
+            <IconButton onClick={() => setModalView(null)} aria-label="Close panel">
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent sx={{ minHeight: 0, overflow: modalView === 'about' ? 'auto' : 'hidden', px: 1.5, pb: 1.5 }}>
+            {modalView === 'scanner' && (
+              <Box sx={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
+                <Scanner settings={settings} setSettings={setSettings} onClose={() => setModalView(null)} />
+              </Box>
+            )}
+            {modalView === 'analysis' && (
+              <Box sx={{ height: '100%', minHeight: 0, overflow: 'auto', pr: 1 }}>
+                <Analysis
+                  settings={settings}
+                  setSettings={setSettings}
+                  addVerticalLines={addVerticalLines}
+                  clearVerticalLines={clearVerticalLines}
+                  addHorizontalLines={addHorizontalLines}
+                  clearHorizontalLines={clearHorizontalLines}
+                />
+              </Box>
+            )}
+            {modalView === 'classifiers' && (
+              <Box sx={{ height: '100%', minHeight: 0, overflow: 'auto', pr: 1 }}>
+                <Classifiers
+                  settings={settings}
+                  setSettings={setSettings}
+                  addVerticalLines={addVerticalLines}
+                  clearVerticalLines={clearVerticalLines}
+                  addHorizontalLines={addHorizontalLines}
+                  clearHorizontalLines={clearHorizontalLines}
+                />
+              </Box>
+            )}
+            {modalView === 'about' && (
+              <Box sx={{ textAlign: 'center', py: 2 }}>
+                <img
+                  src="shark_icon.png"
+                  alt="Shark Icon"
+                  style={{ width: '150px', height: '150px', marginBottom: '20px' }}
+                />
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  Author: Jacob M. Ramey
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  Github Repo: <a href="https://github.com/rameyjm7/SDR-Shark" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7/SDR-Shark</a>
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  Github: <a href="https://github.com/rameyjm7" target="_blank" rel="noopener noreferrer">https://github.com/rameyjm7</a>
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  LinkedIn: <a href="https://www.linkedin.com/in/rameyjm/" target="_blank" rel="noopener noreferrer">https://www.linkedin.com/in/rameyjm/</a>
+                </Typography>
+                <Typography variant="body1" sx={{ mb: 1 }}>
+                  License: <a href="https://github.com/rameyjm7/SDR-Shark/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">View License</a>
+                </Typography>
+                <Typography variant="body2" sx={{ mt: 2 }}>
+                  Copyright (c) 2024 Jacob M. Ramey
+                </Typography>
+              </Box>
+            )}
+          </DialogContent>
+        </Dialog>
 
         <Dialog
           open={settingsOpen}

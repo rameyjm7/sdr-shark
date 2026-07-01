@@ -44,6 +44,17 @@ analysis_memory_lock = threading.Lock()
 settings_update_lock = threading.Lock()
 fft_failure_count = 0
 scanner_failure_count = 0
+scanner_plan_lock = threading.Lock()
+scanner_plan = {
+    'active': False,
+    'steps': [],
+    'config': {},
+    'index': -1,
+    'dwell_until': 0.0,
+    'started_at': 0.0,
+    'last_step': None,
+    'error': None,
+}
 bluetooth_plugin = BluetoothGatewayPlugin()
 fm_plugin = FmBroadcastPlugin()
 wifi_plugin = WiFiGatewayPlugin()
@@ -105,6 +116,103 @@ def _active_sdr_key():
     if "sidekiq" in vars.sdr_settings:
         return "sidekiq"
     return next(iter(vars.sdr_settings.keys()))
+
+def _scanner_status():
+    with scanner_plan_lock:
+        step = dict(scanner_plan.get('last_step') or {})
+        return {
+            'active': bool(scanner_plan.get('active')),
+            'index': int(scanner_plan.get('index') or 0),
+            'count': len(scanner_plan.get('steps') or []),
+            'dwellUntil': float(scanner_plan.get('dwell_until') or 0.0),
+            'startedAt': float(scanner_plan.get('started_at') or 0.0),
+            'step': step,
+            'config': dict(scanner_plan.get('config') or {}),
+            'error': scanner_plan.get('error'),
+        }
+
+def _sanitize_scan_step(raw):
+    raw = raw or {}
+    label = str(raw.get('label') or raw.get('protocol') or 'Scan step').strip()[:80]
+    center_mhz = float(raw.get('centerMhz', raw.get('frequencyMhz', raw.get('frequency', 0.0))) or 0.0)
+    sample_rate_mhz = float(raw.get('sampleRateMhz', raw.get('bandwidthMhz', raw.get('bandwidth', 20.0))) or 20.0)
+    bandwidth_mhz = float(raw.get('bandwidthMhz', sample_rate_mhz) or sample_rate_mhz)
+    dwell_sec = float(raw.get('dwellSec', raw.get('dwell', 5.0)) or 5.0)
+    if not np.isfinite(center_mhz) or center_mhz <= 0:
+        raise ValueError(f"Invalid center frequency for scan step '{label}'")
+    if not np.isfinite(sample_rate_mhz) or sample_rate_mhz <= 0:
+        sample_rate_mhz = 20.0
+    if not np.isfinite(bandwidth_mhz) or bandwidth_mhz <= 0:
+        bandwidth_mhz = sample_rate_mhz
+    if not np.isfinite(dwell_sec) or dwell_sec <= 0:
+        dwell_sec = 5.0
+    protocols = raw.get('protocols') or raw.get('protocol') or []
+    if isinstance(protocols, str):
+        protocols = [protocols]
+    return {
+        'label': label,
+        'center_hz': center_mhz * 1e6,
+        'sample_rate_hz': sample_rate_mhz * 1e6,
+        'bandwidth_hz': bandwidth_mhz * 1e6,
+        'dwell_sec': max(0.5, min(3600.0, dwell_sec)),
+        'protocols': [str(p).strip().lower() for p in protocols if str(p).strip()],
+    }
+
+def _apply_scan_step(step):
+    sdr_key = _active_sdr_key()
+    max_sr = float(getattr(vars.sdr0, "max_sample_rate", vars.sdr_sampleRate()) or vars.sdr_sampleRate())
+    min_freq = float(getattr(vars.sdr0, "min_frequency", 1e6) or 1e6)
+    max_freq = float(getattr(vars.sdr0, "max_frequency", 6e9) or 6e9)
+    sample_rate = max(250_000.0, min(float(step['sample_rate_hz']), max_sr))
+    bandwidth = max(200_000.0, min(float(step['bandwidth_hz']), sample_rate, max_sr))
+    frequency = max(min_freq, min(float(step['center_hz']), max_freq))
+
+    vars.sweeping_enabled = False
+    vars.sdr_settings[sdr_key].frequency = frequency
+    vars.sdr_settings[sdr_key].sampleRate = sample_rate
+    vars.sdr_settings[sdr_key].bandwidth = bandwidth
+    vars.sdr0.configure_receiver(
+        frequency=frequency,
+        sample_rate=sample_rate,
+        bandwidth=bandwidth,
+        gain=vars.sdr_gain(),
+    )
+    with data_lock:
+        fft_data['original_fft'] = []
+        waterfall_buffer.clear()
+    vars.signal_stats['scanner_mode'] = step.get('label')
+
+def _advance_scanner_plan(force=False):
+    now = time.time()
+    with scanner_plan_lock:
+        if not scanner_plan.get('active'):
+            return
+        steps = scanner_plan.get('steps') or []
+        if not steps:
+            scanner_plan['active'] = False
+            return
+        if not force and scanner_plan.get('last_step') is not None and now < float(scanner_plan.get('dwell_until') or 0.0):
+            return
+        current_index = scanner_plan.get('index')
+        if current_index is None:
+            current_index = -1
+        next_index = (int(current_index) + 1) % len(steps)
+        step = dict(steps[next_index])
+
+    if not settings_update_lock.acquire(timeout=0.05):
+        return
+    try:
+        _apply_scan_step(step)
+        with scanner_plan_lock:
+            scanner_plan['index'] = next_index
+            scanner_plan['last_step'] = step
+            scanner_plan['dwell_until'] = time.time() + float(step.get('dwell_sec') or 5.0)
+            scanner_plan['error'] = None
+    except Exception as exc:
+        with scanner_plan_lock:
+            scanner_plan['error'] = str(exc)
+    finally:
+        settings_update_lock.release()
 
 def _tail_deque_rows(buffer, max_rows):
     """Return the newest max_rows from a deque without materializing the whole deque."""
@@ -188,6 +296,8 @@ def generate_fft_data():
             if reset_persist_trace:
                 fft_persist_data = None
                 reset_persist_trace = False
+
+            _advance_scanner_plan()
 
             # Capture and process FFT samples
             capture_samples()
@@ -508,6 +618,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'fm': fm_plugin.snapshot(max_events=20),
         'wifi': wifi_plugin.snapshot(max_events=20),
         'zigbee': zigbee_plugin.snapshot(max_events=20),
+        'scannerMode': _scanner_status(),
         'iqSession': {
             'recording': iq_recorder.status(),
             'replay': replay_sdr.iq_tap_info() if replay_sdr is not None else None,
@@ -1023,6 +1134,7 @@ def get_settings():
         'showPeristanceTrace': vars.showPeristanceTrace,
         'lockBandwidthSampleRate': vars.lockBandwidthSampleRate,
         'analysisRetentionSec': float(getattr(vars, "analysis_retention_sec", 10.0)),
+        'scannerMode': _scanner_status(),
         'signal_stats' : vars.signal_stats
     }
     return jsonify(_to_builtin(settings))
@@ -1069,12 +1181,57 @@ def update_settings():
 @api_blueprint.route('/api/start_sweep', methods=['POST'])
 def start_sweep():
     vars.sweeping_enabled = True
+    with scanner_plan_lock:
+        scanner_plan['active'] = False
     return jsonify({'status': 'success', 'sweeping_enabled': vars.sweeping_enabled})
 
 @api_blueprint.route('/api/stop_sweep', methods=['POST'])
 def stop_sweep():
     vars.sweeping_enabled = False
     return jsonify({'status': 'success', 'sweeping_enabled': vars.sweeping_enabled})
+
+@api_blueprint.route('/api/scanner/start', methods=['POST'])
+def start_scanner_plan():
+    payload = request.get_json(silent=True) or {}
+    raw_steps = payload.get('steps') or []
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return jsonify({'success': False, 'error': 'No scan steps selected'}), 400
+    try:
+        default_dwell = float(payload.get('dwellSec', 5.0) or 5.0)
+        steps = []
+        for raw_step in raw_steps:
+            merged = dict(raw_step or {})
+            merged.setdefault('dwellSec', default_dwell)
+            steps.append(_sanitize_scan_step(merged))
+        with scanner_plan_lock:
+            scanner_plan.update({
+                'active': True,
+                'steps': steps,
+                'config': dict(payload.get('config') or {}),
+                'index': -1,
+                'dwell_until': 0.0,
+                'started_at': time.time(),
+                'last_step': None,
+                'error': None,
+            })
+        _advance_scanner_plan(force=True)
+        return jsonify({'success': True, 'scanner': _to_builtin(_scanner_status())})
+    except Exception as exc:
+        with scanner_plan_lock:
+            scanner_plan['active'] = False
+            scanner_plan['error'] = str(exc)
+        return jsonify({'success': False, 'error': str(exc)}), 400
+
+@api_blueprint.route('/api/scanner/stop', methods=['POST'])
+def stop_scanner_plan():
+    with scanner_plan_lock:
+        scanner_plan['active'] = False
+    vars.signal_stats.pop('scanner_mode', None)
+    return jsonify({'success': True, 'scanner': _to_builtin(_scanner_status())})
+
+@api_blueprint.route('/api/scanner/status', methods=['GET'])
+def scanner_plan_status():
+    return jsonify({'success': True, 'scanner': _to_builtin(_scanner_status())})
 
 @atexit.register
 def cleanup():

@@ -95,6 +95,11 @@ const ChartComponent = ({
   const waterfallEnabledAtRef = useRef(Date.now());
   const startupAutoscaleDoneRef = useRef(false);
   const startupAutoscaleAttemptsRef = useRef(0);
+  const lastBackendTuneRef = useRef({
+    frequency: Number(settings.frequency),
+    sampleRate: Number(settings.sampleRate),
+    bandwidth: Number(settings.bandwidth),
+  });
   const lastTuneRef = useRef({
     frequency: Number(settings.frequency),
     sampleRate: Number(settings.sampleRate),
@@ -197,6 +202,28 @@ const ChartComponent = ({
         const prevSeq = lastMainSeqRef.current;
         const frameAdvanced = prevSeq === null ? true : mainSeq !== prevSeq;
         lastMainSeqRef.current = mainSeq;
+        const backendTune = {
+          frequency: Number(data?.settings?.frequency),
+          sampleRate: Number(data?.settings?.sample_rate) / 1e6,
+          bandwidth: Number(data?.settings?.bandwidth) / 1e6,
+        };
+        const previousBackendTune = lastBackendTuneRef.current;
+        if (
+          Boolean(data?.scannerMode?.active) &&
+          Number.isFinite(previousBackendTune.frequency) &&
+          Number.isFinite(backendTune.frequency) &&
+          (
+            Math.abs(backendTune.frequency - previousBackendTune.frequency) > 1e-6 ||
+            Math.abs((backendTune.sampleRate || 0) - (previousBackendTune.sampleRate || 0)) > 1e-6 ||
+            Math.abs((backendTune.bandwidth || 0) - (previousBackendTune.bandwidth || 0)) > 1e-6
+          )
+        ) {
+          startupAutoscaleDoneRef.current = false;
+          startupAutoscaleAttemptsRef.current = 0;
+        }
+        if (Number.isFinite(backendTune.frequency)) {
+          lastBackendTuneRef.current = backendTune;
+        }
         const rawFft = Array.isArray(data.fft) ? data.fft : [];
         const rawWaterfall = Array.isArray(data.waterfall) ? data.waterfall : [];
         // Replace NaN values in FFT data
@@ -349,6 +376,7 @@ const ChartComponent = ({
             droppedFrames: droppedFramesRef.current,
             staleMs: Date.now() - lastDataTsRef.current,
             sweepEnabled: Boolean(data?.settings?.sweeping_enabled),
+            scannerMode: data?.scannerMode || data?.settings?.scannerMode || null,
             mainFrameSeq: Number(data?.mainFrameSeq || 0),
             scannerFrameSeq: Number(data?.scannerFrameSeq || 0),
             scannerFresh: Boolean(data?.scannerFresh),

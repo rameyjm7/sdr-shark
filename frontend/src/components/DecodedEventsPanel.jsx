@@ -404,6 +404,17 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
   const deviceEvents = displayEvents.filter(isDeviceEvent);
   const uniqueDevices = new Set(deviceEvents.map(eventIdentity).filter(Boolean)).size;
   const decoderActive = Boolean(telemetry?.bluetooth?.active || telemetry?.fm?.active || telemetry?.wifi?.active || telemetry?.zigbee?.active);
+  const scannerMode = telemetry?.scannerMode || null;
+  const scannerStep = scannerMode?.step || {};
+  const scannerProtocols = Array.isArray(scannerStep?.protocols)
+    ? scannerStep.protocols.map((protocol) => String(protocol).toUpperCase()).filter(Boolean)
+    : [];
+  const scannerLabel = scannerProtocols.length
+    ? scannerProtocols.join(' / ')
+    : (scannerStep?.label || 'selected protocols');
+  const scannerStepLabel = scannerStep?.label && scannerProtocols.length
+    ? ` (${scannerStep.label})`
+    : '';
   const emptyText = filterMode === 'devices'
     ? 'No identified devices in the retained activity window yet. Burst-only detections are hidden in this view.'
     : 'No decoded signal activity yet. Tune into an active band and decoded packets will appear here.';
@@ -757,6 +768,13 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           </Button>
         </Stack>
         <Stack direction="row" spacing={0.75} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.75 }}>
+          {scannerMode?.active ? (
+            <Chip
+              size="small"
+              color="primary"
+              label={`Scanning ${scannerLabel}${scannerStepLabel}`}
+            />
+          ) : null}
           <Chip size="small" color={decoderActive ? 'success' : 'default'} label={decoderActive ? 'decoder on' : 'decoder idle'} />
           <Chip size="small" label={`${bleAdvCount} BLE adv`} />
           <Chip size="small" label={`${btcCount} BTC`} />

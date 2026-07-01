@@ -58,6 +58,13 @@ RF Sentinel Bluetooth decoding:
 - Set `RF_SENTINEL_ROOT=/path/to/RF_Sentinel` if RF Sentinel is not at `/home/jake/workspace/SDR/RF_Sentinel`.
 - Bluetooth/BTC events are written to `/var/log/sdr-shark/bluetooth-events-current.jsonl`, and the BTC sniffer startup log is `/var/log/sdr-shark/btcexplorer-sniffer.log`. Override with `SDR_SHARK_BLUETOOTH_LOG_DIR=/path/to/logs`.
 
+Scanner mode:
+
+- Open `Scanner` from the top-right toolbar to configure a repeating dwell scan plan without hiding the live spectrum/waterfall.
+- The 2.4 GHz ISM protocols share one dwell percentage because Zigbee, Thread, WiFi 2.4 GHz, Bluetooth Classic, and BLE overlap in spectrum. SDR-Shark scans this as two 60 MHz wideband passes over the low and high portions of the band.
+- Other selected bands keep individual percentages. The Scan Plan table shows the exact order, center frequency, bandwidth, protocols, dwell time, and how often each band is revisited.
+- While scanner mode retunes between bands, the spectrum Y range is automatically re-leveled once for the new band.
+
 For direct SoapySDR mode, install SoapySDR and the driver packages for your radio, then verify:
 
 ```bash
