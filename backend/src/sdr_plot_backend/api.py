@@ -9,6 +9,7 @@ import numpy as np
 import json
 from flask import Blueprint, jsonify, request, current_app, Response
 
+from sdr_plot_backend.adsb_plugin import AdsbGatewayPlugin
 from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
 from sdr_plot_backend.fm_plugin import FmBroadcastPlugin
 from sdr_plot_backend.gps_plugin import GpsdPlugin
@@ -60,6 +61,7 @@ bluetooth_plugin = BluetoothGatewayPlugin()
 fm_plugin = FmBroadcastPlugin()
 wifi_plugin = WiFiGatewayPlugin()
 zigbee_plugin = ZigbeeGatewayPlugin()
+adsb_plugin = AdsbGatewayPlugin()
 gps_plugin = GpsdPlugin()
 iq_recorder = IQSessionRecorder()
 live_sdr = None
@@ -165,9 +167,15 @@ def _apply_scan_step(step):
     max_sr = float(getattr(vars.sdr0, "max_sample_rate", vars.sdr_sampleRate()) or vars.sdr_sampleRate())
     min_freq = float(getattr(vars.sdr0, "min_frequency", 1e6) or 1e6)
     max_freq = float(getattr(vars.sdr0, "max_frequency", 6e9) or 6e9)
+    requested_frequency = float(step['center_hz'])
     sample_rate = max(250_000.0, min(float(step['sample_rate_hz']), max_sr))
     bandwidth = max(200_000.0, min(float(step['bandwidth_hz']), sample_rate, max_sr))
-    frequency = max(min_freq, min(float(step['center_hz']), max_freq))
+    frequency = max(min_freq, min(requested_frequency, max_freq))
+    if abs(frequency - requested_frequency) > max(1e6, bandwidth / 2):
+        raise ValueError(
+            f"Scan step '{step.get('label')}' requests {requested_frequency / 1e6:.1f} MHz, "
+            f"outside active SDR range {min_freq / 1e6:.1f}-{max_freq / 1e6:.1f} MHz"
+        )
 
     vars.sweeping_enabled = False
     vars.sdr_settings[sdr_key].frequency = frequency
@@ -182,7 +190,14 @@ def _apply_scan_step(step):
     with data_lock:
         fft_data['original_fft'] = []
         waterfall_buffer.clear()
-    vars.signal_stats['scanner_mode'] = step.get('label')
+    applied_step = dict(step)
+    applied_step.update({
+        'applied_center_hz': frequency,
+        'applied_sample_rate_hz': sample_rate,
+        'applied_bandwidth_hz': bandwidth,
+    })
+    vars.signal_stats['scanner_mode'] = applied_step.get('label')
+    return applied_step
 
 def _advance_scanner_plan(force=False):
     now = time.time()
@@ -204,10 +219,10 @@ def _advance_scanner_plan(force=False):
     if not settings_update_lock.acquire(timeout=0.05):
         return
     try:
-        _apply_scan_step(step)
+        applied_step = _apply_scan_step(step)
         with scanner_plan_lock:
             scanner_plan['index'] = next_index
-            scanner_plan['last_step'] = step
+            scanner_plan['last_step'] = applied_step
             scanner_plan['dwell_until'] = time.time() + float(step.get('dwell_sec') or 5.0)
             scanner_plan['error'] = None
     except Exception as exc:
@@ -246,6 +261,7 @@ def _stop_protocol_plugins():
     bluetooth_plugin.stop()
     wifi_plugin.stop()
     zigbee_plugin.stop()
+    adsb_plugin.stop()
     fm_plugin.stop_playback()
 
 
@@ -306,6 +322,7 @@ def generate_fft_data():
             bluetooth_plugin.update(vars.sdr0)
             wifi_plugin.update(vars.sdr0)
             zigbee_plugin.update(vars.sdr0)
+            adsb_plugin.update(vars.sdr0)
             current_fft = process_fft(sample_buffer)
             fm_plugin.update_from_iq_and_fft(
                 sample_buffer,
@@ -620,6 +637,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'fm': fm_plugin.snapshot(max_events=20),
         'wifi': wifi_plugin.snapshot(max_events=20),
         'zigbee': zigbee_plugin.snapshot(max_events=20),
+        'adsb': adsb_plugin.snapshot(max_events=20),
         'gps': gps_plugin.snapshot(),
         'scannerMode': _scanner_status(),
         'iqSession': {
@@ -1248,6 +1266,7 @@ def cleanup():
     bluetooth_plugin.stop()
     wifi_plugin.stop()
     zigbee_plugin.stop()
+    adsb_plugin.stop()
     gps_plugin.stop()
     if replay_sdr is not None:
         try:

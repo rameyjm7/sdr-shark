@@ -116,6 +116,7 @@ const App = () => {
     fm: null,
     wifi: null,
     zigbee: null,
+    adsb: null,
     gps: null,
   });
 
@@ -327,6 +328,9 @@ const App = () => {
   const zigbeeFrameCount = Number(telemetry.zigbee?.frame_count || telemetry.zigbee?.event_count || 0);
   const zigbeeBurstCount = Number(telemetry.zigbee?.burst_count || 0);
   const zigbeeChunkCount = Number(telemetry.zigbee?.chunk_count || 0);
+  const adsbAircraftCount = Number(telemetry.adsb?.aircraft_count || 0);
+  const adsbEventCount = Number(telemetry.adsb?.event_count || 0);
+  const adsbMbFed = Number(telemetry.adsb?.byte_count || 0) / (1024 * 1024);
   const zigbeeRuntimeChannels = Array.isArray(telemetry.zigbee?.runtime_channels) ? telemetry.zigbee.runtime_channels : [];
   const zigbeeChannelLabel = zigbeeRuntimeChannels.length > 0
     ? `${zigbeeRuntimeChannels[0]}-${zigbeeRuntimeChannels[zigbeeRuntimeChannels.length - 1]}`
@@ -491,6 +495,12 @@ const App = () => {
             sx={telemetryWideChipSx}
             color={telemetry.zigbee?.active ? 'success' : 'default'}
             label={`ZB: ${telemetry.zigbee?.active ? 'on' : 'off'} ch ${zigbeeChannelLabel} ${zigbeeFrameCount}f ${zigbeeBurstCount}b ${zigbeeChunkCount}iq`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={telemetry.adsb?.active ? 'success' : 'default'}
+            label={`ADSB: ${telemetry.adsb?.active ? 'on' : 'off'} ${adsbAircraftCount} ac ${adsbEventCount} evt ${adsbMbFed.toFixed(0)}MB`}
           />
           {telemetry.fftError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`FFT err`} /> : null}
           {telemetry.scannerError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`Scanner err`} /> : null}

@@ -81,6 +81,13 @@ export GPSD_PORT=2948
 - Verify the listener with `ss -ltnp | grep gpsd` or test the feed with `gpspipe -w`.
 - Disable the GPS plugin with `SDR_SHARK_GPS_PLUGIN=0`.
 
+ADS-B integration:
+
+- SDR-Shark includes a vendored `adsb-rx` decoder plugin under `backend/src/sdr_plot_backend/plugins/adsb_rx/adsb-rx`.
+- The `ADS-B 1090` scanner target tunes 1090 MHz at 2 MHz bandwidth/sample rate and feeds the shared SDR-Shark IQ tap to the decoder.
+- Install Rust/Cargo for the first automatic build, or set `SDR_SHARK_ADSB_RX_BIN=/path/to/adsb-rx` to use a prebuilt binary.
+- Disable the ADS-B plugin with `SDR_SHARK_ADSB_PLUGIN=0`.
+
 For direct SoapySDR mode, install SoapySDR and the driver packages for your radio, then verify:
 
 ```bash

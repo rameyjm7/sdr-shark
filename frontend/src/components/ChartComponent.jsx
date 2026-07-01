@@ -67,7 +67,7 @@ const ChartComponent = ({
   const [quickCenterMHz, setQuickCenterMHz] = useState(0);
   const [quickSpanMHz, setQuickSpanMHz] = useState(0);
   const [showWaterfallToolbar, setShowWaterfallToolbar] = useState(false);
-  const [autoscaleMode, setAutoscaleMode] = useState('manual');
+  const [autoscaleMode, setAutoscaleMode] = useState('noise_follow');
   const [markerPrimary, setMarkerPrimary] = useState(null);
   const [markerSecondary, setMarkerSecondary] = useState(null);
   const [heldClassifiedSignalMarkers, setHeldClassifiedSignalMarkers] = useState([]);
@@ -95,6 +95,7 @@ const ChartComponent = ({
   const waterfallEnabledAtRef = useRef(Date.now());
   const startupAutoscaleDoneRef = useRef(false);
   const startupAutoscaleAttemptsRef = useRef(0);
+  const startupAutoscaleCandidateRef = useRef(null);
   const lastBackendTuneRef = useRef({
     frequency: Number(settings.frequency),
     sampleRate: Number(settings.sampleRate),
@@ -121,28 +122,47 @@ const ChartComponent = ({
     return avgDiff > 0.15;
   };
 
-  const usableFftValues = (values) => (
-    Array.isArray(values)
-      ? values.filter((value) => Number.isFinite(value) && value > -220 && value < 200)
-      : []
-  );
+  const usableFftValues = (values, { trimEdges = false } = {}) => {
+    if (!Array.isArray(values)) return [];
+    const edgeBins = trimEdges ? Math.floor(values.length * 0.04) : 0;
+    const start = Math.min(edgeBins, Math.floor(values.length / 3));
+    const end = Math.max(start, values.length - edgeBins);
+    return values
+      .slice(start, end)
+      .filter((value) => Number.isFinite(value) && value > -220 && value < 200);
+  };
 
-  const rangeFromFftValues = (values) => {
-    const usable = usableFftValues(values);
-    if (usable.length < 32) return null;
+  const rangeFromFftValues = (values, { trimEdges = false } = {}) => {
+    const usable = usableFftValues(values, { trimEdges });
+    if (usable.length < 128) return null;
     const sorted = [...usable].sort((a, b) => a - b);
+    const p10 = sorted[Math.floor(sorted.length * 0.1)];
     const p20 = sorted[Math.floor(sorted.length * 0.2)];
+    const p98 = sorted[Math.floor(sorted.length * 0.98)];
     const p99 = sorted[Math.floor(sorted.length * 0.99)];
     const peak = sorted[sorted.length - 1];
-    if (![p20, p99, peak].every(Number.isFinite)) return null;
-    if ((peak - p20) < 1.5) return null;
-    const nextMin = Math.floor((p20 - 18) / 5) * 5;
-    const nextMax = Math.ceil((Math.max(p99 + 12, peak + 6)) / 5) * 5;
+    if (![p10, p20, p98, p99, peak].every(Number.isFinite)) return null;
+    if ((p98 - p10) < 1.5) return null;
+    const nextMin = Math.floor((p10 - 16) / 5) * 5;
+    const nextMax = Math.ceil((Math.max(p99 + 10, peak + 6)) / 5) * 5;
     if (!Number.isFinite(nextMin) || !Number.isFinite(nextMax) || nextMax <= nextMin) return null;
     return {
       min: Math.max(-180, nextMin),
       max: Math.min(120, nextMax),
     };
+  };
+
+  const stableStartupRange = (range) => {
+    if (!range) {
+      startupAutoscaleCandidateRef.current = null;
+      return null;
+    }
+    const previous = startupAutoscaleCandidateRef.current;
+    startupAutoscaleCandidateRef.current = range;
+    if (!previous) return null;
+    const minClose = Math.abs(Number(previous.min) - Number(range.min)) <= 8;
+    const maxClose = Math.abs(Number(previous.max) - Number(range.max)) <= 10;
+    return minClose && maxClose ? range : null;
   };
 
   const signalFootprintLabel = (protocol) => {
@@ -202,10 +222,13 @@ const ChartComponent = ({
         const prevSeq = lastMainSeqRef.current;
         const frameAdvanced = prevSeq === null ? true : mainSeq !== prevSeq;
         lastMainSeqRef.current = mainSeq;
+        const backendFrequencyMHz = Number(data?.settings?.frequency) / 1e6;
+        const backendSampleRateMHz = Number(data?.settings?.sample_rate) / 1e6;
+        const backendBandwidthMHz = Number(data?.settings?.bandwidth) / 1e6;
         const backendTune = {
-          frequency: Number(data?.settings?.frequency),
-          sampleRate: Number(data?.settings?.sample_rate) / 1e6,
-          bandwidth: Number(data?.settings?.bandwidth) / 1e6,
+          frequency: backendFrequencyMHz,
+          sampleRate: backendSampleRateMHz,
+          bandwidth: backendBandwidthMHz,
         };
         const previousBackendTune = lastBackendTuneRef.current;
         if (
@@ -220,9 +243,27 @@ const ChartComponent = ({
         ) {
           startupAutoscaleDoneRef.current = false;
           startupAutoscaleAttemptsRef.current = 0;
+          startupAutoscaleCandidateRef.current = null;
         }
         if (Number.isFinite(backendTune.frequency)) {
           lastBackendTuneRef.current = backendTune;
+        }
+        if (Boolean(data?.scannerMode?.active) && typeof setSettings === 'function') {
+          const nextFrequency = Number.isFinite(backendFrequencyMHz) ? backendFrequencyMHz : Number(settings.frequency);
+          const nextSampleRate = Number.isFinite(backendSampleRateMHz) ? backendSampleRateMHz : Number(settings.sampleRate);
+          const nextBandwidth = Number.isFinite(backendBandwidthMHz) ? backendBandwidthMHz : Number(settings.bandwidth);
+          const settingsDiffer =
+            Math.abs(nextFrequency - Number(settings.frequency || 0)) > 0.001 ||
+            Math.abs(nextSampleRate - Number(settings.sampleRate || 0)) > 0.001 ||
+            Math.abs(nextBandwidth - Number(settings.bandwidth || 0)) > 0.001;
+          if (settingsDiffer) {
+            setSettings((prevSettings) => ({
+              ...prevSettings,
+              frequency: nextFrequency,
+              sampleRate: nextSampleRate,
+              bandwidth: nextBandwidth,
+            }));
+          }
         }
         const rawFft = Array.isArray(data.fft) ? data.fft : [];
         const rawWaterfall = Array.isArray(data.waterfall) ? data.waterfall : [];
@@ -389,6 +430,7 @@ const ChartComponent = ({
             fm: data?.fm || null,
             wifi: data?.wifi || null,
             zigbee: data?.zigbee || null,
+            adsb: data?.adsb || null,
             gps: data?.gps || null,
           });
         }
@@ -938,7 +980,7 @@ const ChartComponent = ({
     if (typeof setMinY !== 'function' || typeof setMaxY !== 'function') {
       return;
     }
-    const range = rangeFromFftValues(fftData);
+    const range = rangeFromFftValues(fftData, { trimEdges: true });
     if (!range) {
       if (!startupAutoscaleDoneRef.current) {
         startupAutoscaleAttemptsRef.current += 1;
@@ -949,9 +991,15 @@ const ChartComponent = ({
       if (startupAutoscaleDoneRef.current) {
         return;
       }
+      startupAutoscaleAttemptsRef.current += 1;
+      const stableRange = stableStartupRange(range);
+      if (!stableRange && startupAutoscaleAttemptsRef.current < 8) {
+        return;
+      }
       startupAutoscaleDoneRef.current = true;
-      setMinY(range.min);
-      setMaxY(range.max);
+      startupAutoscaleCandidateRef.current = null;
+      setMinY((stableRange || range).min);
+      setMaxY((stableRange || range).max);
       return;
     }
     if (autoscaleMode === 'hold') {
@@ -959,14 +1007,16 @@ const ChartComponent = ({
     }
     const sorted = usableFftValues(fftData).sort((a, b) => a - b);
     const p20 = sorted[Math.floor(sorted.length * 0.2)] ?? minY;
-    const p99 = sorted[Math.floor(sorted.length * 0.99)] ?? maxY;
     const peak = sorted[sorted.length - 1] ?? maxY;
     if (autoscaleMode === 'auto_peak') {
       setMinY(Math.round((p20 - 20) * 10) / 10);
       setMaxY(Math.round((peak + 8) * 10) / 10);
     } else if (autoscaleMode === 'noise_follow') {
-      setMinY(Math.round((p20 - 15) * 10) / 10);
-      setMaxY(Math.round((p99 + 10) * 10) / 10);
+      const noiseFloor = Math.round(p20 / 10) * 10;
+      const nextMin = noiseFloor - 10;
+      const nextMax = noiseFloor + 65;
+      setMinY(nextMin);
+      setMaxY(nextMax);
     }
   }, [fftData, autoscaleMode, minY, maxY, setMinY, setMaxY]);
 

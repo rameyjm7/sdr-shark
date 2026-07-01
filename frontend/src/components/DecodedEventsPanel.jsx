@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, Chip, Divider, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import BluetoothIcon from '@mui/icons-material/Bluetooth';
+import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RadioIcon from '@mui/icons-material/Radio';
 import SensorsIcon from '@mui/icons-material/Sensors';
@@ -50,6 +51,7 @@ const isFmEvent = (event) => String(event?.protocol || '').toLowerCase() === 'fm
 const isWifiEvent = (event) => String(event?.protocol || '').toLowerCase() === 'wifi' || ['wifi_activity', 'wifi_frame'].includes(event?.kind);
 const isWifiFrame = (event) => isWifiEvent(event) && event?.kind === 'wifi_frame';
 const isZigbeeEvent = (event) => String(event?.protocol || '').toLowerCase() === 'zigbee' || event?.kind === 'zigbee_frame';
+const isAdsbEvent = (event) => String(event?.protocol || '').toLowerCase() === 'adsb' || String(event?.kind || '').startsWith('adsb_');
 
 const protocolKey = (event) => {
   const protocol = String(event?.protocol || '').toLowerCase();
@@ -58,6 +60,7 @@ const protocolKey = (event) => {
   if (protocol === 'fm' || event?.kind === 'fm_station') return 'FM';
   if (protocol === 'wifi' || event?.kind === 'wifi_activity') return 'WIFI';
   if (protocol === 'zigbee' || event?.kind === 'zigbee_frame') return 'ZIGBEE';
+  if (protocol === 'adsb' || String(event?.kind || '').startsWith('adsb_')) return 'ADSB';
   return protocol ? protocol.toUpperCase() : 'RF';
 };
 
@@ -172,6 +175,7 @@ const mergeDisplayEvents = (events) => {
 const eventIdentity = (event) => {
   if (isBtcEvent(event)) return event?.full_mac || candidateMac(event);
   if (event?.address) return event.address;
+  if (isAdsbEvent(event)) return event?.icao || event?.flight || '';
   if (isWifiEvent(event)) return wifiIdentity(event) || `wifi-${event?.channel || event?.likely_center_freq_hz || ''}`;
   if (isZigbeeEvent(event)) return event?.mac?.source_address || event?.mac?.destination_address || event?.psdu_hex || '';
   if (event?.identity) return event.identity;
@@ -188,6 +192,7 @@ const isDeviceEvent = (event) => Boolean(
   isFmEvent(event) ||
   isWifiEvent(event) ||
   isZigbeeEvent(event) ||
+  isAdsbEvent(event) ||
   String(event?.protocol || '').toLowerCase() === 'btc',
 );
 
@@ -195,6 +200,10 @@ const eventTitle = (event) => {
   if (event?.identity) return event.identity;
   if (event?.name) return event.name;
   if (event?.address) return event.address;
+  if (isAdsbEvent(event)) {
+    const flight = String(event?.flight || '').trim();
+    return flight || (event?.icao ? `Aircraft ${event.icao}` : 'ADS-B aircraft');
+  }
   if (isBtcEvent(event)) return event?.full_mac || candidateMac(event);
   if (isFmEvent(event)) return event?.identity || `FM ${Number(event?.frequency_mhz || 0).toFixed(1)} MHz`;
   if (isWifiEvent(event)) {
@@ -221,13 +230,14 @@ const protocolGroupLabel = (protocol) => {
     FM: 'FM Broadcast',
     WIFI: 'WiFi / 802.11',
     ZIGBEE: 'Zigbee / 802.15.4',
+    ADSB: 'ADS-B Aircraft',
     RF: 'Radio Events',
   };
   return labels[String(protocol || 'RF').toUpperCase()] || String(protocol || 'RF');
 };
 
 const protocolSortRank = (protocol) => {
-  const rank = ['BTC', 'BTLE', 'WIFI', 'ZIGBEE', 'FM', 'RF'].indexOf(String(protocol || '').toUpperCase());
+  const rank = ['BTC', 'BTLE', 'WIFI', 'ZIGBEE', 'FM', 'ADSB', 'RF'].indexOf(String(protocol || '').toUpperCase());
   return rank < 0 ? 999 : rank;
 };
 
@@ -279,6 +289,7 @@ const eventFootprintLabel = (event) => {
   if (protocol === 'wifi') return '~20 MHz ch';
   if (protocol === 'fm') return '~200 kHz ch';
   if (protocol === 'zigbee') return '~2 MHz ch';
+  if (protocol === 'adsb') return '1090 MHz';
   return '';
 };
 
@@ -307,6 +318,15 @@ const eventDetail = (event) => {
     if (Number.isFinite(center)) parts.push(`${(center / 1e6).toFixed(1)} MHz`);
     if (Number.isFinite(score)) parts.push(`score ${score.toFixed(2)}`);
     return parts.join(' · ');
+  }
+  if (isAdsbEvent(event)) {
+    const parts = [];
+    if (event?.icao) parts.push(`ICAO ${event.icao}`);
+    if (event?.flight) parts.push(`flight ${String(event.flight).trim()}`);
+    if (Number(event?.altitude_ft)) parts.push(`${Number(event.altitude_ft).toLocaleString()} ft`);
+    if (Number(event?.speed_kt)) parts.push(`${Number(event.speed_kt)} kt`);
+    if (Number(event?.track_deg)) parts.push(`track ${Number(event.track_deg)}°`);
+    return parts.length ? parts.join(' · ') : 'Decoded Mode S / ADS-B message from 1090 MHz.';
   }
   if (event?.device_type_detail) return event.device_type_detail;
   if (isZigbeeEvent(event)) {
@@ -343,9 +363,10 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
       const fmEvents = Array.isArray(telemetry?.fm?.events) ? telemetry.fm.events : [];
       const wifiEvents = Array.isArray(telemetry?.wifi?.events) ? telemetry.wifi.events : [];
       const zigbeeEvents = Array.isArray(telemetry?.zigbee?.events) ? telemetry.zigbee.events : [];
-      return [...bluetoothEvents, ...fmEvents, ...wifiEvents, ...zigbeeEvents];
+      const adsbEvents = Array.isArray(telemetry?.adsb?.events) ? telemetry.adsb.events : [];
+      return [...bluetoothEvents, ...fmEvents, ...wifiEvents, ...zigbeeEvents, ...adsbEvents];
     },
-    [telemetry?.bluetooth?.events, telemetry?.fm?.events, telemetry?.wifi?.events, telemetry?.zigbee?.events],
+    [telemetry?.bluetooth?.events, telemetry?.fm?.events, telemetry?.wifi?.events, telemetry?.zigbee?.events, telemetry?.adsb?.events],
   );
   const retentionSec = Math.max(60, Math.min(3600, Number(settings?.activityLogRetentionSec) || 600));
   const maxHistoryEvents = Math.max(500, Math.min(5000, Math.round((retentionSec / 60) * 240)));
@@ -401,19 +422,16 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
   const wifiCount = sortedEvents.filter(isWifiEvent).length;
   const wifiFrameCount = sortedEvents.filter((event) => isWifiEvent(event) && event?.kind === 'wifi_frame').length;
   const zigbeeCount = sortedEvents.filter(isZigbeeEvent).length;
+  const adsbCount = sortedEvents.filter(isAdsbEvent).length;
   const deviceEvents = displayEvents.filter(isDeviceEvent);
   const uniqueDevices = new Set(deviceEvents.map(eventIdentity).filter(Boolean)).size;
-  const decoderActive = Boolean(telemetry?.bluetooth?.active || telemetry?.fm?.active || telemetry?.wifi?.active || telemetry?.zigbee?.active);
+  const decoderActive = Boolean(telemetry?.bluetooth?.active || telemetry?.fm?.active || telemetry?.wifi?.active || telemetry?.zigbee?.active || telemetry?.adsb?.active);
   const scannerMode = telemetry?.scannerMode || null;
   const scannerStep = scannerMode?.step || {};
-  const scannerProtocols = Array.isArray(scannerStep?.protocols)
-    ? scannerStep.protocols.map((protocol) => String(protocol).toUpperCase()).filter(Boolean)
-    : [];
-  const scannerLabel = scannerProtocols.length
-    ? scannerProtocols.join(' / ')
-    : (scannerStep?.label || 'selected protocols');
-  const scannerStepLabel = scannerStep?.label && scannerProtocols.length
-    ? ` (${scannerStep.label})`
+  const scannerCenterMHz = Number(scannerStep?.applied_center_hz || scannerStep?.center_hz || 0) / 1e6;
+  const scannerLabel = scannerStep?.label || 'selected protocols';
+  const scannerFrequencyLabel = Number.isFinite(scannerCenterMHz) && scannerCenterMHz > 0
+    ? ` @ ${scannerCenterMHz.toFixed(1)} MHz`
     : '';
   const emptyText = filterMode === 'devices'
     ? 'No identified devices in the retained activity window yet. Burst-only detections are hidden in this view.'
@@ -537,8 +555,9 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
     const isFm = isFmEvent(event);
     const isWifi = isWifiEvent(event);
     const isZigbee = isZigbeeEvent(event);
-    const accent = isFm ? '#ffb347' : (isWifi ? '#6ecbff' : (isZigbee ? '#b084ff' : (isBtc ? '#ffd166' : '#64f0d2')));
-    const EventIcon = isFm ? RadioIcon : (isWifi ? WifiIcon : (isZigbee ? SensorsIcon : BluetoothIcon));
+    const isAdsb = isAdsbEvent(event);
+    const accent = isFm ? '#ffb347' : (isWifi ? '#6ecbff' : (isZigbee ? '#b084ff' : (isAdsb ? '#ff6b6b' : (isBtc ? '#ffd166' : '#64f0d2'))));
+    const EventIcon = isFm ? RadioIcon : (isWifi ? WifiIcon : (isZigbee ? SensorsIcon : (isAdsb ? FlightTakeoffIcon : BluetoothIcon)));
     const uaps = Array.isArray(event?.uap_options) ? event.uap_options : [];
     const footprintLabel = eventFootprintLabel(event);
     return (
@@ -594,6 +613,12 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           {isWifi && event?.bssid ? <Chip size="small" label={`BSSID ${event.bssid}`} /> : null}
           {isWifi && Array.isArray(event?.channels) && event.channels.length > 1 ? <Chip size="small" label={`CH ${event.channels.join(', ')}`} /> : null}
           {isWifi && event?.score !== undefined ? <Chip size="small" label={`score ${Number(event.score).toFixed(2)}`} /> : null}
+          {isAdsb && event?.icao ? <Chip size="small" label={`ICAO ${event.icao}`} /> : null}
+          {isAdsb && event?.flight ? <Chip size="small" label={`Flight ${String(event.flight).trim()}`} /> : null}
+          {isAdsb && Number(event?.altitude_ft) ? <Chip size="small" label={`${Number(event.altitude_ft).toLocaleString()} ft`} /> : null}
+          {isAdsb && Number(event?.speed_kt) ? <Chip size="small" label={`${Number(event.speed_kt)} kt`} /> : null}
+          {isAdsb && Number(event?.track_deg) ? <Chip size="small" label={`TRK ${Number(event.track_deg)}°`} /> : null}
+          {isAdsb && event?.squawk ? <Chip size="small" color={[7500, 7600, 7700].includes(Number(event.squawk)) ? 'error' : 'default'} label={`Squawk ${event.squawk}`} /> : null}
           {isZigbee && event?.fcs_ok !== undefined ? <Chip size="small" color={event.fcs_ok ? 'success' : 'warning'} label={event.fcs_ok ? 'FCS OK' : 'FCS bad'} /> : null}
           {isZigbee && event?.mac?.frame_type ? <Chip size="small" label={String(event.mac.frame_type)} /> : null}
           {isZigbee && event?.mac?.source_pan_id !== undefined && event?.mac?.source_pan_id !== null ? <Chip size="small" label={`PAN ${event.mac.source_pan_id}`} /> : null}
@@ -655,13 +680,22 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
             ].filter(Boolean).join('  ')}
           </Typography>
         ) : null}
+        {isAdsb && (event?.icao || event?.lat || event?.lon || event?.raw) ? (
+          <Typography variant="caption" sx={{ mt: 0.75, display: 'block', fontFamily: 'monospace' }}>
+            {[
+              event?.icao ? `ICAO ${event.icao}` : '',
+              event?.lat && event?.lon ? `pos ${Number(event.lat).toFixed(5)}, ${Number(event.lon).toFixed(5)}` : '',
+              event?.raw ? String(event.raw) : '',
+            ].filter(Boolean).join('  ')}
+          </Typography>
+        ) : null}
       </Paper>
     );
   };
 
   const renderGroupedEvents = () => protocolGroups.map(({ protocol, rows, stats }, groupIndex) => {
-    const accent = protocol === 'FM' ? '#ffb347' : (protocol === 'WIFI' ? '#6ecbff' : (protocol === 'ZIGBEE' ? '#b084ff' : (protocol === 'BTC' ? '#ffd166' : '#64f0d2')));
-    const GroupIcon = protocol === 'FM' ? RadioIcon : (protocol === 'WIFI' ? WifiIcon : (protocol === 'ZIGBEE' ? SensorsIcon : BluetoothIcon));
+    const accent = protocol === 'FM' ? '#ffb347' : (protocol === 'WIFI' ? '#6ecbff' : (protocol === 'ZIGBEE' ? '#b084ff' : (protocol === 'ADSB' ? '#ff6b6b' : (protocol === 'BTC' ? '#ffd166' : '#64f0d2'))));
+    const GroupIcon = protocol === 'FM' ? RadioIcon : (protocol === 'WIFI' ? WifiIcon : (protocol === 'ZIGBEE' ? SensorsIcon : (protocol === 'ADSB' ? FlightTakeoffIcon : BluetoothIcon)));
     const defaultOpen = !foldProtocolGroups || groupIndex < 1;
     const body = protocol === 'BTLE'
       ? Array.from(groupRowsBy(rows, manufacturerGroupLabel).entries())
@@ -772,7 +806,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
             <Chip
               size="small"
               color="primary"
-              label={`Scanning ${scannerLabel}${scannerStepLabel}`}
+              label={`Scanning ${scannerLabel}${scannerFrequencyLabel}`}
             />
           ) : null}
           <Chip size="small" color={decoderActive ? 'success' : 'default'} label={decoderActive ? 'decoder on' : 'decoder idle'} />
@@ -781,6 +815,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           <Chip size="small" label={`${wifiCount} WiFi`} />
           <Chip size="small" label={`${wifiFrameCount} WiFi frames`} />
           <Chip size="small" label={`${zigbeeCount} Zigbee`} />
+          <Chip size="small" label={`${adsbCount} ADS-B`} />
           <Chip size="small" label={`${fmStationCount} FM stations`} />
           <Chip size="small" label={`${fmPotentialCount} potential`} />
           <Chip size="small" label={`${uniqueDevices} devices`} />
