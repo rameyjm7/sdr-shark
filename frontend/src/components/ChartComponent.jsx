@@ -389,6 +389,7 @@ const ChartComponent = ({
             fm: data?.fm || null,
             wifi: data?.wifi || null,
             zigbee: data?.zigbee || null,
+            gps: data?.gps || null,
           });
         }
       } catch (error) {

@@ -4,9 +4,12 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { Typography, CssBaseline, Box, Chip, Button, Dialog, DialogContent, DialogTitle, IconButton } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
+import GpsFixedIcon from '@mui/icons-material/GpsFixed';
+import GpsNotFixedIcon from '@mui/icons-material/GpsNotFixed';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Split from 'split.js';
 import ControlPanel from './components/ControlPanel';
+import GpsDialog from './components/GpsDialog';
 import Scanner from './components/Scanner';
 import Plots from './components/Plots';
 import Analysis from './components/Analysis';
@@ -90,6 +93,7 @@ const App = () => {
   const [verticalLines, setVerticalLines] = useState([]);  // State for vertical lines
   const [horizontalLines, setHorizontalLines] = useState([]);  // State for horizontal lines
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [gpsOpen, setGpsOpen] = useState(false);
   const [telemetry, setTelemetry] = useState({
     sdr: 'n/a',
     hzPerBin: 0,
@@ -112,6 +116,7 @@ const App = () => {
     fm: null,
     wifi: null,
     zigbee: null,
+    gps: null,
   });
 
 
@@ -328,6 +333,9 @@ const App = () => {
     : '-';
   const scannerModeActive = Boolean(telemetry.scannerMode?.active);
   const scannerModeLabel = telemetry.scannerMode?.step?.label || 'Idle';
+  const gpsLock = telemetry.gps?.lock || 'NO';
+  const gpsConnected = Boolean(telemetry.gps?.connected);
+  const GpsIcon = gpsConnected && gpsLock !== 'NO' ? GpsFixedIcon : GpsNotFixedIcon;
   const modalTitles = {
     scanner: 'Scanner',
     analysis: 'Analysis',
@@ -392,6 +400,18 @@ const App = () => {
               gap: 1,
             }}
           >
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<GpsIcon />}
+              onClick={() => setGpsOpen(true)}
+              sx={{
+                borderColor: gpsConnected ? '#3f7f6f' : '#3d556d',
+                color: gpsConnected ? '#c9fff0' : '#d9f0ff',
+              }}
+            >
+              GPS {gpsConnected ? gpsLock : 'OFF'}
+            </Button>
             <Button
               size="small"
               variant="outlined"
@@ -654,6 +674,8 @@ const App = () => {
             </Box>
           </DialogContent>
         </Dialog>
+
+        <GpsDialog open={gpsOpen} onClose={() => setGpsOpen(false)} />
 
       </Box>
     </ThemeProvider>

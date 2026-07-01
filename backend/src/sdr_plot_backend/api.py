@@ -11,6 +11,7 @@ from flask import Blueprint, jsonify, request, current_app, Response
 
 from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
 from sdr_plot_backend.fm_plugin import FmBroadcastPlugin
+from sdr_plot_backend.gps_plugin import GpsdPlugin
 from sdr_plot_backend.iq_session import IQReplaySDR, IQSessionRecorder
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
@@ -59,6 +60,7 @@ bluetooth_plugin = BluetoothGatewayPlugin()
 fm_plugin = FmBroadcastPlugin()
 wifi_plugin = WiFiGatewayPlugin()
 zigbee_plugin = ZigbeeGatewayPlugin()
+gps_plugin = GpsdPlugin()
 iq_recorder = IQSessionRecorder()
 live_sdr = None
 replay_sdr = None
@@ -618,6 +620,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'fm': fm_plugin.snapshot(max_events=20),
         'wifi': wifi_plugin.snapshot(max_events=20),
         'zigbee': zigbee_plugin.snapshot(max_events=20),
+        'gps': gps_plugin.snapshot(),
         'scannerMode': _scanner_status(),
         'iqSession': {
             'recording': iq_recorder.status(),
@@ -1233,6 +1236,10 @@ def stop_scanner_plan():
 def scanner_plan_status():
     return jsonify({'success': True, 'scanner': _to_builtin(_scanner_status())})
 
+@api_blueprint.route('/api/gps/status', methods=['GET'])
+def gps_status():
+    return jsonify({'success': True, 'gps': _to_builtin(gps_plugin.snapshot())})
+
 @atexit.register
 def cleanup():
     global running
@@ -1241,6 +1248,7 @@ def cleanup():
     bluetooth_plugin.stop()
     wifi_plugin.stop()
     zigbee_plugin.stop()
+    gps_plugin.stop()
     if replay_sdr is not None:
         try:
             replay_sdr.stop()

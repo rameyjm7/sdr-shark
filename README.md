@@ -65,6 +65,22 @@ Scanner mode:
 - Other selected bands keep individual percentages. The Scan Plan table shows the exact order, center frequency, bandwidth, protocols, dwell time, and how often each band is revisited.
 - While scanner mode retunes between bands, the spectrum Y range is automatically re-leveled once for the new band.
 
+GPSD integration:
+
+- SDR-Shark can read live GPS status from `gpsd` and expose it in the top-right `GPS` dialog.
+- Install gpsd and client tools on Debian/Ubuntu with `sudo apt install gpsd gpsd-clients`, then enable it with `sudo systemctl enable --now gpsd`.
+- Configure gpsd devices in `/etc/default/gpsd`; for many USB GPS receivers use `USBAUTO="true"` and `GPSD_OPTIONS="-n"`.
+- Set SDR-Shark service defaults in `/etc/default/sdr-shark`, for example:
+
+```bash
+export GPSD_HOST=127.0.0.1
+export GPSD_PORT=2948
+```
+
+- Stock gpsd commonly listens on TCP port `2947`; use `GPSD_PORT=2947` instead if that is what your service exposes.
+- Verify the listener with `ss -ltnp | grep gpsd` or test the feed with `gpspipe -w`.
+- Disable the GPS plugin with `SDR_SHARK_GPS_PLUGIN=0`.
+
 For direct SoapySDR mode, install SoapySDR and the driver packages for your radio, then verify:
 
 ```bash
