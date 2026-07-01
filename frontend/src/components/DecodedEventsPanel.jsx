@@ -1,12 +1,18 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, Chip, Divider, IconButton, Paper, Stack, Tooltip, Typography } from '@mui/material';
 import BluetoothIcon from '@mui/icons-material/Bluetooth';
+import EventRepeatIcon from '@mui/icons-material/EventRepeat';
 import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RadioIcon from '@mui/icons-material/Radio';
 import SensorsIcon from '@mui/icons-material/Sensors';
 import StopIcon from '@mui/icons-material/Stop';
 import WifiIcon from '@mui/icons-material/Wifi';
+
+const PATTERN_OF_LIFE_STORAGE_KEY = 'sdrshark_pattern_of_life_v1';
+const PATTERN_OF_LIFE_MAX_DAYS = 90;
+const PATTERN_OF_LIFE_WINDOW_DAYS = 30;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const formatAge = (seenAt) => {
   const ts = Number(seenAt);
@@ -19,6 +25,54 @@ const formatAge = (seenAt) => {
 };
 
 const hasValue = (value) => value !== undefined && value !== null && value !== '';
+
+const dayKeyFromSeenAt = (seenAt) => {
+  const ts = Number(seenAt);
+  const date = new Date(Number.isFinite(ts) ? ts * 1000 : Date.now());
+  return date.toISOString().slice(0, 10);
+};
+
+const dayIndexFromKey = (dayKey) => {
+  const value = Date.parse(`${dayKey}T00:00:00.000Z`);
+  return Number.isFinite(value) ? Math.floor(value / MS_PER_DAY) : 0;
+};
+
+const todayDayIndex = () => Math.floor(Date.now() / MS_PER_DAY);
+
+const loadPatternOfLifeStore = () => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(PATTERN_OF_LIFE_STORAGE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+};
+
+const savePatternOfLifeStore = (store) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PATTERN_OF_LIFE_STORAGE_KEY, JSON.stringify(store));
+  } catch (error) {
+    // Non-fatal; the activity panel should keep working if browser storage is full.
+  }
+};
+
+const prunePatternOfLifeStore = (store) => {
+  const cutoffDay = todayDayIndex() - PATTERN_OF_LIFE_MAX_DAYS;
+  return Object.fromEntries(Object.entries(store || {}).flatMap(([key, entry]) => {
+    const days = Object.fromEntries(Object.entries(entry?.days || {}).filter(([day]) => dayIndexFromKey(day) >= cutoffDay));
+    if (Object.keys(days).length === 0) return [];
+    const sortedDays = Object.keys(days).sort();
+    return [[key, {
+      ...entry,
+      days,
+      first_seen_date: sortedDays[0],
+      last_seen_date: sortedDays[sortedDays.length - 1],
+      seen_day_count: sortedDays.length,
+    }]];
+  }));
+};
 
 const eventKey = (event, idx) => (
   event?.address ||
@@ -183,6 +237,64 @@ const eventIdentity = (event) => {
   if (event?.lap) return `BTC LAP ${event.lap}`;
   if (event?.manufacturer?.company_name) return event.manufacturer.company_name;
   return '';
+};
+
+const patternOfLifeKey = (event) => {
+  const identity = String(eventIdentity(event) || '').trim();
+  if (!identity) return '';
+  return `${protocolKey(event)}:${identity.toUpperCase()}`;
+};
+
+const summarizePatternOfLife = (entry) => {
+  const days = Object.keys(entry?.days || {}).sort();
+  if (!days.length) return null;
+  const dayIndexes = new Set(days.map(dayIndexFromKey));
+  let streak = 0;
+  let cursor = dayIndexFromKey(days[days.length - 1]);
+  while (dayIndexes.has(cursor)) {
+    streak += 1;
+    cursor -= 1;
+  }
+  const recentCutoff = todayDayIndex() - (PATTERN_OF_LIFE_WINDOW_DAYS - 1);
+  const recentDays = days.filter((day) => dayIndexFromKey(day) >= recentCutoff).length;
+  return {
+    ...entry,
+    seen_days: streak,
+    seen_day_count: days.length,
+    recent_days: recentDays,
+    first_seen_date: days[0],
+    last_seen_date: days[days.length - 1],
+  };
+};
+
+const patternChipLabel = (pattern) => {
+  const streak = Number(pattern?.seen_days || 0);
+  if (streak > 1) return `${streak}-day streak`;
+  if (streak === 1) return '1 day';
+  return `seen ${Number(pattern?.recent_days || 0)}/${PATTERN_OF_LIFE_WINDOW_DAYS}d`;
+};
+
+const patternChipTitle = (pattern) => {
+  const streak = Number(pattern?.seen_days || 0);
+  const total = Math.max(streak, Number(pattern?.seen_day_count || 0));
+  const range = pattern?.first_seen_date && pattern?.last_seen_date
+    ? `${pattern.first_seen_date} to ${pattern.last_seen_date}`
+    : '';
+  return [
+    streak ? `${streak} consecutive UTC day${streak === 1 ? '' : 's'}` : '',
+    total ? `${total} total UTC day${total === 1 ? '' : 's'}` : '',
+    Number(pattern?.recent_days || 0) ? `${Number(pattern.recent_days)} seen in the last ${PATTERN_OF_LIFE_WINDOW_DAYS} UTC days` : '',
+    range,
+  ].filter(Boolean).join(' · ');
+};
+
+const patternChipSx = {
+  color: '#142f24',
+  bgcolor: 'transparent',
+  background: 'linear-gradient(135deg, #b8f3ce, #f5d36b)',
+  border: '1px solid rgba(255, 247, 211, 0.45)',
+  fontWeight: 850,
+  '& .MuiChip-icon': { color: '#1b6b4f' },
 };
 
 const isDeviceEvent = (event) => Boolean(
@@ -375,11 +487,13 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
   const [filterMode, setFilterMode] = useState('all');
   const [playingFrequency, setPlayingFrequency] = useState(null);
   const [playbackError, setPlaybackError] = useState('');
+  const [patternOfLifeStore, setPatternOfLifeStore] = useState(loadPatternOfLifeStore);
   const audioCtxRef = useRef(null);
   const gainNodeRef = useRef(null);
   const playCursorRef = useRef(0);
   const audioLoopActiveRef = useRef(false);
   const playingRef = useRef(null);
+  const patternProcessedKeysRef = useRef(new Set());
 
   useEffect(() => {
     setHistoryEvents((prev) => {
@@ -402,6 +516,62 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
         .slice(0, maxHistoryEvents);
     });
   }, [events, retentionSec, maxHistoryEvents, clearedAt]);
+
+  useEffect(() => {
+    if (!events.length) return;
+    setPatternOfLifeStore((prev) => {
+      const next = prunePatternOfLifeStore(prev);
+      let changed = false;
+      events.forEach((event, idx) => {
+        if (!isDeviceEvent(event)) return;
+        const patternKey = patternOfLifeKey(event);
+        if (!patternKey) return;
+        const seenAt = eventSeenAt(event);
+        const dayKey = dayKeyFromSeenAt(seenAt);
+        const processedKey = `${dayKey}:${eventKey(event, idx)}`;
+        if (patternProcessedKeysRef.current.has(processedKey)) return;
+        patternProcessedKeysRef.current.add(processedKey);
+        if (patternProcessedKeysRef.current.size > 10000) {
+          patternProcessedKeysRef.current = new Set(Array.from(patternProcessedKeysRef.current).slice(-5000));
+        }
+        const previous = next[patternKey] || {};
+        const days = {
+          ...(previous.days || {}),
+          [dayKey]: Number(previous.days?.[dayKey] || 0) + 1,
+        };
+        const sortedDays = Object.keys(days).sort();
+        const rssi = Number(event?.rssi_dbfs ?? event?.rssi_dbm ?? event?.power_dbfs ?? event?.last_rssi_dbfs);
+        const previousBestRssi = Number(previous.last_rssi_dbfs);
+        const entry = {
+          ...previous,
+          protocol: protocolKey(event),
+          identity: eventIdentity(event),
+          title: eventTitle(event),
+          days,
+          first_seen_at: Math.min(Number(previous.first_seen_at || seenAt), seenAt),
+          last_seen_at: Math.max(Number(previous.last_seen_at || 0), seenAt),
+          first_seen_date: sortedDays[0],
+          last_seen_date: sortedDays[sortedDays.length - 1],
+          seen_day_count: sortedDays.length,
+          seen_count: Number(previous.seen_count || 0) + 1,
+          detections: Number(previous.detections || 0) + Math.max(1, Number(event?.detections || event?.group_count || 1)),
+          last_rssi_dbfs: Number.isFinite(rssi)
+            ? (Number.isFinite(previousBestRssi) ? Math.max(previousBestRssi, rssi) : rssi)
+            : previous.last_rssi_dbfs,
+        };
+        next[patternKey] = {
+          ...entry,
+          ...summarizePatternOfLife(entry),
+        };
+        changed = true;
+      });
+      return changed ? prunePatternOfLifeStore(next) : prev;
+    });
+  }, [events]);
+
+  useEffect(() => {
+    savePatternOfLifeStore(patternOfLifeStore);
+  }, [patternOfLifeStore]);
 
   const clearActivity = () => {
     setClearedAt(Date.now() / 1000);
@@ -449,6 +619,25 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
     }));
   }, [filteredEvents]);
   const foldProtocolGroups = protocolGroups.length > 1 || filteredEvents.length > 3;
+  const patternForEvent = (event) => summarizePatternOfLife(patternOfLifeStore[patternOfLifeKey(event)]);
+  const bestPatternForRows = (rows) => rows
+    .map(patternForEvent)
+    .filter(Boolean)
+    .sort((a, b) => (
+      Number(b.seen_days || 0) - Number(a.seen_days || 0) ||
+      Number(b.seen_day_count || 0) - Number(a.seen_day_count || 0) ||
+      Number(b.last_seen_at || 0) - Number(a.last_seen_at || 0)
+    ))[0] || null;
+  const renderPatternChip = (pattern) => (pattern ? (
+    <Tooltip title={patternChipTitle(pattern)}>
+      <Chip
+        size="small"
+        icon={<EventRepeatIcon />}
+        label={patternChipLabel(pattern)}
+        sx={patternChipSx}
+      />
+    </Tooltip>
+  ) : null);
 
   const ensureAudio = async () => {
     if (!audioCtxRef.current) audioCtxRef.current = new AudioContext({ sampleRate: 48000 });
@@ -560,6 +749,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
     const EventIcon = isFm ? RadioIcon : (isWifi ? WifiIcon : (isZigbee ? SensorsIcon : (isAdsb ? FlightTakeoffIcon : BluetoothIcon)));
     const uaps = Array.isArray(event?.uap_options) ? event.uap_options : [];
     const footprintLabel = eventFootprintLabel(event);
+    const pattern = patternForEvent(event);
     return (
       <Paper
         key={eventKey(event, idx)}
@@ -601,6 +791,12 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
             label={protocolLabel(event)}
             sx={{ bgcolor: `${accent}22`, color: '#fff', '& .MuiChip-icon': { color: accent } }}
           />
+          {renderPatternChip(pattern)}
+          {pattern?.recent_days > 1 ? (
+            <Tooltip title={patternChipTitle(pattern)}>
+              <Chip size="small" label={`seen ${pattern.recent_days}/${PATTERN_OF_LIFE_WINDOW_DAYS}d`} />
+            </Tooltip>
+          ) : null}
           {footprintLabel ? <Chip size="small" label={footprintLabel} /> : null}
           {isFm && event?.frequency_mhz !== undefined ? <Chip size="small" label={`${Number(event.frequency_mhz).toFixed(1)} MHz`} /> : null}
           {isFm ? <Chip size="small" color={event?.decode_status === 'station' ? 'success' : 'warning'} label={event?.decode_status === 'station' ? 'station' : 'potential'} /> : null}
@@ -697,11 +893,13 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
     const accent = protocol === 'FM' ? '#ffb347' : (protocol === 'WIFI' ? '#6ecbff' : (protocol === 'ZIGBEE' ? '#b084ff' : (protocol === 'ADSB' ? '#ff6b6b' : (protocol === 'BTC' ? '#ffd166' : '#64f0d2'))));
     const GroupIcon = protocol === 'FM' ? RadioIcon : (protocol === 'WIFI' ? WifiIcon : (protocol === 'ZIGBEE' ? SensorsIcon : (protocol === 'ADSB' ? FlightTakeoffIcon : BluetoothIcon)));
     const defaultOpen = !foldProtocolGroups || groupIndex < 1;
+    const groupPattern = bestPatternForRows(rows);
     const body = protocol === 'BTLE'
       ? Array.from(groupRowsBy(rows, manufacturerGroupLabel).entries())
         .sort(([a], [b]) => String(a).localeCompare(String(b)))
         .map(([label, manufacturerRows], idx) => {
           const subgroupStats = summaryStats(manufacturerRows);
+          const subgroupPattern = bestPatternForRows(manufacturerRows);
           return (
             <Paper
               key={`${protocol}-${label}`}
@@ -725,6 +923,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
                 <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                   <Chip size="small" label={`${manufacturerRows.length} device${manufacturerRows.length === 1 ? '' : 's'}`} />
                   <Chip size="small" label={`${subgroupStats.detections} detections`} />
+                  {renderPatternChip(subgroupPattern)}
                   <Chip size="small" label={`${subgroupStats.bestRssi.toFixed(1)} dBFS`} />
                   <Chip size="small" label={formatAge(subgroupStats.lastSeen)} />
                 </Stack>
@@ -763,6 +962,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
             <Chip size="small" sx={{ bgcolor: `${accent}22`, color: '#fff' }} label={protocol} />
             <Chip size="small" label={`${rows.length} card${rows.length === 1 ? '' : 's'}`} />
             <Chip size="small" label={`${stats.detections} detections`} />
+            {renderPatternChip(groupPattern)}
             <Chip size="small" label={`${stats.bestRssi.toFixed(1)} dBFS`} />
             <Chip size="small" label={formatAge(stats.lastSeen)} />
           </Stack>

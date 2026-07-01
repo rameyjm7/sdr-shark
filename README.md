@@ -1,114 +1,363 @@
 # SDR-Shark
-A React application with a Python backend for SIGINT applications with applied ML using PyTorch and TensorFlow
 
-Signal Intelligence platform at your fingertips...
-<img width="1866" height="904" alt="image" src="https://github.com/user-attachments/assets/d6798fa3-953b-47dd-bf76-a702983a7d4c" />
+SDR-Shark is a web-based software defined radio console for live spectrum monitoring, waterfall visualization, protocol-aware signal activity, and decoder-assisted RF discovery. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
 
+The project is intended for lawful RF engineering, lab validation, education, spectrum monitoring, and passive signal-awareness workflows. Operators are responsible for complying with all applicable radio, privacy, and computer misuse laws in their jurisdiction.
 
-# How to install
+## What It Does
 
-apt install python3-venv
+- Displays a live spectrum trace and waterfall with GPU-backed rendering support.
+- Supports direct SoapySDR receive and gateway-backed receive through `sdr-gateway`.
+- Shares one wideband IQ stream with multiple decoder plugins.
+- Shows decoded signal activity cards for Bluetooth Low Energy, Bluetooth Classic, WiFi/802.11, Zigbee/802.15.4, FM broadcast, ADS-B, and GPS status.
+- Provides scanner mode for repeated dwell plans across 2.4 GHz ISM, FM, sub-GHz, ADS-B, LTE awareness bands, and WiFi 5.8 GHz.
+- Tracks Pattern-of-Life information in the activity panel, including multi-day seen/streak pills.
+- Provides optional FM station verification and playback from the live wideband IQ stream.
+- Supports top-right modal workflows for settings, scanner, analysis, classifiers, GPS, and related controls.
 
-python3-venv /home/eng/python
+## Architecture
 
-source /home/eng/python/bin/activate
+SDR-Shark has three main layers:
 
+- `frontend/`: React UI for the live plot, waterfall, scanner, settings dialogs, GPS dialog, and decoded signal activity panel.
+- `backend/src/sdr_plot_backend/`: Flask API, SDR adapter, scanner controller, protocol plugin adapters, and shared IQ tap plumbing.
+- `scripts/`: local start, service management, gateway mode, and one-script installation helpers.
 
-#cd to the <repository root>/backend/ folder
+Receive modes:
 
-pip install .
+- `SDR_BACKEND=gateway`: SDR-Shark connects to `sdr-gateway` using `SDR_SERVER_URL` and an optional `SDR_GATEWAY_API_TOKEN`. This is the packaged default because it supports shared-radio deployments.
+- `SDR_BACKEND=soapy`: SDR-Shark opens the radio locally using SoapySDR.
+- `replay`: internal/plugin workflows can consume recorded or replayed IQ where supported.
 
+## Hardware
 
-#for the frontend, in a new terminal, go the frontend folder and run these command to install the dependencies and run the frontend
+The direct SoapySDR path can work with any radio supported by the installed SoapySDR modules. Common devices include HackRF, bladeRF, RTL-SDR, Airspy, Sidekiq, and other Soapy-compatible receivers.
 
-yarn install
+High-rate features such as 60 MHz 2.4 GHz scanning require hardware and host I/O that can sustain the requested bandwidth. For narrowband features such as ADS-B, FM, and sub-GHz monitoring, lower bandwidth devices may be sufficient.
 
-# How to run
+## Quick Install
 
-**Option 1:** (Recommended for speed): Gunicorn using scripts/start.sh
-
-From the repository root after installing the dependencies (backend and frontend), run ./scripts/start.sh to run the gunicorn server.
-
-Systemd service helper:
-
-Use ./scripts/sdr-shark-service.sh to install/manage a service:
-
-- install
-- enable
-- disable
-- start
-- stop
-- restart
-- status
-- logs
-
-If your `sdr-gateway` lives somewhere other than `http://127.0.0.1:8080`, set `SDR_SERVER_URL` before installing the service and the helper will write it into the service environment file alongside `SDR_GATEWAY_API_TOKEN`.
-
-SDR backend options:
-
-- Default: `SDR_BACKEND=soapy` uses local SoapySDR Python bindings directly and does not require `sdr-gateway`.
-- Gateway mode: `SDR_BACKEND=gateway` uses `sdr-gateway` at `SDR_SERVER_URL`.
-- Gateway helper: `./scripts/run_gateway.sh` starts SDR-Shark with `SDR_BACKEND=gateway` and requests the gateway's native IQ stream format.
-
-RF Sentinel Bluetooth decoding:
-
-- Enabled by default with `SDR_SHARK_BLUETOOTH_PLUGIN=1`; disable with `SDR_SHARK_BLUETOOTH_PLUGIN=0`.
-- In direct SoapySDR mode, SDR-Shark owns the radio and mirrors live IQ as `cs8` chunks to RF Sentinel. Bluetooth Classic is fed through a temporary FIFO in `/tmp`, while BLE uses the same mirrored chunks in-process.
-- The decoder starts only when the active receive window overlaps the Bluetooth range, 2402-2480 MHz.
-- Set `RF_SENTINEL_ROOT=/path/to/RF_Sentinel` if RF Sentinel is not at `/home/jake/workspace/SDR/RF_Sentinel`.
-- Bluetooth/BTC events are written to `/var/log/sdr-shark/bluetooth-events-current.jsonl`, and the BTC sniffer startup log is `/var/log/sdr-shark/btcexplorer-sniffer.log`. Override with `SDR_SHARK_BLUETOOTH_LOG_DIR=/path/to/logs`.
-
-Scanner mode:
-
-- Open `Scanner` from the top-right toolbar to configure a repeating dwell scan plan without hiding the live spectrum/waterfall.
-- The 2.4 GHz ISM protocols share one dwell percentage because Zigbee, Thread, WiFi 2.4 GHz, Bluetooth Classic, and BLE overlap in spectrum. SDR-Shark scans this as two 60 MHz wideband passes over the low and high portions of the band.
-- Other selected bands keep individual percentages. The Scan Plan table shows the exact order, center frequency, bandwidth, protocols, dwell time, and how often each band is revisited.
-- While scanner mode retunes between bands, the spectrum Y range is automatically re-leveled once for the new band.
-
-GPSD integration:
-
-- SDR-Shark can read live GPS status from `gpsd` and expose it in the top-right `GPS` dialog.
-- Install gpsd and client tools on Debian/Ubuntu with `sudo apt install gpsd gpsd-clients`, then enable it with `sudo systemctl enable --now gpsd`.
-- Configure gpsd devices in `/etc/default/gpsd`; for many USB GPS receivers use `USBAUTO="true"` and `GPSD_OPTIONS="-n"`.
-- Set SDR-Shark service defaults in `/etc/default/sdr-shark`, for example:
+On Debian/Ubuntu-like systems, the recommended one-script install is:
 
 ```bash
-export GPSD_HOST=127.0.0.1
-export GPSD_PORT=2948
+cd /home/jake/workspace/SDR/SDR-Shark
+chmod +x scripts/install.sh
+./scripts/install.sh
 ```
 
-- Stock gpsd commonly listens on TCP port `2947`; use `GPSD_PORT=2947` instead if that is what your service exposes.
-- Verify the listener with `ss -ltnp | grep gpsd` or test the feed with `gpspipe -w`.
-- Disable the GPS plugin with `SDR_SHARK_GPS_PLUGIN=0`.
+This installs common system dependencies when `apt-get` is available, creates `.venv`, installs the backend, installs frontend packages, and builds the frontend.
 
-ADS-B integration:
+To install and start SDR-Shark as a systemd service in one command:
 
-- SDR-Shark includes a vendored `adsb-rx` decoder plugin under `backend/src/sdr_plot_backend/plugins/adsb_rx/adsb-rx`.
-- The `ADS-B 1090` scanner target tunes 1090 MHz at 2 MHz bandwidth/sample rate and feeds the shared SDR-Shark IQ tap to the decoder.
-- Install Rust/Cargo for the first automatic build, or set `SDR_SHARK_ADSB_RX_BIN=/path/to/adsb-rx` to use a prebuilt binary.
-- Disable the ADS-B plugin with `SDR_SHARK_ADSB_PLUGIN=0`.
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark
+./scripts/install.sh --enable-service
+```
 
-For direct SoapySDR mode, install SoapySDR and the driver packages for your radio, then verify:
+To skip system package installation, for example on a prepared machine:
+
+```bash
+./scripts/install.sh --no-system-packages
+```
+
+## Manual Install
+
+Install system dependencies:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential cargo curl git gpsd gpsd-clients gunicorn libliquid-dev \
+  npm python3-dev python3-pip python3-venv soapysdr-tools sox tshark wireshark-common
+```
+
+Create and populate the Python environment:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip wheel setuptools
+python -m pip install -r requirements.txt
+python -m pip install -e backend
+```
+
+Install and build the frontend:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark/frontend
+npm install
+npm run build
+```
+
+Optional FM channelizer build:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark
+bash backend/src/sdr_plot_backend/native/build_fm_channelizer.sh
+```
+
+## Running Locally
+
+Start the backend from the repository root:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark
+source .venv/bin/activate
+./scripts/start.sh
+```
+
+For frontend development:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark/frontend
+npm start
+```
+
+The development frontend normally runs on `http://localhost:3000` and proxies API calls to the backend. The backend normally listens on `0.0.0.0:5000`.
+
+## Running as a systemd Service
+
+Install or refresh the service:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark
+./scripts/sdr-shark-service.sh install
+```
+
+Enable and start it:
+
+```bash
+./scripts/sdr-shark-service.sh enable
+./scripts/sdr-shark-service.sh start
+```
+
+Common service commands:
+
+```bash
+./scripts/sdr-shark-service.sh status
+./scripts/sdr-shark-service.sh logs
+./scripts/sdr-shark-service.sh restart
+./scripts/sdr-shark-service.sh stop
+```
+
+The helper writes the unit to `/etc/systemd/system/sdr-shark.service` and service defaults to `/etc/default/sdr-shark`.
+
+Example `/etc/default/sdr-shark`:
+
+```bash
+SDR_BACKEND='gateway'
+SDR_SHARK_LOG_DIR='/var/log/sdr-shark'
+SDR_SHARK_BLUETOOTH_LOG_DIR='/var/log/sdr-shark'
+GPSD_HOST='127.0.0.1'
+GPSD_PORT='2948'
+```
+
+For direct SoapySDR mode:
+
+```bash
+SDR_BACKEND='soapy'
+```
+
+For gateway mode with a non-default gateway URL or authenticated gateway:
+
+```bash
+SDR_BACKEND='gateway'
+SDR_SERVER_URL='http://127.0.0.1:8080'
+SDR_GATEWAY_API_TOKEN='replace-with-your-token-if-required'
+```
+
+After editing `/etc/default/sdr-shark`, restart:
+
+```bash
+sudo systemctl restart sdr-shark
+```
+
+## SDR Backend Configuration
+
+Direct SoapySDR mode:
+
+```bash
+SDR_BACKEND=soapy ./scripts/start.sh
+```
+
+Verify SoapySDR:
 
 ```bash
 SoapySDRUtil --find
 python -c "import SoapySDR; print('SoapySDR ok')"
-SDR_BACKEND=soapy ./scripts/start.sh
 ```
 
-Optional: limit direct discovery with `SDR_SOAPY_DRIVERS=hackrf,rtlsdr,airspy,bladerf,sidekiq`.
+Limit device probing:
 
-SoapySDR/vendor probe and overflow warnings are written to `/var/log/sdr-shark/soapysdr.log` by default instead of the service console. Override with `SDR_SOAPY_LOG_FILE=/path/to/soapysdr.log`, or set `SDR_SOAPY_LOG_STDERR=1` while debugging to show them on stderr again.
+```bash
+export SDR_SOAPY_DRIVERS=hackrf,bladerf,rtlsdr,airspy,sidekiq
+```
 
-Backend startup auto-launches the React dev frontend when `frontend/node_modules` exists. If port `3000` is already in use, it skips auto-start instead of prompting for another port. Set `SDR_SHARK_AUTO_START_FRONTEND=0` to disable this behavior, or `SDR_SHARK_FRONTEND_PORT=3001` to use a different frontend port.
+Gateway mode:
 
+```bash
+SDR_BACKEND=gateway SDR_SERVER_URL=http://127.0.0.1:8080 ./scripts/start.sh
+```
 
-**Option 2:** If you want to make changes and develop
+Or use the helper:
 
-#run the frontend from the frontend folder
-yarn start
+```bash
+./scripts/run_gateway.sh
+```
 
-#run the backend using python3
+SoapySDR warnings and vendor output are written to `/var/log/sdr-shark/soapysdr.log` by default. To show them on stderr while debugging:
+
+```bash
+export SDR_SOAPY_LOG_STDERR=1
+```
+
+## Plugin Installation
+
+Decoder plugins have additional dependencies. See [Plugin Installation](docs/plugin-installation.md) for detailed setup of:
+
+- RF Sentinel-backed Bluetooth, Zigbee, WiFi, and FM support.
+- WiFi MAC frame decoding through GNU Radio, gr-ieee802-11, tshark/pyshark-compatible JSONL/PCAP flows.
+- ADS-B Rust decoder support.
+- GPSD service setup.
+- Liquid-DSP FM channelizer support.
+
+Most plugins are enabled by default and become active only when the tuned receive window overlaps their supported frequency range.
+
+## GPSD Setup
+
+Install GPSD:
+
+```bash
+sudo apt-get install -y gpsd gpsd-clients
+```
+
+Configure `/etc/default/gpsd`. A common USB GPS setup is:
+
+```bash
+START_DAEMON="true"
+USBAUTO="true"
+DEVICES=""
+GPSD_OPTIONS="-n"
+```
+
+Enable and start GPSD:
+
+```bash
+sudo systemctl enable --now gpsd
+```
+
+Verify GPSD:
+
+```bash
+gpspipe -w
+ss -ltnp | grep gpsd
+```
+
+Configure SDR-Shark in `/etc/default/sdr-shark`:
+
+```bash
+GPSD_HOST='127.0.0.1'
+GPSD_PORT='2948'
+```
+
+Some GPSD installs listen on `2947`; set `GPSD_PORT='2947'` if that is what your system exposes.
+
+Disable the GPS plugin:
+
+```bash
+SDR_SHARK_GPS_PLUGIN='0'
+```
+
+## Scanner Mode
+
+Open `Scanner` from the top-right toolbar. Scanner mode builds a repeated dwell plan and retunes SDR-Shark while decoders run.
+
+Key behavior:
+
+- 2.4 GHz ISM protocols share one dwell percentage because Zigbee, Thread, WiFi 2.4 GHz, Bluetooth Classic, and BLE overlap.
+- 2.4 GHz ISM scanning uses two wideband passes: low and high portions of the band at up to 60 MHz bandwidth.
+- FM discovery is capped at 5% of the scan cycle so broadcast discovery does not dominate multi-protocol scanning.
+- Other selected bands keep individual percentages.
+- The scan plan table shows order, center frequency, bandwidth, protocols, dwell time, and revisit period.
+- When scanner mode retunes, SDR-Shark auto-levels the Y axis for the new band.
+
+## Signal Activity and Pattern of Life
+
+The Signal Activity panel groups decoded protocol activity into cards. Device-oriented detections can be folded by protocol and manufacturer/type. SDR-Shark also records a browser-local Pattern-of-Life cache that tracks compatible fields such as `seen_days`, `seen_day_count`, `first_seen_date`, and `last_seen_date`.
+
+Pattern-of-Life pills show whether something was seen today, how many recent days it appeared, and whether it has a multi-day streak. This is intended as a field-use convenience and can later be backed by a shared database or RF Sentinel-compatible history store.
+
+## Logs and Runtime Data
+
+Default log locations:
+
+- Service logs: `journalctl -u sdr-shark -f`
+- SDR-Shark logs: `/var/log/sdr-shark`
+- SoapySDR vendor output: `/var/log/sdr-shark/soapysdr.log`
+- Bluetooth events: `/var/log/sdr-shark/bluetooth-events-current.jsonl`
+- Bluetooth archive: `/var/log/sdr-shark/archive/<date-time>/`
+- WiFi decoder PCAP/JSONL paths: configurable; see [Plugin Installation](docs/plugin-installation.md)
+
+## Development Workflow
+
+Backend development:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark
+source .venv/bin/activate
 python3 -m sdr_plot_backend
+```
 
-Then, Browse to the IP Address of your PC, port 3000. i.e. 10.139.1.86:3000
+Frontend development:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark/frontend
+npm start
+```
+
+Production frontend build check:
+
+```bash
+cd /home/jake/workspace/SDR/SDR-Shark/frontend
+npm run build
+```
+
+Recommended before submitting changes:
+
+```bash
+git status --short
+npm run build
+```
+
+## Collaborating
+
+Contributions should be scoped, testable, and respectful of existing operator workflows. Good changes usually include:
+
+- A short description of the operational problem being solved.
+- A clear default behavior that does not break existing receivers or services.
+- Environment variables for hardware- or site-specific settings.
+- Documentation updates for new service, plugin, or decoder requirements.
+- A build or smoke-test result in the pull request notes.
+
+When working on SDR or decoder changes, avoid assuming exclusive access to a radio. SDR-Shark often runs alongside `sdr-gateway` and other consumers, so shared IQ tap behavior and clean shutdown are important.
+
+## Future Improvements
+
+Potential areas for future work:
+
+- Persistent backend Pattern-of-Life storage shared with RF Sentinel.
+- More complete WiFi MAC management frame enrichment and SSID/BSSID history.
+- Additional protocol plugins for cellular awareness, LoRa, TPMS, VLF/LF/MF, and other ISM bands.
+- Better replay/session recording tools for detector validation.
+- More GPU rendering options and waterfall palette controls.
+- Role-based access control for multi-user deployments.
+- Packaged releases for Debian/Ubuntu and containerized lab deployments.
+- Automated hardware capability detection for bandwidth, gain ranges, and safe scanner plans.
+
+## Commercial Licensing
+
+For commercial licensing, integration, or support inquiries, contact:
+
+- rameyjm7@gmail.com
+- jake.rtgllc@gmail.com

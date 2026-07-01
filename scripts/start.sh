@@ -4,8 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-export SDR_BACKEND="gateway"
-export SDR_BACKEND="${SDR_BACKEND:-soapy}"
+export SDR_BACKEND="${SDR_BACKEND:-gateway}"
 
 # Optional token loading for sdr-gateway auth.
 # Priority:

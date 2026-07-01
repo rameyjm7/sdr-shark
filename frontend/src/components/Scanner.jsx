@@ -22,6 +22,12 @@ import SensorsIcon from "@mui/icons-material/Sensors";
 import WifiIcon from "@mui/icons-material/Wifi";
 
 const SCANNER_CONFIG_STORAGE_KEY = "sdrShark.scannerConfig.v1";
+const FM_DISCOVERY_LABEL = "FM Radio";
+const FM_DISCOVERY_MAX_PERCENT = 5;
+
+const roundPercent = (value) => Math.round(Number(value || 0) * 10) / 10;
+
+const percentCapForLabel = (label) => (label === FM_DISCOVERY_LABEL ? FM_DISCOVERY_MAX_PERCENT : 100);
 
 const loadSavedScannerConfig = () => {
   if (typeof window === "undefined") return {};
@@ -56,7 +62,7 @@ const Scanner = ({ onClose }) => {
     { label: "Bluetooth Low Energy", range: [2402, 2480], centerMhz: 2442, bandwidthMhz: 60, sampleRateMhz: 60, protocols: ["btle"], icon: BluetoothIcon, color: "#64f0d2" },
   ];
   const otherAreas = [
-    { label: "FM Radio", range: [87.7, 107.7], centerMhz: 97.7, bandwidthMhz: 20, sampleRateMhz: 20, protocols: ["fm"], icon: RadioIcon, color: "#ffb347" },
+    { label: FM_DISCOVERY_LABEL, range: [87.7, 107.7], centerMhz: 97.7, bandwidthMhz: 20, sampleRateMhz: 20, protocols: ["fm"], icon: RadioIcon, color: "#ffb347" },
     { label: "315MHz ISM", range: [315, 316], centerMhz: 315.5, bandwidthMhz: 2, sampleRateMhz: 2, protocols: ["rf"], icon: SensorsIcon, color: "#64f0d2" },
     { label: "433MHz Band", range: [433, 434], centerMhz: 433.5, bandwidthMhz: 2, sampleRateMhz: 2, protocols: ["rf"], icon: SensorsIcon, color: "#64f0d2" },
     { label: "462.5MHz PTT", range: [462.5, 463.5], centerMhz: 463, bandwidthMhz: 2, sampleRateMhz: 2, protocols: ["rf"], icon: RadioIcon, color: "#ffd166" },
@@ -73,7 +79,7 @@ const Scanner = ({ onClose }) => {
   ];
   const areasOfInterest = scanGroups.flatMap((group) => group.areas);
   const scanOrder = [
-    "FM Radio",
+    FM_DISCOVERY_LABEL,
     "315MHz ISM",
     "433MHz Band",
     "462.5MHz PTT",
@@ -96,40 +102,95 @@ const Scanner = ({ onClose }) => {
     return labels;
   };
 
+  const normalizePercentagesForLabels = (labels, rawPercentages) => {
+    const uniqueLabels = Array.from(new Set(labels));
+    if (!uniqueLabels.length) return {};
+    const capacity = uniqueLabels.reduce((sum, label) => sum + percentCapForLabel(label), 0);
+    const targetTotal = Math.min(100, capacity);
+    const next = {};
+    uniqueLabels.forEach((label) => {
+      const value = Math.max(0, Number(rawPercentages?.[label]) || 0);
+      next[label] = Math.min(percentCapForLabel(label), value);
+    });
+
+    for (let pass = 0; pass < uniqueLabels.length + 3; pass += 1) {
+      const total = uniqueLabels.reduce((sum, label) => sum + next[label], 0);
+      const delta = targetTotal - total;
+      if (Math.abs(delta) < 0.001) break;
+
+      if (delta > 0) {
+        const expandable = uniqueLabels.filter((label) => next[label] < percentCapForLabel(label) - 0.001);
+        if (!expandable.length) break;
+        const roomTotal = expandable.reduce((sum, label) => sum + (percentCapForLabel(label) - next[label]), 0);
+        expandable.forEach((label) => {
+          const room = percentCapForLabel(label) - next[label];
+          next[label] += Math.min(room, delta * (room / roomTotal));
+        });
+      } else {
+        const reducible = uniqueLabels.filter((label) => next[label] > 0.001);
+        if (!reducible.length) break;
+        const reducibleTotal = reducible.reduce((sum, label) => sum + next[label], 0);
+        reducible.forEach((label) => {
+          next[label] = Math.max(0, next[label] + delta * (next[label] / reducibleTotal));
+        });
+      }
+    }
+
+    const rounded = {};
+    uniqueLabels.forEach((label) => {
+      rounded[label] = Math.min(percentCapForLabel(label), roundPercent(next[label]));
+    });
+    let roundedTotal = roundPercent(uniqueLabels.reduce((sum, label) => sum + rounded[label], 0));
+    let remainder = roundPercent(targetTotal - roundedTotal);
+    while (Math.abs(remainder) >= 0.1) {
+      const candidate = remainder > 0
+        ? uniqueLabels.find((label) => rounded[label] < percentCapForLabel(label))
+        : uniqueLabels.find((label) => rounded[label] > 0);
+      if (!candidate) break;
+      rounded[candidate] = roundPercent(rounded[candidate] + (remainder > 0 ? 0.1 : -0.1));
+      roundedTotal = roundPercent(uniqueLabels.reduce((sum, label) => sum + rounded[label], 0));
+      remainder = roundPercent(targetTotal - roundedTotal);
+    }
+    return rounded;
+  };
+
   const rebalancePercentages = (labels, anchorLabel = null, anchorValue = null, previous = dwellPercentages) => {
     if (!labels.length) return {};
     const uniqueLabels = Array.from(new Set(labels));
     if (anchorLabel && uniqueLabels.includes(anchorLabel)) {
-      const anchor = Math.max(0, Math.min(100, Number(anchorValue) || 0));
+      const anchor = Math.max(0, Math.min(percentCapForLabel(anchorLabel), Number(anchorValue) || 0));
       const others = uniqueLabels.filter((label) => label !== anchorLabel);
-      if (!others.length) return { [anchorLabel]: 100 };
+      if (!others.length) return normalizePercentagesForLabels(uniqueLabels, { [anchorLabel]: anchor });
       const remaining = Math.max(0, 100 - anchor);
       const previousOtherTotal = others.reduce((sum, label) => sum + Math.max(0, Number(previous[label]) || 0), 0);
-      const next = { [anchorLabel]: Math.round(anchor * 10) / 10 };
+      const next = { [anchorLabel]: roundPercent(anchor) };
       others.forEach((label, index) => {
         const share = previousOtherTotal > 0
           ? remaining * (Math.max(0, Number(previous[label]) || 0) / previousOtherTotal)
           : remaining / others.length;
         next[label] = index === others.length - 1
-          ? Math.round((100 - Object.values(next).reduce((sum, value) => sum + value, 0)) * 10) / 10
-          : Math.round(share * 10) / 10;
+          ? roundPercent(100 - Object.values(next).reduce((sum, value) => sum + value, 0))
+          : roundPercent(share);
       });
-      return next;
+      return normalizePercentagesForLabels(uniqueLabels, next);
     }
     const equalShare = 100 / uniqueLabels.length;
     const next = {};
     uniqueLabels.forEach((label, index) => {
       next[label] = index === uniqueLabels.length - 1
-        ? Math.round((100 - Object.values(next).reduce((sum, value) => sum + value, 0)) * 10) / 10
-        : Math.round(equalShare * 10) / 10;
+        ? roundPercent(100 - Object.values(next).reduce((sum, value) => sum + value, 0))
+        : roundPercent(equalShare);
     });
-    return next;
+    return normalizePercentagesForLabels(uniqueLabels, next);
   };
+
+  const activeWeightingLabels = weightingLabelsForSelection();
+  const effectiveDwellPercentages = normalizePercentagesForLabels(activeWeightingLabels, dwellPercentages);
 
   const percentageFor = (label) => {
     if (label === ISM_24_WEIGHT && !ism24Areas.some((area) => selectedAreas.includes(area.label))) return 0;
     if (label !== ISM_24_WEIGHT && !selectedAreas.includes(label)) return 0;
-    return Number(dwellPercentages[label] ?? 0);
+    return Number(effectiveDwellPercentages[label] ?? 0);
   };
 
   const buildScanPlan = () => {
@@ -182,11 +243,12 @@ const Scanner = ({ onClose }) => {
         if (!cancelled) {
           const scanner = response?.data?.scanner || {};
           const config = scanner.config || {};
+          const loadedSelection = Array.isArray(config.selectedAreas) ? config.selectedAreas : selectedAreas;
           if (Array.isArray(config.selectedAreas)) {
-            setSelectedAreas(config.selectedAreas);
+            setSelectedAreas(loadedSelection);
           }
           if (config.dwellPercentages && typeof config.dwellPercentages === "object") {
-            setDwellPercentages(config.dwellPercentages);
+            setDwellPercentages(rebalancePercentages(weightingLabelsForSelection(loadedSelection), null, null, config.dwellPercentages));
           }
           if (config.cycleSec) {
             setCycleSec(config.cycleSec);
@@ -207,7 +269,7 @@ const Scanner = ({ onClose }) => {
       SCANNER_CONFIG_STORAGE_KEY,
       JSON.stringify({
         selectedAreas,
-        dwellPercentages,
+        dwellPercentages: effectiveDwellPercentages,
         cycleSec,
       })
     );
@@ -228,7 +290,7 @@ const Scanner = ({ onClose }) => {
         dwellSec: Math.max(1, Math.min(3600, Number(cycleSec) || 60)),
         config: {
           selectedAreas,
-          dwellPercentages,
+          dwellPercentages: effectiveDwellPercentages,
           cycleSec: Math.max(1, Math.min(3600, Number(cycleSec) || 60)),
         },
         steps: plannedSteps.map((area) => ({
@@ -393,7 +455,7 @@ const Scanner = ({ onClose }) => {
             value={percent}
             onChange={(event) => handlePercentChange(label, event.target.value)}
             onClick={(event) => event.stopPropagation()}
-            inputProps={{ min: 0, max: 100, step: 1 }}
+            inputProps={{ min: 0, max: percentCapForLabel(label), step: 1 }}
             sx={{
               width: 82,
               '& input': { textAlign: 'right' },

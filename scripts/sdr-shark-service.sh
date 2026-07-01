@@ -31,7 +31,7 @@ Environment overrides:
   SDR_SHARK_GROUP         (default: current user's group)
   SDR_SHARK_ENV_FILE      (default: /etc/default/<service>)
   SDR_SHARK_START_SCRIPT  (default: <repo>/scripts/start.sh)
-  SDR_BACKEND             (default: soapy; written to env file on install)
+  SDR_BACKEND             (default: gateway; written to env file on install)
   SDR_SHARK_LOG_DIR       (default: /var/log/sdr-shark; created on install)
   SDR_SHARK_BLUETOOTH_LOG_DIR (optional; written to env file on install)
   SDR_SOAPY_LOG_FILE      (optional; written to env file on install)
@@ -94,7 +94,7 @@ EOF
   rm -f "/tmp/${SERVICE_NAME}.service"
 
   env_lines=()
-  backend="${SDR_BACKEND:-soapy}"
+  backend="${SDR_BACKEND:-gateway}"
   backend_escaped="$(printf "%s" "${backend}" | sed "s/'/'\"'\"'/g")"
   env_lines+=("SDR_BACKEND='${backend_escaped}'")
 
