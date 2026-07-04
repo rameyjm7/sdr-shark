@@ -7,7 +7,7 @@
 
 SDR-Shark is an applied RF signal-intelligence platform and web-based software defined radio console for live spectrum monitoring, waterfall visualization, protocol-aware signal activity, and decoder-assisted RF discovery. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
 
-The project demonstrates the system layer around RF ML: live device streaming, browser visualization, signal feature extraction, decoder plugin orchestration, service deployment, and integration points for models from [ML-wireless-signal-classification](https://github.com/rameyjm7/ML-wireless-signal-classification).
+The project demonstrates the system layer around RF ML: live device streaming, browser visualization, signal feature extraction, decoder plugin orchestration, service deployment, and integration points for models from [rf-signal-intelligence](https://github.com/rameyjm7/rf-signal-intelligence).
 
 The project is intended for lawful RF engineering, lab validation, education, spectrum monitoring, and passive signal-awareness workflows. Operators are responsible for complying with all applicable radio, privacy, and computer misuse laws in their jurisdiction.
 
