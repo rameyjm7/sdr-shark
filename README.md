@@ -1,6 +1,13 @@
 # SDR-Shark
 
-SDR-Shark is a web-based software defined radio console for live spectrum monitoring, waterfall visualization, protocol-aware signal activity, and decoder-assisted RF discovery. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
+![Python](https://img.shields.io/badge/Python-Backend-blue)
+![React](https://img.shields.io/badge/React-Frontend-61dafb)
+![SDR](https://img.shields.io/badge/SDR-SoapySDR-green)
+![ML](https://img.shields.io/badge/Applied%20ML-RF%20Signal%20Analysis-orange)
+
+SDR-Shark is an applied RF signal-intelligence platform and web-based software defined radio console for live spectrum monitoring, waterfall visualization, protocol-aware signal activity, and decoder-assisted RF discovery. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
+
+The project demonstrates the system layer around RF ML: live device streaming, browser visualization, signal feature extraction, decoder plugin orchestration, service deployment, and integration points for models from [ML-wireless-signal-classification](https://github.com/rameyjm7/ML-wireless-signal-classification).
 
 The project is intended for lawful RF engineering, lab validation, education, spectrum monitoring, and passive signal-awareness workflows. Operators are responsible for complying with all applicable radio, privacy, and computer misuse laws in their jurisdiction.
 
@@ -14,6 +21,7 @@ The project is intended for lawful RF engineering, lab validation, education, sp
 - Tracks Pattern-of-Life information in the activity panel, including multi-day seen/streak pills.
 - Provides optional FM station verification and playback from the live wideband IQ stream.
 - Supports top-right modal workflows for settings, scanner, analysis, classifiers, GPS, and related controls.
+- Provides integration points for RF/IQ classifiers and streaming inference.
 
 ## Architecture
 
