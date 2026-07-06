@@ -29,6 +29,12 @@ const roundPercent = (value) => Math.round(Number(value || 0) * 10) / 10;
 
 const percentCapForLabel = (label) => (label === FM_DISCOVERY_LABEL ? FM_DISCOVERY_MAX_PERCENT : 100);
 
+const normalizeSelectedAreaLabels = (labels = []) => Array.from(new Set(
+  (Array.isArray(labels) ? labels : []).map((label) => (
+    label === "315MHz ISM" || label === "433MHz Band" ? "315/433MHz ISM" : label
+  )),
+));
+
 const loadSavedScannerConfig = () => {
   if (typeof window === "undefined") return {};
   try {
@@ -44,7 +50,7 @@ const Scanner = ({ onClose }) => {
   const [showToast, setShowToast] = useState(false);
   const [toastSeverity, setToastSeverity] = useState("success");
   const [toastMessage, setToastMessage] = useState("");
-  const [selectedAreas, setSelectedAreas] = useState(Array.isArray(savedScannerConfig.selectedAreas) ? savedScannerConfig.selectedAreas : []);
+  const [selectedAreas, setSelectedAreas] = useState(normalizeSelectedAreaLabels(savedScannerConfig.selectedAreas));
   const [scannerActive, setScannerActive] = useState(false);
   const [scannerDirty, setScannerDirty] = useState(false);
   const [cycleSec, setCycleSec] = useState(savedScannerConfig.cycleSec || 60);
@@ -62,44 +68,88 @@ const Scanner = ({ onClose }) => {
     { label: "Bluetooth Low Energy", range: [2402, 2480], centerMhz: 2442, bandwidthMhz: 60, sampleRateMhz: 60, protocols: ["btle"], icon: BluetoothIcon, color: "#64f0d2" },
   ];
   const otherAreas = [
-    { label: FM_DISCOVERY_LABEL, range: [87.7, 107.7], centerMhz: 97.7, bandwidthMhz: 20, sampleRateMhz: 20, protocols: ["fm"], icon: RadioIcon, color: "#ffb347" },
-    { label: "315MHz ISM", range: [315, 316], centerMhz: 315.5, bandwidthMhz: 2, sampleRateMhz: 2, protocols: ["rf"], icon: SensorsIcon, color: "#64f0d2" },
-    { label: "433MHz Band", range: [433, 434], centerMhz: 433.5, bandwidthMhz: 2, sampleRateMhz: 2, protocols: ["rf"], icon: SensorsIcon, color: "#64f0d2" },
-    { label: "462.5MHz PTT", range: [462.5, 463.5], centerMhz: 463, bandwidthMhz: 2, sampleRateMhz: 2, protocols: ["rf"], icon: RadioIcon, color: "#ffd166" },
-    { label: "ADS-B 1090", range: [1089, 1091], centerMhz: 1090, bandwidthMhz: 2, sampleRateMhz: 2, protocols: ["adsb"], icon: SensorsIcon, color: "#ff6b6b" },
+    {
+      label: FM_DISCOVERY_LABEL,
+      range: [87.7, 107.7],
+      rangeLabel: "87.7-107.7 MHz wideband",
+      centerMhz: 97.7,
+      bandwidthMhz: 20,
+      sampleRateMhz: 20,
+      fixedDwellSec: 5,
+      receiver: "main",
+      protocols: ["fm"],
+      icon: RadioIcon,
+      color: "#ffb347",
+    },
+    {
+      label: "315/433MHz ISM",
+      range: [315, 434],
+      rangeLabel: "315 + 433 MHz",
+      centerMhz: 433.5,
+      bandwidthMhz: 2,
+      sampleRateMhz: 2,
+      protocols: ["rtl433", "subghz"],
+      icon: SensorsIcon,
+      color: "#64f0d2",
+      steps: [
+        { label: "315MHz ISM", range: [315, 316], centerMhz: 315.5, bandwidthMhz: 2, sampleRateMhz: 2, receiver: "worker" },
+        { label: "433MHz ISM", range: [433, 434], centerMhz: 433.5, bandwidthMhz: 2, sampleRateMhz: 2, receiver: "worker" },
+      ],
+    },
+    { label: "462.5MHz PTT", range: [462.5, 463.5], centerMhz: 463, bandwidthMhz: 2, sampleRateMhz: 2, receiver: "worker", protocols: ["rf"], icon: RadioIcon, color: "#ffd166" },
+    { label: "ADS-B 1090", range: [1089, 1091], centerMhz: 1090, bandwidthMhz: 2, sampleRateMhz: 2, receiver: "worker", protocols: ["adsb"], icon: SensorsIcon, color: "#ff6b6b" },
+    { label: "WiFi 5.8GHz", range: [5725, 5850], centerMhz: 5787.5, bandwidthMhz: 60, sampleRateMhz: 60, protocols: ["wifi"], icon: WifiIcon, color: "#6ecbff" },
+  ];
+  const cellularAreas = [
     { label: "LTE Band 2", range: [1850, 1910], centerMhz: 1880, bandwidthMhz: 60, sampleRateMhz: 60, protocols: ["cellular"], icon: SensorsIcon, color: "#b084ff" },
     { label: "LTE Band 4 (AWS)", range: [1710, 1755], centerMhz: 1732.5, bandwidthMhz: 45, sampleRateMhz: 45, protocols: ["cellular"], icon: SensorsIcon, color: "#b084ff" },
     { label: "LTE Band 12", range: [699, 716], centerMhz: 707.5, bandwidthMhz: 17, sampleRateMhz: 17, protocols: ["cellular"], icon: SensorsIcon, color: "#b084ff" },
     { label: "LTE Band 13", range: [746, 756], centerMhz: 751, bandwidthMhz: 10, sampleRateMhz: 10, protocols: ["cellular"], icon: SensorsIcon, color: "#b084ff" },
-    { label: "WiFi 5.8GHz", range: [5725, 5850], centerMhz: 5787.5, bandwidthMhz: 60, sampleRateMhz: 60, protocols: ["wifi"], icon: WifiIcon, color: "#6ecbff" },
   ];
   const scanGroups = [
     { title: "2.4 GHz ISM", description: "Wideband scan: 60 MHz low pass, then 60 MHz high pass.", areas: ism24Areas },
-    { title: "Everything Else", description: "Broadcast, sub-GHz, cellular, and other bands.", areas: otherAreas },
+    { title: "Cellular", description: "LTE uplink bands and cellular-oriented wideband checks.", areas: cellularAreas },
+    { title: "Everything Else", description: "Broadcast, sub-GHz, aviation, and other non-cellular bands.", areas: otherAreas },
   ];
   const areasOfInterest = scanGroups.flatMap((group) => group.areas);
   const scanOrder = [
     FM_DISCOVERY_LABEL,
-    "315MHz ISM",
-    "433MHz Band",
+    "315/433MHz ISM",
     "462.5MHz PTT",
     "ADS-B 1090",
+    "WiFi 5.8GHz",
     "LTE Band 12",
     "LTE Band 13",
     "LTE Band 4 (AWS)",
     "LTE Band 2",
-    "WiFi 5.8GHz",
   ];
   const ISM_24_WEIGHT = "2.4 GHz ISM";
 
-  const weightingLabelsForSelection = (selection = selectedAreas) => {
-    const labels = otherAreas
+  const receiverFor = (area) => {
+    const bw = Math.max(Number(area?.bandwidthMhz || 0), Number(area?.sampleRateMhz || 0));
+    return bw > 0 && bw <= 3 ? "worker" : "main";
+  };
+
+  const receiverForWeightLabel = (label) => {
+    if (label === ISM_24_WEIGHT) return "main";
+    const area = areasOfInterest.find((candidate) => candidate.label === label);
+    if (!area) return "main";
+    if (area.receiver) return area.receiver;
+    if (Array.isArray(area.steps) && area.steps.length) {
+      const receivers = Array.from(new Set(area.steps.map((step) => step.receiver || receiverFor(step))));
+      return receivers.length === 1 ? receivers[0] : "main";
+    }
+    return receiverFor(area);
+  };
+
+  const weightingLabelsForSelection = (selection = selectedAreas, receiver = null) => {
+    const labels = [...otherAreas, ...cellularAreas]
       .filter((area) => selection.includes(area.label))
       .map((area) => area.label);
     if (ism24Areas.some((area) => selection.includes(area.label))) {
       labels.push(ISM_24_WEIGHT);
     }
-    return labels;
+    return labels.filter((label) => !receiver || receiverForWeightLabel(label) === receiver);
   };
 
   const normalizePercentagesForLabels = (labels, rawPercentages) => {
@@ -184,8 +234,27 @@ const Scanner = ({ onClose }) => {
     return normalizePercentagesForLabels(uniqueLabels, next);
   };
 
-  const activeWeightingLabels = weightingLabelsForSelection();
-  const effectiveDwellPercentages = normalizePercentagesForLabels(activeWeightingLabels, dwellPercentages);
+  const normalizePercentagesByReceiver = (selection, rawPercentages) => ({
+    ...normalizePercentagesForLabels(weightingLabelsForSelection(selection, "main"), rawPercentages),
+    ...normalizePercentagesForLabels(weightingLabelsForSelection(selection, "worker"), rawPercentages),
+  });
+
+  const rebalancePercentagesByReceiver = (selection, anchorLabel = null, anchorValue = null, previous = dwellPercentages) => {
+    const receivers = ["main", "worker"];
+    return receivers.reduce((next, receiver) => {
+      const labels = weightingLabelsForSelection(selection, receiver);
+      if (!labels.length) return next;
+      const shouldAnchor = anchorLabel && labels.includes(anchorLabel);
+      return {
+        ...next,
+        ...rebalancePercentages(labels, shouldAnchor ? anchorLabel : null, shouldAnchor ? anchorValue : null, previous),
+      };
+    }, {});
+  };
+
+  const activeMainWeightingLabels = weightingLabelsForSelection(selectedAreas, "main");
+  const activeWorkerWeightingLabels = weightingLabelsForSelection(selectedAreas, "worker");
+  const effectiveDwellPercentages = normalizePercentagesByReceiver(selectedAreas, dwellPercentages);
 
   const percentageFor = (label) => {
     if (label === ISM_24_WEIGHT && !ism24Areas.some((area) => selectedAreas.includes(area.label))) return 0;
@@ -195,22 +264,41 @@ const Scanner = ({ onClose }) => {
 
   const buildScanPlan = () => {
     const selected2G4 = ism24Areas.filter((area) => selectedAreas.includes(area.label));
-    const selectedOther = otherAreas.filter((area) => selectedAreas.includes(area.label));
+    const selectedOther = [...otherAreas, ...cellularAreas].filter((area) => selectedAreas.includes(area.label));
     const orderedOther = scanOrder
       .map((label) => selectedOther.find((area) => area.label === label))
       .filter(Boolean);
     const selected2G4Protocols = Array.from(new Set(selected2G4.flatMap((area) => area.protocols || [])));
     const cycle = Math.max(1, Math.min(3600, Number(cycleSec) || 60));
-    const stepFor = (area) => ({
-      ...area,
-      percent: percentageFor(area.label),
-      dwellSec: Math.max(0.5, cycle * (percentageFor(area.label) / 100)),
-      revisitSec: cycle,
-    });
+    const fmPercent = percentageFor(FM_DISCOVERY_LABEL);
+    const mainCycle = fmPercent > 0
+      ? Math.max(cycle, 5 / Math.max(0.001, fmPercent / 100))
+      : cycle;
+    const cycleForLabel = (label) => (receiverForWeightLabel(label) === "worker" ? cycle : mainCycle);
+    const stepFor = (area) => {
+      const childSteps = Array.isArray(area.steps) && area.steps.length ? area.steps : [area];
+      const areaPercent = percentageFor(area.label);
+      const childPercent = areaPercent / childSteps.length;
+      const areaCycle = cycleForLabel(area.label);
+      const childDwell = areaCycle * (areaPercent / 100) / childSteps.length;
+      return childSteps.map((child) => ({
+        ...area,
+        ...child,
+        parentLabel: child.label === area.label ? undefined : area.label,
+        label: child.label || area.label,
+        protocols: child.protocols || area.protocols,
+        receiver: child.receiver || area.receiver || receiverFor(child),
+        percent: childPercent,
+        dwellSec: Number(area.fixedDwellSec || child.fixedDwellSec || 0) > 0
+          ? Number(area.fixedDwellSec || child.fixedDwellSec)
+          : Math.max(0.5, childDwell),
+        revisitSec: areaCycle,
+      }));
+    };
     const ismPercent = percentageFor(ISM_24_WEIGHT);
-    const ismDwellTotal = cycle * (ismPercent / 100);
-    return [
-      ...orderedOther.map(stepFor),
+    const ismDwellTotal = mainCycle * (ismPercent / 100);
+    const steps = [
+      ...orderedOther.flatMap(stepFor),
       ...(selected2G4.length > 0 ? [
         {
           label: "2.4 GHz ISM Low",
@@ -218,6 +306,7 @@ const Scanner = ({ onClose }) => {
           bandwidthMhz: 60,
           sampleRateMhz: 60,
           protocols: selected2G4Protocols,
+          receiver: "main",
           percent: ismPercent / 2,
           dwellSec: Math.max(0.5, ismDwellTotal / 2),
           revisitSec: cycle,
@@ -228,12 +317,26 @@ const Scanner = ({ onClose }) => {
           bandwidthMhz: 60,
           sampleRateMhz: 60,
           protocols: selected2G4Protocols,
+          receiver: "main",
           percent: ismPercent / 2,
           dwellSec: Math.max(0.5, ismDwellTotal / 2),
           revisitSec: cycle,
         },
       ] : []),
     ];
+    const receiverCycleSec = steps.reduce((totals, step) => {
+      const receiver = step.receiver || receiverFor(step);
+      totals[receiver] = Number(totals[receiver] || 0) + Math.max(0, Number(step.dwellSec || 0));
+      return totals;
+    }, {});
+    return steps.map((step) => {
+      const receiver = step.receiver || receiverFor(step);
+      return {
+        ...step,
+        receiver,
+        revisitSec: receiverCycleSec[receiver] || cycle,
+      };
+    });
   };
 
   useEffect(() => {
@@ -243,12 +346,12 @@ const Scanner = ({ onClose }) => {
         if (!cancelled) {
           const scanner = response?.data?.scanner || {};
           const config = scanner.config || {};
-          const loadedSelection = Array.isArray(config.selectedAreas) ? config.selectedAreas : selectedAreas;
+          const loadedSelection = normalizeSelectedAreaLabels(Array.isArray(config.selectedAreas) ? config.selectedAreas : selectedAreas);
           if (Array.isArray(config.selectedAreas)) {
             setSelectedAreas(loadedSelection);
           }
           if (config.dwellPercentages && typeof config.dwellPercentages === "object") {
-            setDwellPercentages(rebalancePercentages(weightingLabelsForSelection(loadedSelection), null, null, config.dwellPercentages));
+            setDwellPercentages(rebalancePercentagesByReceiver(loadedSelection, null, null, config.dwellPercentages));
           }
           if (config.cycleSec) {
             setCycleSec(config.cycleSec);
@@ -293,14 +396,15 @@ const Scanner = ({ onClose }) => {
           dwellPercentages: effectiveDwellPercentages,
           cycleSec: Math.max(1, Math.min(3600, Number(cycleSec) || 60)),
         },
-        steps: plannedSteps.map((area) => ({
-          label: area.label,
-          centerMhz: area.centerMhz,
-          bandwidthMhz: area.bandwidthMhz,
-          sampleRateMhz: area.sampleRateMhz,
-          dwellSec: area.dwellSec,
-          protocols: area.protocols,
-        })),
+	        steps: plannedSteps.map((area) => ({
+	          label: area.label,
+	          centerMhz: area.centerMhz,
+	          bandwidthMhz: area.bandwidthMhz,
+	          sampleRateMhz: area.sampleRateMhz,
+	          dwellSec: area.dwellSec,
+	          protocols: area.protocols,
+	          receiver: area.receiver || receiverFor(area),
+	        })),
       });
       setToastSeverity("success");
       setToastMessage(`Scanner started with ${plannedSteps.length} dwell steps.`);
@@ -346,11 +450,11 @@ const Scanner = ({ onClose }) => {
     setSelectedAreas((prevSelected) => {
       if (prevSelected.includes(area)) {
         const nextSelected = prevSelected.filter((item) => item !== area);
-        setDwellPercentages(rebalancePercentages(weightingLabelsForSelection(nextSelected), null, null, dwellPercentages));
+        setDwellPercentages(rebalancePercentagesByReceiver(nextSelected, null, null, dwellPercentages));
         return nextSelected;
       }
       const nextSelected = [...prevSelected, area];
-      setDwellPercentages(rebalancePercentages(weightingLabelsForSelection(nextSelected), null, null, dwellPercentages));
+      setDwellPercentages(rebalancePercentagesByReceiver(nextSelected, null, null, dwellPercentages));
       return nextSelected;
     });
   };
@@ -359,7 +463,7 @@ const Scanner = ({ onClose }) => {
     const labels = areasOfInterest.map((area) => area.label);
     setScannerDirty(true);
     setSelectedAreas(labels);
-    setDwellPercentages(rebalancePercentages(weightingLabelsForSelection(labels)));
+    setDwellPercentages(rebalancePercentagesByReceiver(labels));
   };
 
   const handleClearAll = () => {
@@ -384,21 +488,21 @@ const Scanner = ({ onClose }) => {
     setSelectedAreas((prevSelected) => {
       if (allSelected) {
         const nextSelected = prevSelected.filter((label) => !labels.includes(label));
-        setDwellPercentages(rebalancePercentages(weightingLabelsForSelection(nextSelected), null, null, dwellPercentages));
+        setDwellPercentages(rebalancePercentagesByReceiver(nextSelected, null, null, dwellPercentages));
         return nextSelected;
       }
       const nextSelected = Array.from(new Set([...prevSelected, ...labels]));
-      setDwellPercentages(rebalancePercentages(weightingLabelsForSelection(nextSelected), null, null, dwellPercentages));
+      setDwellPercentages(rebalancePercentagesByReceiver(nextSelected, null, null, dwellPercentages));
       return nextSelected;
     });
   };
 
   const handlePercentChange = (label, value) => {
     setScannerDirty(true);
-    setDwellPercentages((previous) => rebalancePercentages(weightingLabelsForSelection(), label, value, previous));
+    setDwellPercentages((previous) => rebalancePercentagesByReceiver(selectedAreas, label, value, previous));
   };
 
-  const renderAreaCard = ({ label, range, icon: AreaIcon, color }) => {
+  const renderAreaCard = ({ label, range, rangeLabel, icon: AreaIcon, color }) => {
     const checked = selectedAreas.includes(label);
     const isIsm24Area = ism24Areas.some((area) => area.label === label);
     const percent = percentageFor(label);
@@ -444,7 +548,7 @@ const Scanner = ({ onClose }) => {
             {label}
           </Typography>
           <Typography variant="caption" color="text.secondary">
-            {range[0]}-{range[1]} MHz
+            {rangeLabel || `${range[0]}-${range[1]} MHz`}
           </Typography>
         </Box>
         {checked && !isIsm24Area ? (
@@ -467,7 +571,8 @@ const Scanner = ({ onClose }) => {
   };
   const previewPlan = buildScanPlan();
   const previewCycle = Math.max(1, Math.min(3600, Number(cycleSec) || 60));
-  const totalPercent = weightingLabelsForSelection().reduce((sum, label) => sum + percentageFor(label), 0);
+  const mainTotalPercent = activeMainWeightingLabels.reduce((sum, label) => sum + percentageFor(label), 0);
+  const workerTotalPercent = activeWorkerWeightingLabels.reduce((sum, label) => sum + percentageFor(label), 0);
   const primaryStopsScan = scannerActive && (!scannerDirty || selectedAreas.length === 0);
   const primaryScanLabel = primaryStopsScan ? "Stop Scan" : (scannerActive ? "Update Scan" : "Start Scan");
   const primaryScanDisabled = isScanning || (!scannerActive && selectedAreas.length === 0);
@@ -526,8 +631,14 @@ const Scanner = ({ onClose }) => {
             />
             <Chip
               size="small"
-              color={selectedAreas.length ? (Math.abs(totalPercent - 100) < 0.01 ? "primary" : "warning") : "default"}
-              label={`${selectedAreas.length} selected / ${totalPercent.toFixed(0)}%`}
+              color={activeMainWeightingLabels.length ? (Math.abs(mainTotalPercent - 100) < 0.01 ? "primary" : "warning") : "default"}
+              label={`Main ${mainTotalPercent.toFixed(0)}%`}
+              sx={{ flexShrink: 0 }}
+            />
+            <Chip
+              size="small"
+              color={activeWorkerWeightingLabels.length ? (Math.abs(workerTotalPercent - 100) < 0.01 ? "info" : "warning") : "default"}
+              label={`Worker ${workerTotalPercent.toFixed(0)}%`}
               sx={{ flexShrink: 0 }}
             />
           </Box>
@@ -592,9 +703,10 @@ const Scanner = ({ onClose }) => {
                 <TableRow>
                   <TableCell>#</TableCell>
                   <TableCell>Step</TableCell>
-                  <TableCell>Center</TableCell>
-                  <TableCell>BW</TableCell>
-                  <TableCell>Protocols</TableCell>
+	          <TableCell>Center</TableCell>
+	          <TableCell>BW</TableCell>
+	                  <TableCell>RX</TableCell>
+	          <TableCell>Protocols</TableCell>
                   <TableCell>Share</TableCell>
                   <TableCell>Dwell</TableCell>
                   <TableCell>Looks every</TableCell>
@@ -605,16 +717,23 @@ const Scanner = ({ onClose }) => {
                   <TableRow key={`${step.label}-${index}`}>
                     <TableCell>{index + 1}</TableCell>
                     <TableCell>{step.label}</TableCell>
-                    <TableCell>{Number(step.centerMhz).toFixed(1)} MHz</TableCell>
-                    <TableCell>{Number(step.bandwidthMhz).toFixed(0)} MHz</TableCell>
-                    <TableCell>{(step.protocols || []).join(", ").toUpperCase() || "RF"}</TableCell>
+	                    <TableCell>{Number(step.centerMhz).toFixed(1)} MHz</TableCell>
+	                    <TableCell>{Number(step.bandwidthMhz).toFixed(0)} MHz</TableCell>
+	                    <TableCell>
+	                      <Chip
+	                        size="small"
+	                        color={step.receiver === "worker" ? "info" : "default"}
+	                        label={step.receiver === "worker" ? "Worker SDR" : "Main SDR"}
+	                      />
+	                    </TableCell>
+	                    <TableCell>{(step.protocols || []).join(", ").toUpperCase() || "RF"}</TableCell>
                     <TableCell>{Number(step.percent || 0).toFixed(1)}%</TableCell>
                     <TableCell>{Number(step.dwellSec || 0).toFixed(1)}s</TableCell>
                     <TableCell>{Number(step.revisitSec || previewCycle).toFixed(1)}s</TableCell>
                   </TableRow>
                 )) : (
                   <TableRow>
-                    <TableCell colSpan={8} sx={{ color: "text.secondary" }}>
+	                    <TableCell colSpan={9} sx={{ color: "text.secondary" }}>
                       Select one or more bands to preview the repeated scan sequence.
                     </TableCell>
                   </TableRow>

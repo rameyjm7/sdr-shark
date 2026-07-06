@@ -74,6 +74,7 @@ class SDRGeneric:
         self._running = False
         self._lock = threading.Lock()
         self._latest_samples = np.zeros(self.size, dtype=np.complex64)
+        self._latest_samples_secondary = np.zeros(self.size, dtype=np.complex64)
         self._iq_tap_lock = threading.Lock()
         self._iq_tap_subscribers: dict[str, queue.Queue[bytes | None]] = {}
         self._iq_tap_last_publish = 0.0
@@ -82,6 +83,8 @@ class SDRGeneric:
         self._soapy_device: Any = None
         self._soapy_stream: Any = None
         self._soapy_stream_format = ""
+        self._soapy_channels: list[int] = [0]
+        self._gateway_channels: list[int] = [0]
         self._soapy_device_args: dict[str, Any] | None = None
         default_log = _default_log_file("soapysdr.log")
         self._soapy_log_file = os.getenv("SDR_SOAPY_LOG_FILE", str(default_log))
@@ -124,7 +127,8 @@ class SDRGeneric:
         if self.backend == "soapy" and self._soapy_device is not None:
             try:
                 with self._quiet_soapy():
-                    self._soapy_device.setFrequency(self._soapy.SOAPY_SDR_RX, 0, self.frequency)
+                    for channel in self._soapy_channels:
+                        self._soapy_device.setFrequency(self._soapy.SOAPY_SDR_RX, channel, self.frequency)
                 return
             except Exception:
                 pass
@@ -139,7 +143,8 @@ class SDRGeneric:
         if self.backend == "soapy" and self._soapy_device is not None:
             try:
                 with self._quiet_soapy():
-                    self._soapy_device.setBandwidth(self._soapy.SOAPY_SDR_RX, 0, self.bandwidth)
+                    for channel in self._soapy_channels:
+                        self._soapy_device.setBandwidth(self._soapy.SOAPY_SDR_RX, channel, self.bandwidth)
             except Exception:
                 pass
 
@@ -180,13 +185,15 @@ class SDRGeneric:
 
         try:
             with self._quiet_soapy():
-                self._soapy_device.setFrequency(self._soapy.SOAPY_SDR_RX, 0, self.frequency)
+                for channel in self._soapy_channels:
+                    self._soapy_device.setFrequency(self._soapy.SOAPY_SDR_RX, channel, self.frequency)
         except Exception:
             self._restart_stream()
             return
         try:
             with self._quiet_soapy():
-                self._soapy_device.setBandwidth(self._soapy.SOAPY_SDR_RX, 0, self.bandwidth)
+                for channel in self._soapy_channels:
+                    self._soapy_device.setBandwidth(self._soapy.SOAPY_SDR_RX, channel, self.bandwidth)
         except Exception:
             pass
         self._apply_soapy_gain(self._soapy_device, self._soapy_driver(), self.gain)
@@ -194,6 +201,22 @@ class SDRGeneric:
     def get_latest_samples(self) -> np.ndarray:
         with self._lock:
             return self._latest_samples.copy()
+
+    def get_latest_samples_secondary(self) -> np.ndarray | None:
+        with self._lock:
+            active_channels = self._soapy_channels if self.backend == "soapy" else self._gateway_channels
+            if len(active_channels) < 2:
+                return None
+            return self._latest_samples_secondary.copy()
+
+    def mimo_info(self) -> dict[str, Any]:
+        active_channels = self._soapy_channels if self.backend == "soapy" else self._gateway_channels
+        return {
+            "enabled": bool(len(active_channels) > 1),
+            "channels": list(active_channels),
+            "backend": self.backend,
+            "device_id": self.device_id or self.name or "",
+        }
 
     def iq_tap_info(self) -> dict[str, Any]:
         return {
@@ -231,6 +254,7 @@ class SDRGeneric:
             "sample_rate_sps": int(round(self.sample_rate)),
             "bandwidth_hz": int(round(self.bandwidth)),
             "gain_db": float(self.gain),
+            "rx_channels": list(self._gateway_channels),
         }
 
     def list_devices(self) -> list[dict[str, Any]]:
@@ -462,44 +486,64 @@ class SDRGeneric:
         return float(min(max(value, lo), hi))
 
     def _apply_soapy_gain(self, dev, driver: str, gain: float) -> None:
-        try:
-            with self._quiet_soapy():
-                dev.setGainMode(self._soapy.SOAPY_SDR_RX, 0, False)
-        except Exception:
-            pass
-        try:
-            with self._quiet_soapy():
-                dev.setGain(self._soapy.SOAPY_SDR_RX, 0, self._clip_soapy_gain(dev, float(gain)))
-            return
-        except Exception:
-            pass
-        try:
-            names = list(dev.listGains(self._soapy.SOAPY_SDR_RX, 0))
-        except Exception:
-            names = []
-        if not names:
-            return
-        # Basic staged gain fallback: split user gain across exposed elements.
-        per_stage = float(gain) / max(1, len(names))
-        for name in names:
+        for channel in self._soapy_channels:
             try:
-                lo, hi = self._range_bounds(dev.getGainRange(self._soapy.SOAPY_SDR_RX, 0, name), 0.0, 76.0)
                 with self._quiet_soapy():
-                    dev.setGain(self._soapy.SOAPY_SDR_RX, 0, name, float(min(max(per_stage, lo), hi)))
+                    dev.setGainMode(self._soapy.SOAPY_SDR_RX, channel, False)
             except Exception:
+                pass
+            try:
+                with self._quiet_soapy():
+                    dev.setGain(self._soapy.SOAPY_SDR_RX, channel, self._clip_soapy_gain(dev, float(gain)))
                 continue
+            except Exception:
+                pass
+            try:
+                names = list(dev.listGains(self._soapy.SOAPY_SDR_RX, channel))
+            except Exception:
+                names = []
+            if not names:
+                continue
+            # Basic staged gain fallback: split user gain across exposed elements.
+            per_stage = float(gain) / max(1, len(names))
+            for name in names:
+                try:
+                    lo, hi = self._range_bounds(dev.getGainRange(self._soapy.SOAPY_SDR_RX, channel, name), 0.0, 76.0)
+                    with self._quiet_soapy():
+                        dev.setGain(self._soapy.SOAPY_SDR_RX, channel, name, float(min(max(per_stage, lo), hi)))
+                except Exception:
+                    continue
+
+    def _desired_soapy_channels(self, dev) -> list[int]:
+        mode = os.getenv("SDR_SHARK_MIMO", "0").strip().lower()
+        if mode in {"0", "false", "no", "off", "disabled"}:
+            return [0]
+        try:
+            channel_count = int(dev.getNumChannels(self._soapy.SOAPY_SDR_RX))
+        except Exception:
+            channel_count = 1
+        if channel_count < 2:
+            return [0]
+        driver = self._soapy_driver()
+        if mode in {"1", "true", "yes", "on", "enabled"}:
+            return [0, 1]
+        return [0]
 
     def _configure_soapy_device(self, dev) -> None:
         soapy = self._soapy
         sample_rate = float(max(1, min(self.max_sample_rate, self.sample_rate)))
+        channels = self._desired_soapy_channels(dev)
         with self._quiet_soapy():
-            dev.setSampleRate(soapy.SOAPY_SDR_RX, 0, sample_rate)
-            dev.setFrequency(soapy.SOAPY_SDR_RX, 0, float(self.frequency))
+            for channel in channels:
+                dev.setSampleRate(soapy.SOAPY_SDR_RX, channel, sample_rate)
+                dev.setFrequency(soapy.SOAPY_SDR_RX, channel, float(self.frequency))
         try:
             with self._quiet_soapy():
-                dev.setBandwidth(soapy.SOAPY_SDR_RX, 0, float(min(sample_rate, max(1, self.bandwidth))))
+                for channel in channels:
+                    dev.setBandwidth(soapy.SOAPY_SDR_RX, channel, float(min(sample_rate, max(1, self.bandwidth))))
         except Exception:
             pass
+        self._soapy_channels = channels
         self._apply_soapy_gain(dev, self._soapy_driver(), self.gain)
 
         try:
@@ -527,16 +571,22 @@ class SDRGeneric:
 
         stream = None
         stream_format = ""
+        desired_channels = list(self._soapy_channels)
         for fmt in ("SOAPY_SDR_CS16", "SOAPY_SDR_CF32"):
             if not hasattr(soapy, fmt):
                 continue
-            try:
-                with self._quiet_soapy():
-                    stream = dev.setupStream(soapy.SOAPY_SDR_RX, getattr(soapy, fmt))
-                stream_format = fmt
+            for channels in (desired_channels, [0]):
+                try:
+                    with self._quiet_soapy():
+                        stream = dev.setupStream(soapy.SOAPY_SDR_RX, getattr(soapy, fmt), channels)
+                    self._soapy_channels = list(channels)
+                    stream_format = fmt
+                    break
+                except Exception:
+                    stream = None
+                    continue
+            if stream is not None:
                 break
-            except Exception:
-                continue
         if stream is None:
             raise RuntimeError("Unable to setup a SoapySDR RX stream using CS16 or CF32")
 
@@ -566,6 +616,7 @@ class SDRGeneric:
             pass
         self._soapy_device = None
         self._soapy_stream = None
+        self._soapy_channels = [0]
         self._close_iq_taps()
 
     def _soapy_rx_loop(self) -> None:
@@ -575,35 +626,52 @@ class SDRGeneric:
         if dev is None or stream is None:
             return
         chunk_samples = max(self.size, 4096)
+        channel_count = max(1, len(self._soapy_channels))
         if self._soapy_stream_format == "SOAPY_SDR_CF32":
-            rx_buf = np.empty(chunk_samples, dtype=np.complex64)
+            rx_bufs = [np.empty(chunk_samples, dtype=np.complex64) for _ in range(channel_count)]
         else:
-            rx_buf = np.empty(chunk_samples * 2, dtype=np.int16)
+            rx_bufs = [np.empty(chunk_samples * 2, dtype=np.int16) for _ in range(channel_count)]
 
         while self._running and self._should_run:
             try:
                 with self._quiet_soapy():
-                    result = dev.readStream(stream, [rx_buf], chunk_samples, timeoutUs=200_000)
+                    result = dev.readStream(stream, rx_bufs, chunk_samples, timeoutUs=200_000)
                 n = int(getattr(result, "ret", result))
                 if n <= 0:
                     continue
                 if self._soapy_stream_format == "SOAPY_SDR_CF32":
-                    iq = rx_buf[:n].astype(np.complex64, copy=True)
+                    iq = rx_bufs[0][:n].astype(np.complex64, copy=True)
+                    secondary_iq = (
+                        rx_bufs[1][:n].astype(np.complex64, copy=True)
+                        if channel_count > 1 else None
+                    )
                     if self._should_publish_iq_tap():
                         self._publish_iq_tap(self._complex_to_cs8(iq))
                 else:
-                    raw_iq16 = rx_buf[: n * 2]
+                    raw_iq16 = rx_bufs[0][: n * 2]
                     if self._should_publish_iq_tap():
                         self._publish_iq_tap(self._cs16_to_cs8(raw_iq16))
-                    iq16 = raw_iq16.astype(np.float32)
-                    iq = (iq16[0::2] + 1j * iq16[1::2]) / 32768.0
+                    iq = self._cs16_to_complex(raw_iq16)
+                    secondary_iq = (
+                        self._cs16_to_complex(rx_bufs[1][: n * 2])
+                        if channel_count > 1 else None
+                    )
                 if iq.size >= self.size:
                     out = iq[: self.size]
                 else:
                     out = np.zeros(self.size, dtype=np.complex64)
                     out[: iq.size] = iq
+                if secondary_iq is not None:
+                    if secondary_iq.size >= self.size:
+                        secondary_out = secondary_iq[: self.size]
+                    else:
+                        secondary_out = np.zeros(self.size, dtype=np.complex64)
+                        secondary_out[: secondary_iq.size] = secondary_iq
+                else:
+                    secondary_out = np.zeros(self.size, dtype=np.complex64)
                 with self._lock:
                     self._latest_samples = out.astype(np.complex64, copy=False)
+                    self._latest_samples_secondary = secondary_out.astype(np.complex64, copy=False)
             except Exception:
                 if not self._should_run:
                     break
@@ -660,6 +728,10 @@ class SDRGeneric:
         divisor = float(os.getenv("SDR_SHARK_SOAPY_TAP_CS16_TO_I8_DIVISOR", "256") or "256")
         return np.clip(np.rint(raw_iq16.astype(np.float32) / divisor), -128, 127).astype(np.int8).tobytes()
 
+    def _cs16_to_complex(self, raw_iq16: np.ndarray) -> np.ndarray:
+        iq16 = raw_iq16.astype(np.float32)
+        return ((iq16[0::2] + 1j * iq16[1::2]) / 32768.0).astype(np.complex64, copy=False)
+
     def _complex_to_cs8(self, iq: np.ndarray) -> bytes:
         interleaved = np.empty(iq.size * 2, dtype=np.float32)
         interleaved[0::2] = iq.real
@@ -699,7 +771,10 @@ class SDRGeneric:
         if self._selected_device_hint:
             device = next((d for d in devices if d.get("id") == self._selected_device_hint), None)
         if device is None:
-            # Prefer real HackRF; fallback to first listed device.
+            requested = str(self.name).split(":", 1)[0].lower()
+            device = next((d for d in devices if str(d.get("driver", "")).lower() == requested), None)
+        if device is None:
+            # Prefer real HackRF for legacy default; fallback to first listed device.
             device = next((d for d in devices if d.get("driver") == "hackrf"), devices[0])
 
         self.device_id = device["id"]
@@ -710,8 +785,9 @@ class SDRGeneric:
         lna_gain = max(0, min(40, gain - (gain % 8)))
         vga_gain = max(0, min(62, gain))
         sample_rate = int(max(2_000_000, min(self.max_sample_rate, round(self.sample_rate))))
+        rx_channels = self._desired_gateway_channels()
 
-        return {
+        payload = {
             "device_id": self.device_id,
             "center_freq_hz": int(round(self.frequency)),
             "sample_rate_sps": sample_rate,
@@ -722,6 +798,20 @@ class SDRGeneric:
             "baseband_filter_hz": int(round(min(sample_rate, max(1_750_000, self.bandwidth)))),
             "iq_format": self.gateway_requested_iq_format,
         }
+        if rx_channels:
+            payload["rx_channels"] = rx_channels
+        self._gateway_channels = rx_channels or [0]
+        return payload
+
+    def _desired_gateway_channels(self) -> list[int]:
+        mode = os.getenv("SDR_SHARK_MIMO", "0").strip().lower()
+        if mode in {"0", "false", "no", "off", "disabled"}:
+            return [0]
+        device_id = str(self.device_id or self.name or "").lower()
+        driver = device_id.split(":", 1)[0]
+        if mode in {"1", "true", "yes", "on", "enabled"}:
+            return [0, 1]
+        return [0]
 
     def _start_stream(self) -> None:
         if create_connection is None:
@@ -742,6 +832,9 @@ class SDRGeneric:
         r.raise_for_status()
         stream_state = r.json()
         self.stream_id = stream_state["stream_id"]
+        stream_channels = stream_state.get("config", {}).get("rx_channels")
+        if isinstance(stream_channels, list) and stream_channels:
+            self._gateway_channels = [int(ch) for ch in stream_channels]
         self.gateway_iq_format = (
             stream_state.get("config", {}).get("iq_format") or self.gateway_iq_format or "i8"
         ).strip().lower()
@@ -798,16 +891,25 @@ class SDRGeneric:
                     continue
                 if self._should_publish_iq_tap():
                     self._publish_iq_tap(self._gateway_frame_to_cs8(frame))
-                iq = self._decode_gateway_frame(frame)
+                iq, secondary_iq = self._decode_gateway_frame_pair(frame)
 
                 if iq.size >= self.size:
                     out = iq[: self.size]
                 else:
                     out = np.zeros(self.size, dtype=np.complex64)
                     out[: iq.size] = iq
+                if secondary_iq is not None:
+                    if secondary_iq.size >= self.size:
+                        secondary_out = secondary_iq[: self.size]
+                    else:
+                        secondary_out = np.zeros(self.size, dtype=np.complex64)
+                        secondary_out[: secondary_iq.size] = secondary_iq
+                else:
+                    secondary_out = np.zeros(self.size, dtype=np.complex64)
 
                 with self._lock:
                     self._latest_samples = out.astype(np.complex64, copy=False)
+                    self._latest_samples_secondary = secondary_out.astype(np.complex64, copy=False)
             except Exception:
                 if not self._should_run:
                     break
@@ -823,24 +925,55 @@ class SDRGeneric:
                 break
 
     def _decode_gateway_frame(self, frame: bytes | bytearray) -> np.ndarray:
+        primary, _ = self._decode_gateway_frame_pair(frame)
+        return primary
+
+    def _decode_gateway_frame_pair(self, frame: bytes | bytearray) -> tuple[np.ndarray, np.ndarray | None]:
         iq_format = self.gateway_iq_format
         if iq_format == "cs16":
             iq_raw = np.frombuffer(frame, dtype=np.int16)
             scale = 32768.0
+            values_per_complex = 2
         else:
             iq_raw = np.frombuffer(frame, dtype=np.int8)
             scale = 128.0
+            values_per_complex = 2
 
         if iq_raw.size < 2:
+            return np.empty(0, dtype=np.complex64), None
+
+        channel_count = max(1, len(self._gateway_channels))
+        values_per_frame = values_per_complex * channel_count
+        usable = iq_raw.size - (iq_raw.size % values_per_frame)
+        if usable <= 0:
+            return np.empty(0, dtype=np.complex64), None
+        iq_raw = iq_raw[:usable]
+
+        if channel_count > 1:
+            framed = iq_raw.reshape(-1, channel_count, values_per_complex)
+            primary_raw = framed[:, 0, :].reshape(-1)
+            secondary_raw = framed[:, 1, :].reshape(-1)
+        else:
+            primary_raw = iq_raw
+            secondary_raw = None
+
+        primary = self._interleaved_iq_to_complex(primary_raw, scale)
+        secondary = self._interleaved_iq_to_complex(secondary_raw, scale) if secondary_raw is not None else None
+        return primary, secondary
+
+    def _interleaved_iq_to_complex(self, iq_raw: np.ndarray | None, scale: float) -> np.ndarray:
+        if iq_raw is None or iq_raw.size < 2:
             return np.empty(0, dtype=np.complex64)
         if iq_raw.size % 2:
             iq_raw = iq_raw[:-1]
-
         i = iq_raw[0::2].astype(np.float32)
         q = iq_raw[1::2].astype(np.float32)
         return ((i + 1j * q) / scale).astype(np.complex64, copy=False)
 
     def _gateway_frame_to_cs8(self, frame: bytes | bytearray) -> bytes:
+        if len(self._gateway_channels) > 1:
+            primary, _ = self._decode_gateway_frame_pair(frame)
+            return self._complex_to_cs8(primary)
         if self.gateway_iq_format == "cs16":
             return self._cs16_to_cs8(np.frombuffer(frame, dtype=np.int16))
         if self.gateway_iq_format == "cf32":
