@@ -30,6 +30,7 @@ class sdr_scheduler_config:
             "hackrf" : SdrSettings("hackrf"),
             "sidekiq" : SdrSettings("sidekiq"),
             "antsdre200" : SdrSettings("antsdre200"),
+            "rtlsdr_worker" : SdrSettings("rtlsdr_worker"),
         }
         self.sdr_name = "sidekiq"
         # Default settings
@@ -50,6 +51,12 @@ class sdr_scheduler_config:
         self.sdr_settings['antsdre200'].sampleRate = 20e6
         self.sdr_settings['antsdre200'].gain = 30
         self.sdr_settings['antsdre200'].averagingCount = 20
+
+        self.sdr_settings['rtlsdr_worker'].frequency = 102.1e6
+        self.sdr_settings['rtlsdr_worker'].bandwidth = 2.4e6
+        self.sdr_settings['rtlsdr_worker'].sampleRate = 2.4e6
+        self.sdr_settings['rtlsdr_worker'].gain = 30
+        self.sdr_settings['rtlsdr_worker'].averagingCount = 10
         self.tasks = []
         self.task_lock = threading.Lock()
         self.sleeptime = 0.01
@@ -63,6 +70,25 @@ class sdr_scheduler_config:
         self.sweeping_enabled = False
         self.dc_suppress = True
         self.show_waterfall = True
+        self.decoders_always_enabled = False
+        self.rf_model_classifier_enabled = False
+        self.rf_model_classifier_repo_path = os.getenv(
+            "SDR_SHARK_RF_MODEL_REPO",
+            "/home/jake/workspace/SDR/rf-signal-intelligence",
+        )
+        self.rf_model_classifier_model_path = os.getenv(
+            "SDR_SHARK_RF_MODEL_PATH",
+            os.path.join(
+                self.rf_model_classifier_repo_path,
+                "models",
+                "noisy_drone_rf_v2",
+                "noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras",
+            ),
+        )
+        self.rf_model_classifier_target_mhz = float(os.getenv("SDR_SHARK_RF_MODEL_TARGET_MHZ", "2399") or "2399")
+        self.rf_model_classifier_bandwidth_mhz = float(os.getenv("SDR_SHARK_RF_MODEL_BW_MHZ", "20") or "20")
+        self.rf_model_classifier_interval_sec = float(os.getenv("SDR_SHARK_RF_MODEL_INTERVAL_SEC", "1.0") or "1.0")
+        self.rf_model_classifier_threshold = float(os.getenv("SDR_SHARK_RF_MODEL_THRESHOLD", "0.45") or "0.45")
         self.waterfall_samples = 200
         self.waterfall_bin_count = 2048
         self.persistence_decay  = 0.5
@@ -101,6 +127,13 @@ class sdr_scheduler_config:
             # Do not crash backend startup when gateway has no currently available SDR.
             # The app can still start and recover once a device becomes available.
             print(f"Warning: SDR init failed at startup: {exc}")
+        self.worker_sdr = None
+        self.worker_sdr_error = ""
+        self.worker_sdr_suspended = False
+        self.worker_sdr_suspend_reason = ""
+        self.worker_sdr_enabled = str(os.getenv("SDR_SHARK_WORKER_SDR", "1")).strip().lower() not in {"0", "false", "no", "off"}
+        self.worker_sdr_max_bandwidth = float(os.getenv("SDR_SHARK_WORKER_MAX_BW_HZ", "3000000") or "3000000")
+        self.ensure_worker_sdr()
         # self.sdr1 = SDRGeneric("hackrf",
         #                        center_freq=self.sdr_settings['hackrf'].frequency,
         #                        sample_rate=self.sdr_settings['hackrf'].sampleRate,
@@ -116,6 +149,74 @@ class sdr_scheduler_config:
         self.signal_stats = {
             "noise_floor" : -255,
             "max" : -255
+        }
+
+    def ensure_worker_sdr(self):
+        if not self.worker_sdr_enabled:
+            self.worker_sdr_error = "Worker SDR disabled"
+            return None
+        if self.worker_sdr_suspended:
+            self.worker_sdr_error = self.worker_sdr_suspend_reason or "Worker SDR suspended"
+            return None
+        if self.worker_sdr is not None:
+            return self.worker_sdr
+        try:
+            settings = self.sdr_settings['rtlsdr_worker']
+            worker = SDRGeneric(
+                os.getenv("SDR_SHARK_WORKER_SDR_NAME", "rtlsdr"),
+                center_freq=settings.frequency,
+                sample_rate=settings.sampleRate,
+                bandwidth=settings.bandwidth,
+                gain=settings.gain,
+                size=self.sample_size,
+            )
+            worker.start()
+            self.worker_sdr = worker
+            self.worker_sdr_error = ""
+            return self.worker_sdr
+        except Exception as exc:
+            self.worker_sdr = None
+            self.worker_sdr_error = str(exc)
+            print(f"Warning: worker SDR init failed: {exc}")
+            return None
+
+    def suspend_worker_sdr(self, reason="Worker SDR temporarily assigned to decoder"):
+        self.worker_sdr_suspended = True
+        self.worker_sdr_suspend_reason = str(reason or "Worker SDR suspended")
+        worker = self.worker_sdr
+        self.worker_sdr = None
+        self.worker_sdr_error = self.worker_sdr_suspend_reason
+        if worker is not None:
+            try:
+                worker.stop()
+            except Exception as exc:
+                self.worker_sdr_error = f"{self.worker_sdr_suspend_reason}: {exc}"
+
+    def resume_worker_sdr(self):
+        if not self.worker_sdr_suspended:
+            return self.worker_sdr
+        self.worker_sdr_suspended = False
+        self.worker_sdr_suspend_reason = ""
+        self.worker_sdr_error = ""
+        return self.ensure_worker_sdr()
+
+    def worker_sdr_available(self):
+        return self.ensure_worker_sdr() is not None
+
+    def worker_sdr_info(self):
+        worker = self.worker_sdr
+        return {
+            "enabled": bool(self.worker_sdr_enabled),
+            "suspended": bool(self.worker_sdr_suspended),
+            "suspend_reason": self.worker_sdr_suspend_reason,
+            "available": bool(worker is not None),
+            "device_id": getattr(worker, "device_id", None) if worker is not None else None,
+            "backend": getattr(worker, "backend", None) if worker is not None else None,
+            "frequency": float(getattr(worker, "frequency", 0.0) or 0.0) if worker is not None else 0.0,
+            "sample_rate": float(getattr(worker, "sample_rate", 0.0) or 0.0) if worker is not None else 0.0,
+            "bandwidth": float(getattr(worker, "bandwidth", 0.0) or 0.0) if worker is not None else 0.0,
+            "max_bandwidth": float(self.worker_sdr_max_bandwidth),
+            "error": self.worker_sdr_error,
         }
 
     def _ensure_radio_settings(self, key: str):
@@ -205,6 +306,14 @@ class sdr_scheduler_config:
             "peak_threshold_minimum_dB": self.peak_threshold_minimum_dB,
             "dc_suppress": self.dc_suppress,
             "show_waterfall": self.show_waterfall,
+            "decodersAlwaysEnabled": self.decoders_always_enabled,
+            "rfModelClassifierEnabled": self.rf_model_classifier_enabled,
+            "rfModelClassifierRepoPath": self.rf_model_classifier_repo_path,
+            "rfModelClassifierModelPath": self.rf_model_classifier_model_path,
+            "rfModelClassifierTargetMHz": self.rf_model_classifier_target_mhz,
+            "rfModelClassifierBandwidthMHz": self.rf_model_classifier_bandwidth_mhz,
+            "rfModelClassifierIntervalSec": self.rf_model_classifier_interval_sec,
+            "rfModelClassifierThreshold": self.rf_model_classifier_threshold,
             "waterfall_samples": self.waterfall_samples,
             "waterfall_bin_count": self.waterfall_bin_count,
             "number_of_peaks": self.number_of_peaks,
@@ -224,6 +333,15 @@ class sdr_scheduler_config:
         """Apply settings from a dictionary with validation."""
         
         try:
+            requested_radio = str(settings.get("radio_name", self.radio_name) or "").strip()
+            if requested_radio and requested_radio != getattr(self.sdr0, "device_id", None):
+                self.reselect_radio(requested_radio)
+            previous_receiver = (
+                float(self.sdr_frequency()),
+                float(self.sdr_sampleRate()),
+                float(self.sdr_bandwidth()),
+                float(self.sdr_gain()),
+            )
             self.sdr_settings[self.sdr_name].frequency = settings.get("frequency", self.sdr_frequency())
             self.sdr_settings[self.sdr_name].sampleRate = settings.get("sampleRate", self.sdr_sampleRate())
             self.sdr_settings[self.sdr_name].bandwidth = settings.get("bandwidth", self.sdr_bandwidth())
@@ -237,6 +355,14 @@ class sdr_scheduler_config:
             self.peak_threshold_minimum_dB = settings.get("peakThreshold", self.peak_threshold_minimum_dB)
             self.dc_suppress = settings.get("dcSuppress", self.dc_suppress)
             self.show_waterfall = settings.get("showWaterfall", self.show_waterfall)
+            self.decoders_always_enabled = bool(settings.get("decodersAlwaysEnabled", self.decoders_always_enabled))
+            self.rf_model_classifier_enabled = bool(settings.get("rfModelClassifierEnabled", self.rf_model_classifier_enabled))
+            self.rf_model_classifier_repo_path = str(settings.get("rfModelClassifierRepoPath", self.rf_model_classifier_repo_path) or "")
+            self.rf_model_classifier_model_path = str(settings.get("rfModelClassifierModelPath", self.rf_model_classifier_model_path) or "")
+            self.rf_model_classifier_target_mhz = float(settings.get("rfModelClassifierTargetMHz", self.rf_model_classifier_target_mhz) or 0.0)
+            self.rf_model_classifier_bandwidth_mhz = float(settings.get("rfModelClassifierBandwidthMHz", self.rf_model_classifier_bandwidth_mhz) or 20.0)
+            self.rf_model_classifier_interval_sec = float(settings.get("rfModelClassifierIntervalSec", self.rf_model_classifier_interval_sec) or 1.0)
+            self.rf_model_classifier_threshold = float(settings.get("rfModelClassifierThreshold", self.rf_model_classifier_threshold) or 0.45)
             self.waterfall_samples = settings.get("waterfallSamples", self.waterfall_samples)
             self.waterfall_bin_count = settings.get("waterfallBinCount", self.waterfall_bin_count)
             self.number_of_peaks = settings.get("number_of_peaks", self.number_of_peaks)
@@ -255,12 +381,20 @@ class sdr_scheduler_config:
 
 
             sr = self.sdr_sampleRate()
-            self.sdr0.configure_receiver(
-                frequency=self.sdr_settings[self.sdr_name].frequency,
-                sample_rate=sr,
-                bandwidth=sr,
-                gain=self.sdr_gain(),
+            next_receiver = (
+                float(self.sdr_settings[self.sdr_name].frequency),
+                float(sr),
+                float(sr),
+                float(self.sdr_gain()),
             )
+            receiver_changed = any(abs(left - right) > 1.0 for left, right in zip(previous_receiver, next_receiver))
+            if receiver_changed:
+                self.sdr0.configure_receiver(
+                    frequency=self.sdr_settings[self.sdr_name].frequency,
+                    sample_rate=sr,
+                    bandwidth=sr,
+                    gain=self.sdr_gain(),
+                )
         except Exception as e:
             print(e)
             pass
@@ -329,6 +463,13 @@ class sdr_scheduler_config:
             "averagingCount": 1,
             "dcSuppress": True,
             "showWaterfall": True,
+            "rfModelClassifierEnabled": False,
+            "rfModelClassifierRepoPath": self.rf_model_classifier_repo_path,
+            "rfModelClassifierModelPath": self.rf_model_classifier_model_path,
+            "rfModelClassifierTargetMHz": self.rf_model_classifier_target_mhz,
+            "rfModelClassifierBandwidthMHz": self.rf_model_classifier_bandwidth_mhz,
+            "rfModelClassifierIntervalSec": self.rf_model_classifier_interval_sec,
+            "rfModelClassifierThreshold": self.rf_model_classifier_threshold,
             "waterfallSamples": 200,
             "waterfallBinCount": 2048,
             "number_of_peaks": 5,

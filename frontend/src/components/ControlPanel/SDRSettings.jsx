@@ -33,6 +33,14 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
   const bandwidth = toFinite(settings.bandwidth, 20);
   const lockBandwidthSampleRate = typeof settings.lockBandwidthSampleRate === 'boolean' ? settings.lockBandwidthSampleRate : false;
   const dcSuppress = typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : false;
+  const decodersAlwaysEnabled = typeof settings.decodersAlwaysEnabled === 'boolean' ? settings.decodersAlwaysEnabled : false;
+  const rfModelClassifierEnabled = typeof settings.rfModelClassifierEnabled === 'boolean' ? settings.rfModelClassifierEnabled : false;
+  const rfModelClassifierRepoPath = settings.rfModelClassifierRepoPath || '/home/jake/workspace/SDR/rf-signal-intelligence';
+  const rfModelClassifierModelPath = settings.rfModelClassifierModelPath || `${rfModelClassifierRepoPath}/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras`;
+  const rfModelClassifierTargetMHz = toFinite(settings.rfModelClassifierTargetMHz, 2399);
+  const rfModelClassifierBandwidthMHz = toFinite(settings.rfModelClassifierBandwidthMHz, 20);
+  const rfModelClassifierIntervalSec = toFinite(settings.rfModelClassifierIntervalSec, 1);
+  const rfModelClassifierThreshold = toFinite(settings.rfModelClassifierThreshold, 0.45);
   const sweepingEnabled = typeof settings.sweeping_enabled === 'boolean' ? settings.sweeping_enabled : false;
   const [iqSessions, setIqSessions] = useState([]);
   const [selectedIqSession, setSelectedIqSession] = useState('');
@@ -237,6 +245,144 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
                 />
               }
               label="Suppress DC Spike"
+            />
+          </Box>
+          <Box
+            sx={{
+              mt: 1,
+              p: 1.25,
+              borderRadius: 2,
+              border: '1px solid rgba(144, 202, 249, 0.18)',
+              bgcolor: decodersAlwaysEnabled ? 'rgba(100, 240, 210, 0.08)' : 'rgba(255, 255, 255, 0.025)',
+            }}
+          >
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={decodersAlwaysEnabled}
+                  onChange={handleChange}
+                  name="decodersAlwaysEnabled"
+                  color="primary"
+                />
+              }
+              label="Keep decoders enabled while manually tuned"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 5 }}>
+              When enabled, protocol decoders run whenever your current receive window overlaps their bands. Scanner mode still uses its selected protocol plan.
+            </Typography>
+          </Box>
+        </AccordionDetails>
+      </Accordion>
+
+      <Accordion disableGutters sx={{ mt: 1, borderRadius: 2, overflow: 'hidden' }}>
+        <AccordionSummary expandIcon={<ExpandMoreIcon />} sx={{ px: 2 }}>
+          <Typography variant="h6">RF Model Classifier</Typography>
+        </AccordionSummary>
+        <AccordionDetails sx={{ px: 1.5, pb: 1.5 }}>
+          <Box
+            sx={{
+              p: 1.25,
+              borderRadius: 2,
+              border: '1px solid rgba(144, 202, 249, 0.18)',
+              bgcolor: rfModelClassifierEnabled ? 'rgba(100, 240, 210, 0.08)' : 'rgba(255, 255, 255, 0.025)',
+              mb: 1,
+            }}
+          >
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={rfModelClassifierEnabled}
+                  onChange={handleChange}
+                  name="rfModelClassifierEnabled"
+                  color="primary"
+                />
+              }
+              label="Run NoisyDroneRF classifier on the live IQ stream"
+            />
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 5 }}>
+              Uses the current SDR-Shark samples when the configured target frequency is inside the receive passband. The TensorFlow model runs in a background thread.
+            </Typography>
+          </Box>
+          <TextField
+            fullWidth
+            size="small"
+            margin="dense"
+            label="RF signal intelligence repo"
+            name="rfModelClassifierRepoPath"
+            value={rfModelClassifierRepoPath}
+            onChange={handleChange}
+            onKeyPress={handleKeyPress}
+            variant="outlined"
+            InputLabelProps={{ shrink: true }}
+          />
+          <TextField
+            fullWidth
+            size="small"
+            margin="dense"
+            label="Model path"
+            name="rfModelClassifierModelPath"
+            value={rfModelClassifierModelPath}
+            onChange={handleChange}
+            onKeyPress={handleKeyPress}
+            variant="outlined"
+            InputLabelProps={{ shrink: true }}
+          />
+          <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5, gap: 1 }}>
+            <TextField
+              size="small"
+              margin="dense"
+              label="Target (MHz)"
+              name="rfModelClassifierTargetMHz"
+              type="number"
+              value={rfModelClassifierTargetMHz}
+              onChange={handleChange}
+              onKeyPress={handleKeyPress}
+              variant="outlined"
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 0.001 }}
+              sx={{ flex: 1 }}
+            />
+            <TextField
+              size="small"
+              margin="dense"
+              label="Interval (sec)"
+              name="rfModelClassifierIntervalSec"
+              type="number"
+              value={rfModelClassifierIntervalSec}
+              onChange={handleChange}
+              onKeyPress={handleKeyPress}
+              variant="outlined"
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 0.25, min: 0.25 }}
+              sx={{ flex: 1 }}
+            />
+            <TextField
+              size="small"
+              margin="dense"
+              label="Model BW (MHz)"
+              name="rfModelClassifierBandwidthMHz"
+              type="number"
+              value={rfModelClassifierBandwidthMHz}
+              onChange={handleChange}
+              onKeyPress={handleKeyPress}
+              variant="outlined"
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 1, min: 1 }}
+              sx={{ flex: 1 }}
+            />
+            <TextField
+              size="small"
+              margin="dense"
+              label="Min confidence"
+              name="rfModelClassifierThreshold"
+              type="number"
+              value={rfModelClassifierThreshold}
+              onChange={handleChange}
+              onKeyPress={handleKeyPress}
+              variant="outlined"
+              InputLabelProps={{ shrink: true }}
+              inputProps={{ step: 0.05, min: 0, max: 1 }}
+              sx={{ flex: 1 }}
             />
           </Box>
         </AccordionDetails>

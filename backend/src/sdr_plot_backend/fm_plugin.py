@@ -535,6 +535,10 @@ class FmBroadcastPlugin:
         if thread is not None and thread.is_alive() and thread is not threading.current_thread():
             thread.join(timeout=1.0)
 
+    def stop(self):
+        self.stop_playback()
+        self._set_active(False, time.time())
+
     def audio_batch(self, count=6, timeout=0.4):
         count = max(1, min(int(count), 16))
         timeout = max(0.05, min(float(timeout), 2.0))

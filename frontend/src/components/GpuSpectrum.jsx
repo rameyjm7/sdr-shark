@@ -49,7 +49,7 @@ const createProgram = (gl) => {
 
 const formatMHz = (hz) => `${(hz / 1e6).toFixed(2)}`;
 
-const buildBars = ({ values, width, height, minDb, maxDb, palette, margin, opacity, widthScale, glow }) => {
+const buildBars = ({ values, width, height, minDb, maxDb, palette, margin, opacity, widthScale, glow, freqStartHz, freqStopHz, viewStartHz, viewStopHz }) => {
   const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   const left = Math.max(0, Math.floor((margin?.l || 0) * dpr));
   const right = Math.max(0, Math.floor((margin?.r || 0) * dpr));
@@ -63,6 +63,11 @@ const buildBars = ({ values, width, height, minDb, maxDb, palette, margin, opaci
   const range = Math.max(1, zMax - zMin);
   const count = values.length;
   const columnW = Math.max(1, plotW / Math.max(1, count - 1));
+  const dataStart = Number.isFinite(freqStartHz) ? Number(freqStartHz) : 0;
+  const dataStop = Number.isFinite(freqStopHz) && Number(freqStopHz) > dataStart ? Number(freqStopHz) : dataStart + Math.max(1, count - 1);
+  const viewStart = Number.isFinite(viewStartHz) ? Number(viewStartHz) : dataStart;
+  const viewStop = Number.isFinite(viewStopHz) && Number(viewStopHz) > viewStart ? Number(viewStopHz) : dataStop;
+  const viewSpan = Math.max(1, viewStop - viewStart);
   const positions = [];
   const colors = [];
   const pushVertex = (x, y, color) => {
@@ -80,7 +85,10 @@ const buildBars = ({ values, width, height, minDb, maxDb, palette, margin, opaci
     const alpha = glow
       ? Math.min(0.32, (0.07 + hot * 0.24) * opacity)
       : Math.min(0.98, (0.34 + shaped * 0.52) * opacity);
-    const x = left + (i / Math.max(1, count - 1)) * plotW;
+    const freqHz = dataStart + (i / Math.max(1, count - 1)) * (dataStop - dataStart);
+    const xFrac = (freqHz - viewStart) / viewSpan;
+    if (xFrac < -0.02 || xFrac > 1.02) continue;
+    const x = left + xFrac * plotW;
     const y = top + (1 - normalized) * plotH;
     const widthFactor = Math.max(0.5, Math.min(4, Number(widthScale) || 1));
     const pad = glow
@@ -111,6 +119,11 @@ const buildBars = ({ values, width, height, minDb, maxDb, palette, margin, opaci
 
 const GpuSpectrum = ({
   data,
+  secondaryData,
+  primaryFreqStartHz,
+  primaryFreqStopHz,
+  secondaryFreqStartHz,
+  secondaryFreqStopHz,
   minDb,
   maxDb,
   palette,
@@ -134,6 +147,7 @@ const GpuSpectrum = ({
   const rendererReportedRef = useRef(false);
 
   const values = useMemo(() => (Array.isArray(data) ? data : []), [data]);
+  const secondaryValues = useMemo(() => (Array.isArray(secondaryData) ? secondaryData : []), [secondaryData]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -206,6 +220,41 @@ const GpuSpectrum = ({
         gl.drawArrays(gl.TRIANGLES, 0, set.vertexCount);
       };
 
+      if (secondaryValues.length) {
+        drawSet(buildBars({
+          values: secondaryValues,
+          width: canvas.width,
+          height: canvas.height,
+          minDb,
+          maxDb,
+          palette,
+          margin,
+          opacity: Math.min(0.42, opacity * 0.5),
+          widthScale: Math.max(0.5, widthScale * 0.75),
+          glow: true,
+          freqStartHz: secondaryFreqStartHz,
+          freqStopHz: secondaryFreqStopHz,
+          viewStartHz: freqStartHz,
+          viewStopHz: freqStopHz,
+        }));
+        drawSet(buildBars({
+          values: secondaryValues,
+          width: canvas.width,
+          height: canvas.height,
+          minDb,
+          maxDb,
+          palette,
+          margin,
+          opacity: Math.min(0.52, opacity * 0.62),
+          widthScale: Math.max(0.5, widthScale * 0.7),
+          glow: false,
+          freqStartHz: secondaryFreqStartHz,
+          freqStopHz: secondaryFreqStopHz,
+          viewStartHz: freqStartHz,
+          viewStopHz: freqStopHz,
+        }));
+      }
+
       drawSet(buildBars({
         values,
         width: canvas.width,
@@ -217,6 +266,10 @@ const GpuSpectrum = ({
         opacity,
         widthScale,
         glow: true,
+        freqStartHz: primaryFreqStartHz || freqStartHz,
+        freqStopHz: primaryFreqStopHz || freqStopHz,
+        viewStartHz: freqStartHz,
+        viewStopHz: freqStopHz,
       }));
       drawSet(buildBars({
         values,
@@ -229,6 +282,10 @@ const GpuSpectrum = ({
         opacity,
         widthScale,
         glow: false,
+        freqStartHz: primaryFreqStartHz || freqStartHz,
+        freqStopHz: primaryFreqStopHz || freqStopHz,
+        viewStartHz: freqStartHz,
+        viewStopHz: freqStopHz,
       }));
     } catch (error) {
       if (!rendererReportedRef.current && typeof onRendererChange === 'function') {
@@ -237,7 +294,7 @@ const GpuSpectrum = ({
       }
       // Leave a blank dark panel if WebGL is unavailable; the overlay still shows axes.
     }
-  }, [values, minDb, maxDb, palette, margin, opacity, widthScale, onRendererChange]);
+  }, [values, secondaryValues, minDb, maxDb, palette, margin, opacity, widthScale, onRendererChange, freqStartHz, freqStopHz, primaryFreqStartHz, primaryFreqStopHz, secondaryFreqStartHz, secondaryFreqStopHz]);
 
   useEffect(() => {
     const overlay = overlayRef.current;

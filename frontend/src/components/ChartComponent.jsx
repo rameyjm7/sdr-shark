@@ -16,6 +16,7 @@ const ChartComponent = ({
   setMaxY,
   updateInterval,
   showWaterfall,
+  showSecondTrace,
   plotWidth,
   verticalLines,
   horizontalLines,
@@ -48,6 +49,8 @@ const ChartComponent = ({
   };
 
   const [fftData, setFftData] = useState([]);
+  const [secondaryFftData, setSecondaryFftData] = useState([]);
+  const [secondaryFftMeta, setSecondaryFftMeta] = useState(null);
   const [fftMaxData, setFftMaxData] = useState([]);
   const [persistanceData, setPersistanceData] = useState([]);
   const [waterfallData, setWaterfallData] = useState([]);
@@ -73,6 +76,7 @@ const ChartComponent = ({
   const [heldClassifiedSignalMarkers, setHeldClassifiedSignalMarkers] = useState([]);
   const [traceStyles, setTraceStyles] = useState({
     live: { visible: true, width: 1, opacity: 1.0 },
+    secondary: { visible: Boolean(showSecondTrace), width: 1, opacity: 0.42 },
     max: { visible: true, width: 1, opacity: 0.9 },
     persist: { visible: true, width: 1, opacity: 0.25 },
   });
@@ -88,6 +92,9 @@ const ChartComponent = ({
   const staleSeqCountRef = useRef(0);
   const lastFftSnapshotRef = useRef([]);
   const dataRequestInFlightRef = useRef(false);
+  const settingsPatchInFlightRef = useRef(false);
+  const pendingSettingsPatchRef = useRef(null);
+  const lastSettingsPatchKeyRef = useRef('');
   const queuedSsePayloadRef = useRef(null);
   const sseHealthyRef = useRef(false);
   const sseLastMessageAtRef = useRef(0);
@@ -213,6 +220,7 @@ const ChartComponent = ({
             params: {
               source: 'main',
               waterfall: showWaterfall ? 'derive' : 'none',
+              secondary: traceStyles.secondary.visible ? '1' : '0',
               _ts: Date.now(),
             },
           });
@@ -266,9 +274,12 @@ const ChartComponent = ({
           }
         }
         const rawFft = Array.isArray(data.fft) ? data.fft : [];
+        const rawSecondaryFft = Array.isArray(data.secondaryFft) ? data.secondaryFft : [];
+        const rawSecondaryMeta = data?.secondaryMeta && typeof data.secondaryMeta === 'object' ? data.secondaryMeta : null;
         const rawWaterfall = Array.isArray(data.waterfall) ? data.waterfall : [];
         // Replace NaN values in FFT data
         const sanitizedFftData = rawFft.map(value => isNaN(value) ? -255 : value);
+        const sanitizedSecondaryFftData = rawSecondaryFft.map(value => isNaN(value) ? -255 : value);
         const fftChanged = hasMeaningfulFftChange(sanitizedFftData, lastFftSnapshotRef.current);
         const fftFinite = sanitizedFftData.filter((v) => Number.isFinite(v));
         const fftMin = fftFinite.length ? Math.min(...fftFinite) : -255;
@@ -277,6 +288,8 @@ const ChartComponent = ({
         const fftFlatNoSignal = fftFinite.length > 8 && fftMax < -200 && fftRange < 0.5;
         lastFftSnapshotRef.current = sanitizedFftData;
         setFftData(sanitizedFftData);
+        setSecondaryFftData(sanitizedSecondaryFftData);
+        setSecondaryFftMeta(rawSecondaryMeta);
         if ((frameAdvanced || fftChanged) && !fftFlatNoSignal) {
           staleSeqCountRef.current = 0;
           setWaterfallNoSignal(false);
@@ -431,7 +444,12 @@ const ChartComponent = ({
             wifi: data?.wifi || null,
             zigbee: data?.zigbee || null,
             adsb: data?.adsb || null,
+            rtl433: data?.rtl433 || null,
+            rfModel: data?.rfModel || null,
             gps: data?.gps || null,
+            mimo: data?.mimo || null,
+            workerSdr: data?.workerSdr || null,
+            secondaryMeta: rawSecondaryMeta,
           });
         }
       } catch (error) {
@@ -472,6 +490,7 @@ const ChartComponent = ({
         source: 'main',
         waterfall: showWaterfall ? 'derive' : 'none',
         interval: String(safeInterval),
+        secondary: traceStyles.secondary.visible ? '1' : '0',
       });
       eventSource = new window.EventSource(`/api/data_stream?${streamParams.toString()}`);
       eventSource.addEventListener('frame', (event) => {
@@ -498,7 +517,7 @@ const ChartComponent = ({
       sseHealthyRef.current = false;
       queuedSsePayloadRef.current = null;
     };
-  }, [settings.updateInterval, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, showWaterfall, onTelemetryUpdate]);
+  }, [settings.updateInterval, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, showWaterfall, traceStyles.secondary.visible, onTelemetryUpdate]);
 
 
 
@@ -543,13 +562,21 @@ const ChartComponent = ({
   useEffect(() => {
     setTraceStyles((prev) => ({
       ...prev,
+      live: {
+        ...prev.live,
+        visible: typeof settings.showFirstTrace === 'boolean' ? settings.showFirstTrace : prev.live.visible,
+      },
+      secondary: {
+        ...prev.secondary,
+        visible: typeof settings.showSecondTrace === 'boolean' ? settings.showSecondTrace : Boolean(showSecondTrace),
+      },
       max: { ...prev.max, visible: typeof settings.showMaxTrace === 'boolean' ? settings.showMaxTrace : prev.max.visible },
       persist: {
         ...prev.persist,
         visible: typeof settings.showPersistanceTrace === 'boolean' ? settings.showPersistanceTrace : prev.persist.visible,
       },
     }));
-  }, [settings.showMaxTrace, settings.showPersistanceTrace]);
+  }, [settings.showFirstTrace, settings.showSecondTrace, showSecondTrace, settings.showMaxTrace, settings.showPersistanceTrace]);
 
   const generateColor = (value) => {
     if (value >= 0) {
@@ -783,9 +810,24 @@ const ChartComponent = ({
   const baseFreq = sweepSettings.sweeping_enabled
     ? safeSweepStartMHz * 1e6
     : (safeFrequencyMHz - safeSampleRateMHz / 2) * 1e6;
+  const secondaryCenterHz = Number(secondaryFftMeta?.centerHz);
+  const secondarySampleRateHz = Number(secondaryFftMeta?.sampleRateHz);
+  const secondaryHasOwnRange = Number.isFinite(secondaryCenterHz) && secondaryCenterHz > 0 && Number.isFinite(secondarySampleRateHz) && secondarySampleRateHz > 0;
+  const secondaryBaseFreq = secondaryHasOwnRange ? secondaryCenterHz - (secondarySampleRateHz / 2) : baseFreq;
+  const secondaryBandwidthHz = secondaryHasOwnRange ? secondarySampleRateHz : safeBandwidthHz;
   const xAxisRangeHz = useMemo(
-    () => [baseFreq, baseFreq + safeBandwidthHz],
-    [baseFreq, safeBandwidthHz],
+    () => {
+      const mainStart = baseFreq;
+      const mainStop = baseFreq + safeBandwidthHz;
+      if (traceStyles.secondary.visible && secondaryFftData.length > 0 && secondaryHasOwnRange) {
+        return [
+          Math.min(mainStart, secondaryBaseFreq),
+          Math.max(mainStop, secondaryBaseFreq + secondaryBandwidthHz),
+        ];
+      }
+      return [mainStart, mainStop];
+    },
+    [baseFreq, safeBandwidthHz, traceStyles.secondary.visible, secondaryFftData.length, secondaryHasOwnRange, secondaryBaseFreq, secondaryBandwidthHz],
   );
   const freqStep = safeBandwidthHz / safeBins;
   const waterfallFreqStep = safeBandwidthHz / safeWaterfallBins;
@@ -1199,6 +1241,25 @@ const ChartComponent = ({
   };
 
   const pushSettings = async (patch) => {
+    const patchKey = JSON.stringify({
+      frequency: patch.frequency,
+      sampleRate: patch.sampleRate,
+      bandwidth: patch.bandwidth,
+      showWaterfall: patch.showWaterfall,
+      showFirstTrace: patch.showFirstTrace,
+      showSecondTrace: patch.showSecondTrace,
+      waterfallSamples: patch.waterfallSamples,
+      waterfallBinCount: patch.waterfallBinCount,
+    });
+    if (patchKey === lastSettingsPatchKeyRef.current) {
+      return;
+    }
+    if (settingsPatchInFlightRef.current) {
+      pendingSettingsPatchRef.current = patch;
+      return;
+    }
+    settingsPatchInFlightRef.current = true;
+    lastSettingsPatchKeyRef.current = patchKey;
     const nextSettings = { ...settings, ...patch };
     if (typeof setSettings === 'function') {
       setSettings(nextSettings);
@@ -1210,6 +1271,13 @@ const ChartComponent = ({
       }
     } catch (error) {
       console.error('Error updating settings patch:', error);
+    } finally {
+      settingsPatchInFlightRef.current = false;
+      const pendingPatch = pendingSettingsPatchRef.current;
+      pendingSettingsPatchRef.current = null;
+      if (pendingPatch) {
+        setTimeout(() => pushSettings(pendingPatch), 0);
+      }
     }
   };
 
@@ -1329,6 +1397,33 @@ const ChartComponent = ({
     }
   };
 
+  const antennaMode = traceStyles.live.visible && traceStyles.secondary.visible
+    ? 'both'
+    : (traceStyles.secondary.visible ? 'ant2' : 'ant1');
+
+  const setAntennaMode = (mode) => {
+    const showFirst = mode === 'ant1' || mode === 'both';
+    const showSecond = mode === 'ant2' || mode === 'both';
+    setTraceStyles((prev) => ({
+      ...prev,
+      live: { ...prev.live, visible: showFirst },
+      secondary: { ...prev.secondary, visible: showSecond },
+    }));
+    pushSettings({
+      showFirstTrace: showFirst,
+      showSecondTrace: showSecond,
+    });
+  };
+
+  const setSecondTraceVisible = (visible) => {
+    const showSecond = Boolean(visible);
+    setTraceStyles((prev) => ({
+      ...prev,
+      secondary: { ...prev.secondary, visible: showSecond },
+    }));
+    pushSettings({ showSecondTrace: showSecond });
+  };
+
   const resetZoom = () => {
     if (spectrumPlotRef.current && window.Plotly) {
       window.Plotly.relayout(spectrumPlotRef.current, {
@@ -1446,14 +1541,28 @@ const ChartComponent = ({
       </div>
       <div style={{ position: 'relative' }}>
         <div style={traceToolbarStyle}>
-          <label style={quickTuneLabelStyle}>
-            <input
-              type="checkbox"
-              checked={traceStyles.live.visible}
-              onChange={(e) => setTraceStyles((prev) => ({ ...prev, live: { ...prev.live, visible: e.target.checked } }))}
-            />
-            Live
-          </label>
+          <span style={quickTuneLabelStyle}>Antenna</span>
+          {[
+            ['ant1', 'Ant1'],
+            ['ant2', 'Ant2'],
+            ['both', 'Both'],
+          ].map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              style={{
+                ...quickTuneButtonStyle,
+                padding: '2px 8px',
+                borderColor: antennaMode === mode ? '#7cf7d4' : quickTuneButtonStyle.borderColor,
+                background: antennaMode === mode ? 'rgba(124, 247, 212, 0.18)' : quickTuneButtonStyle.background,
+                color: antennaMode === mode ? '#dffff8' : quickTuneButtonStyle.color,
+              }}
+              onClick={() => setAntennaMode(mode)}
+              title={mode === 'both' ? 'Show both bladeRF RX channels' : `Show ${label} only`}
+            >
+              {label}
+            </button>
+          ))}
           <label style={quickTuneLabelStyle}>
             <input
               type="checkbox"
@@ -1465,6 +1574,14 @@ const ChartComponent = ({
               }}
             />
             Max
+          </label>
+          <label style={quickTuneLabelStyle} title="Request and draw the second SDR / secondary FFT trace">
+            <input
+              type="checkbox"
+              checked={traceStyles.secondary.visible}
+              onChange={(e) => setSecondTraceVisible(e.target.checked)}
+            />
+            2nd SDR
           </label>
           <label style={quickTuneLabelStyle}>
             <input
@@ -1503,6 +1620,7 @@ const ChartComponent = ({
               const width = toFinite(e.target.value, 1);
               setTraceStyles((prev) => ({
                 live: { ...prev.live, width },
+                secondary: { ...prev.secondary, width: Math.max(1, width - 0.5) },
                 max: { ...prev.max, width },
                 persist: { ...prev.persist, width },
               }));
@@ -1529,11 +1647,16 @@ const ChartComponent = ({
         {useGpuCharts ? (
           <GpuSpectrum
             data={traceStyles.live.visible ? fftData : []}
+            secondaryData={traceStyles.secondary.visible ? secondaryFftData : []}
             minDb={minY}
             maxDb={maxY}
             palette={waterfallColorScale}
-            freqStartHz={baseFreq}
-            freqStopHz={baseFreq + safeBandwidthHz}
+            freqStartHz={xAxisRangeHz[0]}
+            freqStopHz={xAxisRangeHz[1]}
+            primaryFreqStartHz={baseFreq}
+            primaryFreqStopHz={baseFreq + safeBandwidthHz}
+            secondaryFreqStartHz={secondaryBaseFreq}
+            secondaryFreqStopHz={secondaryBaseFreq + secondaryBandwidthHz}
             margin={plotMargin}
             width={`${plotWidth}vw`}
             height={showWaterfall ? '42vh' : '78vh'}
@@ -1558,6 +1681,20 @@ const ChartComponent = ({
               opacity: traceStyles.live.opacity,
               line: { shape: 'linear', width: traceStyles.live.width },
               showlegend: false,
+            },
+            traceStyles.secondary.visible && secondaryFftData.length > 0 && {
+              x: Array.from(
+                { length: secondaryFftData.length },
+                (_, index) => secondaryBaseFreq + index * (secondaryBandwidthHz / Math.max(1, secondaryFftData.length)),
+              ),
+              y: secondaryFftData,
+              type: 'scattergl',
+              mode: 'lines',
+              marker: { color: '#5ee7ff' },
+              opacity: traceStyles.secondary.opacity,
+              line: { shape: 'linear', width: traceStyles.secondary.width },
+              showlegend: false,
+              name: 'Antenna 2 FFT',
             },
             traceStyles.max.visible && settings.showMaxTrace && {  // Conditionally add the Max FFT trace
             x: Array.isArray(fftMaxData) ? maxFftX : [],
