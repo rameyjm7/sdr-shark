@@ -1,3 +1,41 @@
-Copyright (c) 2024 Jacob M Ramey
+SDR-Shark Non-Commercial Source-Available License
 
-This software is licensed for non-commercial use only. You may use, distribute, and modify the software for personal, educational, or research purposes, but not for commercial purposes without permission from the original author. The original author retains all commercial rights to this software.
+Copyright (c) 2024-2026 Jacob Ramey and RTG LLC
+
+All commercial rights are reserved by Jacob Ramey and RTG LLC.
+
+Permission is granted to use, copy, modify, and distribute the original software,
+scripts, documentation, configuration, and project-authored artifacts in this
+repository for personal, educational, research, evaluation, and other
+non-commercial purposes only.
+
+Commercial use requires prior written permission from Jacob Ramey or RTG LLC.
+Commercial use includes, but is not limited to, sale, sublicensing, paid
+deployment, commercial hosting, integration into commercial products or
+services, contract deliverables, internal commercial operations, managed service
+offerings, or other revenue-generating use.
+
+Commercial licensing, integration, support, or permission inquiries:
+
+- Jacob Ramey: rameyjm7@gmail.com
+- RTG LLC: jake.rtgllc@gmail.com
+
+Third-Party Materials
+
+This license applies only to original work authored for this repository. Jacob
+Ramey and RTG LLC make no claim of ownership over third-party datasets,
+pretrained models, dependencies, drivers, SDR vendor software, decoder projects,
+protocol specifications, sample captures, or other externally sourced materials
+referenced, used with, or required by this repository.
+
+Third-party materials remain subject to their own licenses, terms, attribution
+requirements, redistribution restrictions, export controls, and usage limits. It
+is each user's responsibility to verify that their use of any third-party
+material is permitted.
+
+No Warranty
+
+This work is provided "as is", without warranty of any kind, express or implied,
+including but not limited to warranties of merchantability, fitness for a
+particular purpose, and non-infringement. The authors and rights holders are not
+liable for any claim, damages, or other liability arising from use of this work.
