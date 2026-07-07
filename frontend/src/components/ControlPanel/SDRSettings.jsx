@@ -37,6 +37,8 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
   const rfModelClassifierEnabled = typeof settings.rfModelClassifierEnabled === 'boolean' ? settings.rfModelClassifierEnabled : false;
   const rfModelClassifierRepoPath = settings.rfModelClassifierRepoPath || '/home/jake/workspace/SDR/rf-signal-intelligence';
   const rfModelClassifierModelPath = settings.rfModelClassifierModelPath || `${rfModelClassifierRepoPath}/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras`;
+  const rfModelClassifierBackend = settings.rfModelClassifierBackend || 'auto';
+  const rfModelClassifierEnginePath = settings.rfModelClassifierEnginePath || `${rfModelClassifierRepoPath}/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine`;
   const rfModelClassifierTargetMHz = toFinite(settings.rfModelClassifierTargetMHz, 2399);
   const rfModelClassifierBandwidthMHz = toFinite(settings.rfModelClassifierBandwidthMHz, 20);
   const rfModelClassifierIntervalSec = toFinite(settings.rfModelClassifierIntervalSec, 1);
@@ -300,9 +302,25 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               label="Run NoisyDroneRF classifier on the live IQ stream"
             />
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 5 }}>
-              Uses the current SDR-Shark samples when the configured target frequency is inside the receive passband. The TensorFlow model runs in a background thread.
+              Uses the current SDR-Shark samples when the configured target frequency is inside the receive passband. TensorRT is preferred when an engine is configured; Keras remains available as a fallback.
             </Typography>
           </Box>
+          <TextField
+            fullWidth
+            select
+            size="small"
+            margin="dense"
+            label="Inference backend"
+            name="rfModelClassifierBackend"
+            value={rfModelClassifierBackend}
+            onChange={handleChange}
+            variant="outlined"
+            InputLabelProps={{ shrink: true }}
+          >
+            <MenuItem value="auto">Auto: TensorRT engine if present</MenuItem>
+            <MenuItem value="tensorrt">TensorRT engine</MenuItem>
+            <MenuItem value="keras">Keras model</MenuItem>
+          </TextField>
           <TextField
             fullWidth
             size="small"
@@ -319,12 +337,26 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
             fullWidth
             size="small"
             margin="dense"
-            label="Model path"
+            label="TensorRT engine path"
+            name="rfModelClassifierEnginePath"
+            value={rfModelClassifierEnginePath}
+            onChange={handleChange}
+            onKeyPress={handleKeyPress}
+            variant="outlined"
+            helperText={rfModelClassifierBackend === 'keras' ? 'Ignored while Keras backend is selected.' : 'Active artifact for TensorRT inference.'}
+            InputLabelProps={{ shrink: true }}
+          />
+          <TextField
+            fullWidth
+            size="small"
+            margin="dense"
+            label={rfModelClassifierBackend === 'keras' ? 'Keras model path' : 'Keras fallback model path'}
             name="rfModelClassifierModelPath"
             value={rfModelClassifierModelPath}
             onChange={handleChange}
             onKeyPress={handleKeyPress}
             variant="outlined"
+            helperText={rfModelClassifierBackend === 'tensorrt' ? 'Not used while TensorRT backend is selected.' : 'Used by Keras or if auto mode cannot use TensorRT.'}
             InputLabelProps={{ shrink: true }}
           />
           <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5, gap: 1 }}>

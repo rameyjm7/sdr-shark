@@ -239,6 +239,8 @@ const ControlPanel = ({
         rfModelClassifierEnabled: typeof data.rfModelClassifierEnabled === 'boolean' ? data.rfModelClassifierEnabled : false,
         rfModelClassifierRepoPath: data.rfModelClassifierRepoPath || '/home/jake/workspace/SDR/rf-signal-intelligence',
         rfModelClassifierModelPath: data.rfModelClassifierModelPath || '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
+        rfModelClassifierBackend: data.rfModelClassifierBackend || 'auto',
+        rfModelClassifierEnginePath: data.rfModelClassifierEnginePath || '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
         rfModelClassifierTargetMHz: toFinite(data.rfModelClassifierTargetMHz, 2399),
         rfModelClassifierBandwidthMHz: toFinite(data.rfModelClassifierBandwidthMHz, 20),
         rfModelClassifierIntervalSec: toFinite(data.rfModelClassifierIntervalSec, 1),

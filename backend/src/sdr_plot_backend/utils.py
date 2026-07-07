@@ -85,6 +85,16 @@ class sdr_scheduler_config:
                 "noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras",
             ),
         )
+        self.rf_model_classifier_backend = os.getenv("SDR_SHARK_RF_MODEL_BACKEND", "auto").strip().lower() or "auto"
+        self.rf_model_classifier_engine_path = os.getenv(
+            "SDR_SHARK_RF_MODEL_ENGINE_PATH",
+            os.path.join(
+                self.rf_model_classifier_repo_path,
+                "models",
+                "noisy_drone_rf_v2",
+                "noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine",
+            ),
+        )
         self.rf_model_classifier_target_mhz = float(os.getenv("SDR_SHARK_RF_MODEL_TARGET_MHZ", "2399") or "2399")
         self.rf_model_classifier_bandwidth_mhz = float(os.getenv("SDR_SHARK_RF_MODEL_BW_MHZ", "20") or "20")
         self.rf_model_classifier_interval_sec = float(os.getenv("SDR_SHARK_RF_MODEL_INTERVAL_SEC", "1.0") or "1.0")
@@ -170,6 +180,17 @@ class sdr_scheduler_config:
                 gain=settings.gain,
                 size=self.sample_size,
             )
+            if worker.backend == "soapy":
+                requested = str(worker.name).split(":", 1)[0].lower()
+                devices = worker.list_devices()
+                matching = [
+                    device
+                    for device in devices
+                    if str(device.get("id", "")).lower().startswith(f"{requested}:")
+                    or str(device.get("driver", "")).lower() == requested
+                ]
+                if not matching:
+                    raise RuntimeError(f"No SoapySDR worker device found for {requested}")
             worker.start()
             self.worker_sdr = worker
             self.worker_sdr_error = ""
@@ -310,6 +331,8 @@ class sdr_scheduler_config:
             "rfModelClassifierEnabled": self.rf_model_classifier_enabled,
             "rfModelClassifierRepoPath": self.rf_model_classifier_repo_path,
             "rfModelClassifierModelPath": self.rf_model_classifier_model_path,
+            "rfModelClassifierBackend": self.rf_model_classifier_backend,
+            "rfModelClassifierEnginePath": self.rf_model_classifier_engine_path,
             "rfModelClassifierTargetMHz": self.rf_model_classifier_target_mhz,
             "rfModelClassifierBandwidthMHz": self.rf_model_classifier_bandwidth_mhz,
             "rfModelClassifierIntervalSec": self.rf_model_classifier_interval_sec,
@@ -359,6 +382,8 @@ class sdr_scheduler_config:
             self.rf_model_classifier_enabled = bool(settings.get("rfModelClassifierEnabled", self.rf_model_classifier_enabled))
             self.rf_model_classifier_repo_path = str(settings.get("rfModelClassifierRepoPath", self.rf_model_classifier_repo_path) or "")
             self.rf_model_classifier_model_path = str(settings.get("rfModelClassifierModelPath", self.rf_model_classifier_model_path) or "")
+            self.rf_model_classifier_backend = str(settings.get("rfModelClassifierBackend", self.rf_model_classifier_backend) or "auto").strip().lower()
+            self.rf_model_classifier_engine_path = str(settings.get("rfModelClassifierEnginePath", self.rf_model_classifier_engine_path) or "")
             self.rf_model_classifier_target_mhz = float(settings.get("rfModelClassifierTargetMHz", self.rf_model_classifier_target_mhz) or 0.0)
             self.rf_model_classifier_bandwidth_mhz = float(settings.get("rfModelClassifierBandwidthMHz", self.rf_model_classifier_bandwidth_mhz) or 20.0)
             self.rf_model_classifier_interval_sec = float(settings.get("rfModelClassifierIntervalSec", self.rf_model_classifier_interval_sec) or 1.0)
@@ -466,6 +491,8 @@ class sdr_scheduler_config:
             "rfModelClassifierEnabled": False,
             "rfModelClassifierRepoPath": self.rf_model_classifier_repo_path,
             "rfModelClassifierModelPath": self.rf_model_classifier_model_path,
+            "rfModelClassifierBackend": self.rf_model_classifier_backend,
+            "rfModelClassifierEnginePath": self.rf_model_classifier_engine_path,
             "rfModelClassifierTargetMHz": self.rf_model_classifier_target_mhz,
             "rfModelClassifierBandwidthMHz": self.rf_model_classifier_bandwidth_mhz,
             "rfModelClassifierIntervalSec": self.rf_model_classifier_interval_sec,
