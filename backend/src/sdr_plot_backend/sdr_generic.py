@@ -8,6 +8,7 @@ import threading
 import time
 import sys
 from typing import Any
+import zlib
 
 import numpy as np
 import requests
@@ -86,6 +87,8 @@ class SDRGeneric:
         self._soapy_channels: list[int] = [0]
         self._gateway_channels: list[int] = [0]
         self._soapy_device_args: dict[str, Any] | None = None
+        self._soapy_stale_chunks = max(0, int(os.getenv("SDR_SHARK_SOAPY_STALE_CHUNKS", "40") or "40"))
+        self._soapy_empty_reads = max(0, int(os.getenv("SDR_SHARK_SOAPY_EMPTY_READS", "50") or "50"))
         default_log = _default_log_file("soapysdr.log")
         self._soapy_log_file = os.getenv("SDR_SOAPY_LOG_FILE", str(default_log))
 
@@ -631,6 +634,9 @@ class SDRGeneric:
             rx_bufs = [np.empty(chunk_samples, dtype=np.complex64) for _ in range(channel_count)]
         else:
             rx_bufs = [np.empty(chunk_samples * 2, dtype=np.int16) for _ in range(channel_count)]
+        last_fingerprint: int | None = None
+        repeated_fingerprint_count = 0
+        empty_read_count = 0
 
         while self._running and self._should_run:
             try:
@@ -638,7 +644,11 @@ class SDRGeneric:
                     result = dev.readStream(stream, rx_bufs, chunk_samples, timeoutUs=200_000)
                 n = int(getattr(result, "ret", result))
                 if n <= 0:
+                    empty_read_count += 1
+                    if self._soapy_empty_reads and empty_read_count >= self._soapy_empty_reads:
+                        raise RuntimeError("SoapySDR stream produced too many empty reads")
                     continue
+                empty_read_count = 0
                 if self._soapy_stream_format == "SOAPY_SDR_CF32":
                     iq = rx_bufs[0][:n].astype(np.complex64, copy=True)
                     secondary_iq = (
@@ -669,6 +679,14 @@ class SDRGeneric:
                         secondary_out[: secondary_iq.size] = secondary_iq
                 else:
                     secondary_out = np.zeros(self.size, dtype=np.complex64)
+                fingerprint = self._iq_fingerprint(out)
+                if fingerprint == last_fingerprint:
+                    repeated_fingerprint_count += 1
+                    if self._soapy_stale_chunks and repeated_fingerprint_count >= self._soapy_stale_chunks:
+                        raise RuntimeError("SoapySDR stream returned repeated IQ buffers")
+                else:
+                    repeated_fingerprint_count = 0
+                    last_fingerprint = fingerprint
                 with self._lock:
                     self._latest_samples = out.astype(np.complex64, copy=False)
                     self._latest_samples_secondary = secondary_out.astype(np.complex64, copy=False)
@@ -682,6 +700,17 @@ class SDRGeneric:
                     except Exception:
                         time.sleep(0.5)
                 return
+
+    def _iq_fingerprint(self, iq: np.ndarray) -> int:
+        if iq.size == 0:
+            return 0
+        view = np.ascontiguousarray(iq).view(np.uint8)
+        if view.size <= 24_576:
+            return zlib.crc32(view)
+        step = view.size // 3
+        crc = zlib.crc32(view[:8192])
+        crc = zlib.crc32(view[step : step + 8192], crc)
+        return zlib.crc32(view[-8192:], crc)
 
     def _should_publish_iq_tap(self) -> bool:
         with self._iq_tap_lock:
