@@ -115,6 +115,15 @@ class NoisyDroneModelPlugin:
             "debug_capture_dir": os.getenv("SDR_SHARK_RF_MODEL_DEBUG_CAPTURE_DIR", "").strip(),
         }
 
+    @staticmethod
+    def _active_artifact(cfg: dict[str, Any]) -> tuple[str, str]:
+        backend = str(cfg.get("backend", "auto") or "auto").strip().lower()
+        engine_path = str(cfg.get("engine_path", "") or "")
+        model_path = str(cfg.get("model_path", "") or "")
+        if backend == "tensorrt" or (backend == "auto" and engine_path and Path(engine_path).expanduser().exists()):
+            return "TensorRT engine", engine_path
+        return "Keras model", model_path
+
     def configure(
         self,
         *,
@@ -125,9 +134,13 @@ class NoisyDroneModelPlugin:
         sample_rate_hz: float | None,
         interval_sec: float | None,
         confidence_threshold: float | None,
+        backend: str | None = None,
+        engine_path: str | None = None,
     ) -> None:
         repo = str(repo_path or DEFAULT_RF_INTELLIGENCE_ROOT)
         model = str(model_path or DEFAULT_NOISY_DRONE_MODEL)
+        selected_backend = str(backend or self._configured.get("backend", "auto") or "auto").strip().lower()
+        engine = str(engine_path or self._configured.get("engine_path", DEFAULT_NOISY_DRONE_ENGINE))
         target = float(target_freq_hz or 0.0)
         model_rate = max(1.0, float(sample_rate_hz or 20_000_000.0))
         interval = max(0.25, float(interval_sec or 1.0))
@@ -139,6 +152,8 @@ class NoisyDroneModelPlugin:
                     "enabled": bool(enabled),
                     "repo_path": repo,
                     "model_path": model,
+                    "backend": selected_backend,
+                    "engine_path": engine,
                     "target_freq_hz": target,
                     "sample_rate_hz": model_rate,
                     "interval_sec": interval,
@@ -208,6 +223,7 @@ class NoisyDroneModelPlugin:
     def snapshot(self, max_events: int = 20) -> dict[str, Any]:
         acquired = self._lock.acquire(blocking=False)
         if not acquired:
+            active_label, active_path = self._active_artifact(self._configured)
             return {
                 "enabled": bool(self._configured.get("enabled")),
                 "active": bool(self._thread is not None and self._thread.is_alive()),
@@ -215,6 +231,8 @@ class NoisyDroneModelPlugin:
                 "model_path": self._configured.get("model_path", ""),
                 "model_backend": self._configured.get("backend", "auto"),
                 "engine_path": self._configured.get("engine_path", ""),
+                "active_model_label": active_label,
+                "active_model_path": active_path,
                 "repo_path": self._configured.get("repo_path", ""),
                 "target_freq_hz": float(self._configured.get("target_freq_hz", 0.0) or 0.0),
                 "target_mhz": float(self._configured.get("target_freq_hz", 0.0) or 0.0) / 1e6,
@@ -239,6 +257,7 @@ class NoisyDroneModelPlugin:
             last_inference = self._last_inference
         finally:
             self._lock.release()
+        active_label, active_path = self._active_artifact(cfg)
         return {
             "enabled": bool(cfg["enabled"]),
             "active": bool(self._thread is not None and self._thread.is_alive()),
@@ -246,6 +265,8 @@ class NoisyDroneModelPlugin:
             "model_path": cfg["model_path"],
             "model_backend": cfg.get("backend", "auto"),
             "engine_path": cfg.get("engine_path", ""),
+            "active_model_label": active_label,
+            "active_model_path": active_path,
             "repo_path": cfg["repo_path"],
             "target_freq_hz": float(cfg["target_freq_hz"]),
             "target_mhz": float(cfg["target_freq_hz"]) / 1e6 if cfg["target_freq_hz"] else 0.0,

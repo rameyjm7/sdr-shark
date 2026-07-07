@@ -79,6 +79,8 @@ const App = () => {
     rfModelClassifierEnabled: false,
     rfModelClassifierRepoPath: '/home/jake/workspace/SDR/rf-signal-intelligence',
     rfModelClassifierModelPath: '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
+    rfModelClassifierBackend: 'auto',
+    rfModelClassifierEnginePath: '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
     rfModelClassifierTargetMHz: 2399,
     rfModelClassifierBandwidthMHz: 20,
     rfModelClassifierIntervalSec: 1,
