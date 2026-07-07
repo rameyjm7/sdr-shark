@@ -91,8 +91,13 @@ class NoisyDroneModelPlugin:
             not in {"0", "false", "no", "off"},
             "scan_windows": os.getenv("SDR_SHARK_RF_MODEL_SCAN_WINDOWS", "1").strip().lower()
             not in {"0", "false", "no", "off"},
+            "scan_rf_offsets": os.getenv("SDR_SHARK_RF_MODEL_SCAN_RF_OFFSETS", "1").strip().lower()
+            not in {"0", "false", "no", "off"},
+            "scan_rf_step_hz": max(
+                250_000.0, float(os.getenv("SDR_SHARK_RF_MODEL_SCAN_RF_STEP_HZ", "2000000") or "2000000")
+            ),
             "scan_capture_multiplier": max(
-                1.0, float(os.getenv("SDR_SHARK_RF_MODEL_SCAN_CAPTURE_MULTIPLIER", "2") or "2")
+                1.0, float(os.getenv("SDR_SHARK_RF_MODEL_SCAN_CAPTURE_MULTIPLIER", "1") or "1")
             ),
             "scan_stride_samples": max(
                 1, int(os.getenv("SDR_SHARK_RF_MODEL_SCAN_STRIDE_SAMPLES", "262144") or "262144")
@@ -100,10 +105,14 @@ class NoisyDroneModelPlugin:
             "submit_interval_floor_sec": max(
                 0.0, float(os.getenv("SDR_SHARK_RF_MODEL_SUBMIT_INTERVAL_FLOOR_SEC", "0.02") or "0.02")
             ),
+            "min_quality_factor": max(
+                0.0, float(os.getenv("SDR_SHARK_RF_MODEL_MIN_QUALITY_FACTOR", "0.2") or "0.2")
+            ),
             "target_guard_hz": 2_000_000.0,
             "target_guard_margin_db": 4.0,
             "rfuav_centers_path": os.getenv("SDR_SHARK_RFUAV_CENTERS_PATH", str(DEFAULT_RFUAV_CENTERS_PATH)),
             "rfuav_tolerance_hz": float(os.getenv("SDR_SHARK_RFUAV_TOLERANCE_HZ", "5000000") or 5_000_000.0),
+            "debug_capture_dir": os.getenv("SDR_SHARK_RF_MODEL_DEBUG_CAPTURE_DIR", "").strip(),
         }
 
     def configure(
@@ -312,52 +321,105 @@ class NoisyDroneModelPlugin:
     def _classify(self, raw: np.ndarray, *, center_freq_hz: float, sample_rate_hz: float, cfg: dict[str, Any]) -> None:
         model, helpers = self._load_model_and_helpers(cfg["repo_path"], cfg["model_path"])
         coerce_iq_array = helpers["coerce_iq_array"]
-        select_high_power_window = helpers["select_high_power_window"]
-        classify_iq = helpers["classify_iq"]
-        choose_final_prediction = helpers["choose_final_prediction"]
         capture_stats = helpers["capture_stats"]
-        candidate_window_starts = helpers.get("candidate_window_starts")
-        best_non_noise_prediction = helpers.get("best_non_noise_prediction")
+        frame_classifier_cls = helpers["NoisyDroneFrameClassifier"]
+        frame_config_cls = helpers["NoisyDroneFrameConfig"]
         labels = list(helpers["LABEL_NAMES"])
 
         model_sample_rate_hz = float(cfg["sample_rate_hz"])
-        effective_target_freq_hz = self._effective_target_freq_hz(cfg, center_freq_hz, sample_rate_hz)
-        model_iq, effective_sample_rate_hz = self._channelize_for_model(
-            raw,
-            center_freq_hz=float(center_freq_hz),
-            input_sample_rate_hz=float(sample_rate_hz),
-            target_freq_hz=float(effective_target_freq_hz),
-            model_sample_rate_hz=model_sample_rate_hz,
-        )
-        iq = coerce_iq_array(model_iq)
-        capture, start_idx, raw_label, raw_confidence, probs = self._select_and_classify_window(
-            iq,
-            model=model,
-            classify_iq=classify_iq,
-            select_high_power_window=select_high_power_window,
-            candidate_window_starts=candidate_window_starts,
-            best_non_noise_prediction=best_non_noise_prediction,
-            labels=labels,
-            cfg=cfg,
-        )
-        alignment = self._target_alignment_stats(capture, effective_sample_rate_hz)
-        stats = capture_stats(capture)
-        label, confidence, decision = choose_final_prediction(
-            raw_label,
-            raw_confidence,
-            probs,
-            labels,
+        candidates = self._rf_target_candidates(cfg, center_freq_hz, sample_rate_hz)
+        frame_config = frame_config_cls(
+            window_samples=int(cfg["window_samples"]),
+            nfft=int(cfg["nfft"]),
+            hop=int(cfg["hop"]),
+            time_bins=int(cfg["time_bins"]),
+            scan_windows=bool(cfg.get("scan_windows")),
+            scan_stride_samples=int(cfg.get("scan_stride_samples", 262144) or 262144),
+            window_score_mode="non-noise",
             decision_mode="hybrid",
             non_noise_threshold=float(cfg["non_noise_threshold"]),
-            signal_present=True,
-            target_label=None,
+            top_k=3,
         )
-        ranking = np.argsort(probs)[::-1][:3]
-        top = [{"label": labels[int(idx)], "confidence": float(probs[int(idx)])} for idx in ranking]
+        frame_classifier = frame_classifier_cls(
+            lambda batch: model.predict(batch, verbose=0),
+            labels=labels,
+            config=frame_config,
+        )
+        best_result = None
+        for candidate_target_freq_hz in candidates:
+            model_iq, candidate_sample_rate_hz = self._channelize_for_model(
+                raw,
+                center_freq_hz=float(center_freq_hz),
+                input_sample_rate_hz=float(sample_rate_hz),
+                target_freq_hz=float(candidate_target_freq_hz),
+                model_sample_rate_hz=model_sample_rate_hz,
+            )
+            iq = coerce_iq_array(model_iq)
+            payload = frame_classifier.classify_iq(
+                iq,
+                target_label=None,
+                signal_present=False,
+            )
+            start_idx = int((payload.get("scan") or {}).get("selected_start", 0) or 0)
+            capture = iq[start_idx : start_idx + int(cfg["window_samples"])]
+            if capture.shape[0] < int(cfg["window_samples"]):
+                capture = np.pad(capture, ((0, int(cfg["window_samples"]) - capture.shape[0]), (0, 0)), mode="constant")
+            raw_label = str(payload.get("raw_prediction") or payload.get("prediction") or "")
+            raw_confidence = float(payload.get("raw_confidence") or payload.get("confidence") or 0.0)
+            label_for_score = str(payload.get("prediction") or raw_label)
+            confidence_for_score = float(payload.get("confidence") or 0.0)
+            quality = self._wideband_quality_factor(capture, candidate_sample_rate_hz)
+            score = (0.0 if label_for_score.casefold() == "noise" else confidence_for_score) * quality["factor"]
+            if best_result is None or score > best_result[0]:
+                best_result = (
+                    score,
+                    quality,
+                    float(candidate_target_freq_hz),
+                    float(candidate_sample_rate_hz),
+                    capture,
+                    int(start_idx),
+                    raw_label,
+                    float(raw_confidence),
+                    payload,
+                )
+        if best_result is None:
+            return
+        (
+            _score,
+            quality,
+            effective_target_freq_hz,
+            effective_sample_rate_hz,
+            capture,
+            start_idx,
+            raw_label,
+            raw_confidence,
+            payload,
+        ) = best_result
+        alignment = self._target_alignment_stats(capture, effective_sample_rate_hz)
+        stats = capture_stats(capture)
+        debug_capture = self._save_debug_capture(
+            capture,
+            label=str(raw_label),
+            confidence=float(raw_confidence),
+            target_freq_hz=float(effective_target_freq_hz),
+            cfg=cfg,
+        )
+        label = str(payload.get("prediction") or raw_label)
+        confidence = float(payload.get("confidence") or raw_confidence)
+        decision = str(payload.get("decision") or "")
+        top = list(payload.get("top") or [])
         if str(label).casefold() == "noise":
             with self._lock:
                 self._last_error = ""
                 self._status = "noise suppressed"
+                self._last_label = ""
+                self._last_confidence = 0.0
+            return
+        min_quality = float(cfg.get("min_quality_factor", 0.2) or 0.2)
+        if float(quality.get("factor", 1.0)) < min_quality:
+            with self._lock:
+                self._last_error = ""
+                self._status = f"low-quality RFML suppressed: {quality.get('reason', 'narrow capture')}"
                 self._last_label = ""
                 self._last_confidence = 0.0
             return
@@ -377,6 +439,11 @@ class NoisyDroneModelPlugin:
             "target_mhz": float(effective_target_freq_hz) / 1e6 if effective_target_freq_hz else 0.0,
             "configured_target_mhz": float(cfg["target_freq_hz"]) / 1e6 if cfg["target_freq_hz"] else 0.0,
             "auto_target": bool(effective_target_freq_hz != float(cfg["target_freq_hz"])),
+            "rf_offset_scan": len(candidates) > 1,
+            "rf_candidate_count": len(candidates),
+            "rf_quality_factor": float(quality.get("factor", 1.0)),
+            "rf_quality_reason": quality.get("reason", ""),
+            "debug_capture": debug_capture,
             "center_freq_hz": float(center_freq_hz),
             "sample_rate_hz": float(sample_rate_hz),
             "model_sample_rate_hz": float(effective_sample_rate_hz),
@@ -407,6 +474,38 @@ class NoisyDroneModelPlugin:
             if float(confidence) >= float(cfg["confidence_threshold"]):
                 self._events.append(event)
 
+    def _save_debug_capture(
+        self,
+        capture: np.ndarray,
+        *,
+        label: str,
+        confidence: float,
+        target_freq_hz: float,
+        cfg: dict[str, Any],
+    ) -> str:
+        directory = str(cfg.get("debug_capture_dir") or "").strip()
+        if not directory:
+            return ""
+        try:
+            path = Path(directory).expanduser()
+            path.mkdir(parents=True, exist_ok=True)
+            safe_label = "".join(ch for ch in str(label) if ch.isalnum() or ch in {"-", "_"}) or "unknown"
+            filename = f"rfml_latest_{safe_label}_{target_freq_hz / 1e6:.3f}MHz.npy"
+            target = path / filename
+            np.save(target, np.asarray(capture, dtype=np.float32))
+            meta = {
+                "label": label,
+                "confidence": float(confidence),
+                "target_freq_hz": float(target_freq_hz),
+                "target_mhz": float(target_freq_hz) / 1e6,
+                "saved_at": time.time(),
+                "shape": list(np.asarray(capture).shape),
+            }
+            (path / "rfml_latest.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+            return str(target)
+        except Exception:
+            return ""
+
     def _select_and_classify_window(
         self,
         iq: np.ndarray,
@@ -432,7 +531,7 @@ class NoisyDroneModelPlugin:
                 window_samples,
                 int(cfg.get("scan_stride_samples", 262144) or 262144),
             ):
-                candidate = iq[start : start + window_samples]
+                candidate = self._suppress_narrow_peak(iq[start : start + window_samples])
                 raw_label, raw_confidence, probs = classify_iq(
                     model,
                     candidate,
@@ -457,6 +556,7 @@ class NoisyDroneModelPlugin:
             window_samples=window_samples,
             smooth_samples=512,
         )
+        capture = self._suppress_narrow_peak(capture)
         raw_label, raw_confidence, probs = classify_iq(
             model,
             capture,
@@ -468,6 +568,77 @@ class NoisyDroneModelPlugin:
         )
         return capture, int(start_idx), raw_label, float(raw_confidence), probs
 
+    def _suppress_narrow_peak(self, samples: np.ndarray) -> np.ndarray:
+        complex_iq = self._complex_iq(samples)
+        if complex_iq.size < 2048:
+            return samples
+        power = np.square(np.abs(complex_iq)).astype(np.float64)
+        if not np.isfinite(power).all() or float(np.mean(power)) <= 0.0:
+            return samples
+
+        spectrum = np.fft.fftshift(np.fft.fft(complex_iq))
+        mag_db = 20.0 * np.log10(np.abs(spectrum).astype(np.float64) + 1e-12)
+        median_db = float(np.median(mag_db))
+        peak_idx = int(np.argmax(mag_db))
+        peak_over_median = float(mag_db[peak_idx] - median_db)
+        occupied = float(np.mean(mag_db > (median_db + 10.0)))
+        if peak_over_median < 24.0 or occupied > 0.08:
+            return samples
+
+        # Remove only the narrow carrier-like component. The drone waveform is
+        # broadband enough that a tiny spectral notch is less harmful than
+        # letting a center spike dominate the image classifier.
+        notch_bins = max(3, min(64, complex_iq.size // 4096))
+        start = max(0, peak_idx - notch_bins)
+        stop = min(spectrum.size, peak_idx + notch_bins + 1)
+        spectrum[start:stop] = 0.0
+        cleaned = np.fft.ifft(np.fft.ifftshift(spectrum)).astype(np.complex64)
+        if np.asarray(samples).ndim == 2:
+            return np.stack([cleaned.real, cleaned.imag], axis=-1).astype(np.float32)
+        return cleaned
+
+    def _wideband_quality_factor(self, capture: np.ndarray, sample_rate_hz: float) -> dict[str, Any]:
+        complex_iq = self._complex_iq(capture)
+        if complex_iq.size < 256:
+            return {"factor": 1.0, "reason": ""}
+        nfft = int(min(8192, 2 ** int(np.floor(np.log2(complex_iq.size)))))
+        nfft = max(256, nfft)
+        segment = complex_iq[-nfft:]
+        spectrum = np.fft.fftshift(np.fft.fft(segment * np.hanning(nfft).astype(np.float32), n=nfft))
+        power_db = 20.0 * np.log10(np.abs(spectrum).astype(np.float64) + 1e-12)
+        freqs = np.fft.fftshift(np.fft.fftfreq(nfft, d=1.0 / max(1.0, float(sample_rate_hz))))
+        peak_idx = int(np.argmax(power_db))
+        peak_db = float(power_db[peak_idx])
+        median_db = float(np.median(power_db))
+        peak_offset = float(freqs[peak_idx])
+        occupied = float(np.mean(power_db > (median_db + 10.0)))
+        factor = 1.0
+        reasons = []
+        if abs(peak_offset) > float(sample_rate_hz) * 0.42:
+            factor *= 0.05
+            reasons.append("edge peak")
+        if peak_db > median_db + 28.0 and occupied < 0.03:
+            factor *= 0.05
+            reasons.append("narrow peak")
+        return {
+            "factor": float(factor),
+            "reason": ", ".join(reasons),
+            "peak_offset_hz": peak_offset,
+            "occupied_fraction": occupied,
+            "peak_over_median_db": float(peak_db - median_db),
+        }
+
+    def _classification_score(self, probs: np.ndarray, labels: list[str], best_non_noise_prediction: Any) -> float:
+        if best_non_noise_prediction is not None:
+            label, confidence = best_non_noise_prediction(probs, labels)
+            return 0.0 if str(label).casefold() == "noise" else float(confidence)
+        ranking = np.argsort(probs)[::-1]
+        for idx in ranking:
+            label = labels[int(idx)] if int(idx) < len(labels) else ""
+            if str(label).casefold() != "noise":
+                return float(probs[int(idx)])
+        return 0.0
+
     def _effective_target_freq_hz(self, cfg: dict[str, Any], center_freq_hz: float, sample_rate_hz: float) -> float:
         configured = float(cfg.get("target_freq_hz", 0.0) or 0.0)
         if configured > 0.0 and self._passband_contains_target(center_freq_hz, sample_rate_hz, configured):
@@ -475,6 +646,34 @@ class NoisyDroneModelPlugin:
         if bool(cfg.get("auto_target")):
             return float(center_freq_hz)
         return configured
+
+    def _rf_target_candidates(self, cfg: dict[str, Any], center_freq_hz: float, sample_rate_hz: float) -> list[float]:
+        base = self._effective_target_freq_hz(cfg, center_freq_hz, sample_rate_hz)
+        input_rate = max(1.0, float(sample_rate_hz))
+        model_rate = max(1.0, float(cfg.get("sample_rate_hz", 20_000_000.0) or 20_000_000.0))
+        if not bool(cfg.get("scan_rf_offsets")) or input_rate <= model_rate * 1.05:
+            return [float(base)]
+        half_span = max(0.0, (input_rate - model_rate) / 2.0)
+        if half_span <= 0.0:
+            return [float(base)]
+        step = max(250_000.0, float(cfg.get("scan_rf_step_hz", 2_000_000.0) or 2_000_000.0))
+        offsets = np.arange(-half_span, half_span + step * 0.5, step, dtype=np.float64)
+        candidates = [float(center_freq_hz + offset) for offset in offsets]
+        if all(abs(candidate - base) > step * 0.25 for candidate in candidates):
+            candidates.append(float(base))
+        candidates = [
+            candidate
+            for candidate in candidates
+            if self._passband_contains_target(center_freq_hz, sample_rate_hz, candidate)
+        ]
+        return sorted(set(round(candidate, 3) for candidate in candidates)) or [float(base)]
+
+    @staticmethod
+    def _complex_iq(samples: np.ndarray) -> np.ndarray:
+        array = np.asarray(samples)
+        if array.ndim == 2 and array.shape[1] >= 2:
+            return (array[:, 0].astype(np.float32) + 1j * array[:, 1].astype(np.float32)).astype(np.complex64)
+        return np.asarray(samples, dtype=np.complex64).reshape(-1)
 
     @staticmethod
     def _should_suppress_rfuav_mismatch(rfuav: dict[str, Any]) -> bool:
@@ -493,13 +692,8 @@ class NoisyDroneModelPlugin:
             return f"suppressed {label} {status} nearest {float(nearest_mhz):.1f} MHz ({float(offset_mhz):.1f} away)"
         return f"suppressed {label} {status}"
 
-    @staticmethod
-    def _target_alignment_stats(samples: np.ndarray, sample_rate_hz: float) -> dict[str, float]:
-        array = np.asarray(samples)
-        if array.ndim == 2 and array.shape[1] >= 2:
-            complex_iq = (array[:, 0].astype(np.float32) + 1j * array[:, 1].astype(np.float32)).astype(np.complex64)
-        else:
-            complex_iq = np.asarray(samples, dtype=np.complex64).reshape(-1)
+    def _target_alignment_stats(self, samples: np.ndarray, sample_rate_hz: float) -> dict[str, float]:
+        complex_iq = self._complex_iq(samples)
         if complex_iq.size < 32:
             return {
                 "peak_offset_hz": 0.0,
@@ -737,12 +931,12 @@ class NoisyDroneModelPlugin:
         ratio = input_rate / model_rate
         rounded_ratio = int(round(ratio))
         if rounded_ratio >= 2 and abs(ratio - rounded_ratio) <= 0.05:
-            return self._boxcar_decimate(samples, rounded_ratio), input_rate / rounded_ratio
+            return self._fft_channel_decimate(samples, rounded_ratio), input_rate / rounded_ratio
 
         return self._resample_linear(samples, input_rate, model_rate), model_rate
 
     @staticmethod
-    def _boxcar_decimate(samples: np.ndarray, decimation: int) -> np.ndarray:
+    def _fft_channel_decimate(samples: np.ndarray, decimation: int) -> np.ndarray:
         decimation = max(1, int(decimation))
         if decimation <= 1:
             return samples.astype(np.complex64, copy=False)
@@ -750,10 +944,16 @@ class NoisyDroneModelPlugin:
         if usable < decimation:
             return samples.astype(np.complex64, copy=False)
         trimmed = samples[-usable:]
-        # The RFML model only needs a target-centered 20 MHz view. After mixing
-        # to baseband, a short boxcar keeps this path much cheaper than a full
-        # FFT channelizer and avoids starving the live UI.
-        return trimmed.reshape(-1, decimation).mean(axis=1).astype(np.complex64)
+        spectrum = np.fft.fftshift(np.fft.fft(trimmed))
+        out_len = max(1, usable // decimation)
+        center = usable // 2
+        half = out_len // 2
+        start = max(0, center - half)
+        stop = min(usable, start + out_len)
+        channel = spectrum[start:stop]
+        if channel.size < out_len:
+            channel = np.pad(channel, (0, out_len - channel.size), mode="constant")
+        return np.fft.ifft(np.fft.ifftshift(channel)).astype(np.complex64)
 
     @staticmethod
     def _resample_linear(samples: np.ndarray, input_rate: float, output_rate: float) -> np.ndarray:
@@ -795,6 +995,7 @@ class NoisyDroneModelPlugin:
             os.environ.setdefault("KERAS_BACKEND", "tensorflow")
             os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
         module = importlib.import_module("rf_signal_intelligence.live_noisy_drone_rf_classifier")
+        framing_module = importlib.import_module("rf_signal_intelligence.noisy_drone_framing")
 
         if use_tensorrt:
             if not engine_file.exists():
@@ -832,6 +1033,8 @@ class NoisyDroneModelPlugin:
             "capture_stats": getattr(module, "capture_stats"),
             "candidate_window_starts": getattr(module, "candidate_window_starts", None),
             "best_non_noise_prediction": getattr(module, "best_non_noise_prediction", None),
+            "NoisyDroneFrameClassifier": getattr(framing_module, "NoisyDroneFrameClassifier"),
+            "NoisyDroneFrameConfig": getattr(framing_module, "NoisyDroneFrameConfig"),
         }
         with self._lock:
             self._model = model
