@@ -1,0 +1,1103 @@
+{
+  "by_family": {
+    "DAUTEL": [
+      {
+        "center_frequency_hz": 5770000000.0,
+        "center_frequency_mhz": 5770.0,
+        "clip_count": 13,
+        "drones": [
+          {
+            "clip_count": 13,
+            "name": "DAUTEL EVO NANO"
+          }
+        ]
+      }
+    ],
+    "DEVENTION": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 6,
+        "drones": [
+          {
+            "clip_count": 6,
+            "name": "DEVENTION DEVO"
+          }
+        ]
+      }
+    ],
+    "DJI": [
+      {
+        "center_frequency_hz": 2450000000.0,
+        "center_frequency_mhz": 2450.0,
+        "clip_count": 14,
+        "drones": [
+          {
+            "clip_count": 14,
+            "name": "DJI MINI4 PRO"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 2470000000.0,
+        "center_frequency_mhz": 2470.0,
+        "clip_count": 9,
+        "drones": [
+          {
+            "clip_count": 9,
+            "name": "DJI MINI 3"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 5760000000.0,
+        "center_frequency_mhz": 5760.0,
+        "clip_count": 73,
+        "drones": [
+          {
+            "clip_count": 35,
+            "name": "DJI AVATA2"
+          },
+          {
+            "clip_count": 38,
+            "name": "DJI FPV COMBO"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 5765000000.0,
+        "center_frequency_mhz": 5765.0,
+        "clip_count": 9,
+        "drones": [
+          {
+            "clip_count": 9,
+            "name": "DJI AVATA2"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 5800000000.0,
+        "center_frequency_mhz": 5800.0,
+        "clip_count": 18,
+        "drones": [
+          {
+            "clip_count": 18,
+            "name": "DJI MAVIC 3 PRO"
+          }
+        ]
+      }
+    ],
+    "FLYSKY": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 39,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "FLY SKY EL18"
+          },
+          {
+            "clip_count": 6,
+            "name": "FLY SKY FS I6X"
+          },
+          {
+            "clip_count": 6,
+            "name": "FLYSKY NV I4"
+          },
+          {
+            "clip_count": 7,
+            "name": "FLYSKY X14"
+          },
+          {
+            "clip_count": 7,
+            "name": "FLYSKY X20R"
+          },
+          {
+            "clip_count": 6,
+            "name": "FLYSKY X9DP2019"
+          }
+        ]
+      }
+    ],
+    "FUTABA": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 29,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "FUTABA T10J"
+          },
+          {
+            "clip_count": 8,
+            "name": "FUTABA T14SG"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T16IZ"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T18SZ"
+          }
+        ]
+      }
+    ],
+    "HERELINKHX4": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 8,
+        "drones": [
+          {
+            "clip_count": 8,
+            "name": "Herelink Hx4"
+          }
+        ]
+      }
+    ],
+    "JRPROPO": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 14,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "JR PROPO XG14"
+          },
+          {
+            "clip_count": 7,
+            "name": "JR PROPO XG7"
+          }
+        ]
+      }
+    ],
+    "JUMPER": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 14,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "JUMPER T14"
+          },
+          {
+            "clip_count": 7,
+            "name": "JUMPER TProV2"
+          }
+        ]
+      }
+    ],
+    "RADIOLINK": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 22,
+        "drones": [
+          {
+            "clip_count": 14,
+            "name": "Radiolink AT10 II"
+          },
+          {
+            "clip_count": 8,
+            "name": "Radiolink AT9S Pro"
+          }
+        ]
+      }
+    ],
+    "RADIOMASTER": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 7,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "RadioMaster TX16S"
+          }
+        ]
+      }
+    ],
+    "SIYI": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 21,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "SIYI FT24"
+          },
+          {
+            "clip_count": 8,
+            "name": "SIYI MK15"
+          },
+          {
+            "clip_count": 6,
+            "name": "SIYI MK32"
+          }
+        ]
+      }
+    ],
+    "SKYDROID": [
+      {
+        "center_frequency_hz": 2470000000.0,
+        "center_frequency_mhz": 2470.0,
+        "clip_count": 17,
+        "drones": [
+          {
+            "clip_count": 8,
+            "name": "SKYDROID H12"
+          },
+          {
+            "clip_count": 9,
+            "name": "SKYDROID T10"
+          }
+        ]
+      }
+    ],
+    "WFLY": [
+      {
+        "center_frequency_hz": 2410000000.0,
+        "center_frequency_mhz": 2410.0,
+        "clip_count": 8,
+        "drones": [
+          {
+            "clip_count": 8,
+            "name": "WFLY WFT09SII"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 17,
+        "drones": [
+          {
+            "clip_count": 9,
+            "name": "WFLY ET10"
+          },
+          {
+            "clip_count": 8,
+            "name": "WFLY ET16S"
+          }
+        ]
+      }
+    ],
+    "YUNZHUO": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 12,
+        "drones": [
+          {
+            "clip_count": 4,
+            "name": "YUNZHUO H12"
+          },
+          {
+            "clip_count": 4,
+            "name": "YUNZHUO H16"
+          },
+          {
+            "clip_count": 4,
+            "name": "YUNZHUO H30"
+          }
+        ]
+      }
+    ]
+  },
+  "by_label": {
+    "DJI": [
+      {
+        "center_frequency_hz": 2450000000.0,
+        "center_frequency_mhz": 2450.0,
+        "clip_count": 14,
+        "drones": [
+          {
+            "clip_count": 14,
+            "name": "DJI MINI4 PRO"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 14,
+            "name": "DJI"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 2470000000.0,
+        "center_frequency_mhz": 2470.0,
+        "clip_count": 9,
+        "drones": [
+          {
+            "clip_count": 9,
+            "name": "DJI MINI 3"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 9,
+            "name": "DJI"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 5760000000.0,
+        "center_frequency_mhz": 5760.0,
+        "clip_count": 73,
+        "drones": [
+          {
+            "clip_count": 35,
+            "name": "DJI AVATA2"
+          },
+          {
+            "clip_count": 38,
+            "name": "DJI FPV COMBO"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 73,
+            "name": "DJI"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 5765000000.0,
+        "center_frequency_mhz": 5765.0,
+        "clip_count": 9,
+        "drones": [
+          {
+            "clip_count": 9,
+            "name": "DJI AVATA2"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 9,
+            "name": "DJI"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 5800000000.0,
+        "center_frequency_mhz": 5800.0,
+        "clip_count": 18,
+        "drones": [
+          {
+            "clip_count": 18,
+            "name": "DJI MAVIC 3 PRO"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 18,
+            "name": "DJI"
+          }
+        ]
+      }
+    ],
+    "Dautel": [
+      {
+        "center_frequency_hz": 5770000000.0,
+        "center_frequency_mhz": 5770.0,
+        "clip_count": 13,
+        "drones": [
+          {
+            "clip_count": 13,
+            "name": "DAUTEL EVO NANO"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 13,
+            "name": "DAUTEL"
+          }
+        ]
+      }
+    ],
+    "Devention": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 6,
+        "drones": [
+          {
+            "clip_count": 6,
+            "name": "DEVENTION DEVO"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 6,
+            "name": "DEVENTION"
+          }
+        ]
+      }
+    ],
+    "FlySky": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 39,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "FLY SKY EL18"
+          },
+          {
+            "clip_count": 6,
+            "name": "FLY SKY FS I6X"
+          },
+          {
+            "clip_count": 6,
+            "name": "FLYSKY NV I4"
+          },
+          {
+            "clip_count": 7,
+            "name": "FLYSKY X14"
+          },
+          {
+            "clip_count": 7,
+            "name": "FLYSKY X20R"
+          },
+          {
+            "clip_count": 6,
+            "name": "FLYSKY X9DP2019"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 39,
+            "name": "FLYSKY"
+          }
+        ]
+      }
+    ],
+    "Futaba": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 29,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "FUTABA T10J"
+          },
+          {
+            "clip_count": 8,
+            "name": "FUTABA T14SG"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T16IZ"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T18SZ"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 29,
+            "name": "FUTABA"
+          }
+        ]
+      }
+    ],
+    "FutabaT14": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 29,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "FUTABA T10J"
+          },
+          {
+            "clip_count": 8,
+            "name": "FUTABA T14SG"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T16IZ"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T18SZ"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 29,
+            "name": "FUTABA"
+          }
+        ]
+      }
+    ],
+    "FutabaT7": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 29,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "FUTABA T10J"
+          },
+          {
+            "clip_count": 8,
+            "name": "FUTABA T14SG"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T16IZ"
+          },
+          {
+            "clip_count": 7,
+            "name": "FUTABA T18SZ"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 29,
+            "name": "FUTABA"
+          }
+        ]
+      }
+    ],
+    "JRPropo": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 14,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "JR PROPO XG14"
+          },
+          {
+            "clip_count": 7,
+            "name": "JR PROPO XG7"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 14,
+            "name": "JRPROPO"
+          }
+        ]
+      }
+    ],
+    "Jumper": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 14,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "JUMPER T14"
+          },
+          {
+            "clip_count": 7,
+            "name": "JUMPER TProV2"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 14,
+            "name": "JUMPER"
+          }
+        ]
+      }
+    ],
+    "RadioMaster": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 7,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "RadioMaster TX16S"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 7,
+            "name": "RADIOMASTER"
+          }
+        ]
+      }
+    ],
+    "Radiolink": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 22,
+        "drones": [
+          {
+            "clip_count": 14,
+            "name": "Radiolink AT10 II"
+          },
+          {
+            "clip_count": 8,
+            "name": "Radiolink AT9S Pro"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 22,
+            "name": "RADIOLINK"
+          }
+        ]
+      }
+    ],
+    "Radiomaster": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 7,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "RadioMaster TX16S"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 7,
+            "name": "RADIOMASTER"
+          }
+        ]
+      }
+    ],
+    "SIYI": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 21,
+        "drones": [
+          {
+            "clip_count": 7,
+            "name": "SIYI FT24"
+          },
+          {
+            "clip_count": 8,
+            "name": "SIYI MK15"
+          },
+          {
+            "clip_count": 6,
+            "name": "SIYI MK32"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 21,
+            "name": "SIYI"
+          }
+        ]
+      }
+    ],
+    "Skydroid": [
+      {
+        "center_frequency_hz": 2470000000.0,
+        "center_frequency_mhz": 2470.0,
+        "clip_count": 17,
+        "drones": [
+          {
+            "clip_count": 8,
+            "name": "SKYDROID H12"
+          },
+          {
+            "clip_count": 9,
+            "name": "SKYDROID T10"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 17,
+            "name": "SKYDROID"
+          }
+        ]
+      }
+    ],
+    "WFLY": [
+      {
+        "center_frequency_hz": 2410000000.0,
+        "center_frequency_mhz": 2410.0,
+        "clip_count": 8,
+        "drones": [
+          {
+            "clip_count": 8,
+            "name": "WFLY WFT09SII"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 8,
+            "name": "WFLY"
+          }
+        ]
+      },
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 17,
+        "drones": [
+          {
+            "clip_count": 9,
+            "name": "WFLY ET10"
+          },
+          {
+            "clip_count": 8,
+            "name": "WFLY ET16S"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 17,
+            "name": "WFLY"
+          }
+        ]
+      }
+    ],
+    "Yunzhuo": [
+      {
+        "center_frequency_hz": 2440000000.0,
+        "center_frequency_mhz": 2440.0,
+        "clip_count": 12,
+        "drones": [
+          {
+            "clip_count": 4,
+            "name": "YUNZHUO H12"
+          },
+          {
+            "clip_count": 4,
+            "name": "YUNZHUO H16"
+          },
+          {
+            "clip_count": 4,
+            "name": "YUNZHUO H30"
+          }
+        ],
+        "families": [
+          {
+            "clip_count": 12,
+            "name": "YUNZHUO"
+          }
+        ]
+      }
+    ]
+  },
+  "centers": [
+    {
+      "center_frequency_hz": 2410000000.0,
+      "center_frequency_mhz": 2410.0,
+      "clip_count": 8,
+      "drones": [
+        {
+          "clip_count": 8,
+          "name": "WFLY WFT09SII"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 8,
+          "name": "WFLY"
+        }
+      ]
+    },
+    {
+      "center_frequency_hz": 2440000000.0,
+      "center_frequency_mhz": 2440.0,
+      "clip_count": 189,
+      "drones": [
+        {
+          "clip_count": 6,
+          "name": "DEVENTION DEVO"
+        },
+        {
+          "clip_count": 7,
+          "name": "FLY SKY EL18"
+        },
+        {
+          "clip_count": 6,
+          "name": "FLY SKY FS I6X"
+        },
+        {
+          "clip_count": 6,
+          "name": "FLYSKY NV I4"
+        },
+        {
+          "clip_count": 7,
+          "name": "FLYSKY X14"
+        },
+        {
+          "clip_count": 7,
+          "name": "FLYSKY X20R"
+        },
+        {
+          "clip_count": 6,
+          "name": "FLYSKY X9DP2019"
+        },
+        {
+          "clip_count": 7,
+          "name": "FUTABA T10J"
+        },
+        {
+          "clip_count": 8,
+          "name": "FUTABA T14SG"
+        },
+        {
+          "clip_count": 7,
+          "name": "FUTABA T16IZ"
+        },
+        {
+          "clip_count": 7,
+          "name": "FUTABA T18SZ"
+        },
+        {
+          "clip_count": 8,
+          "name": "Herelink Hx4"
+        },
+        {
+          "clip_count": 7,
+          "name": "JR PROPO XG14"
+        },
+        {
+          "clip_count": 7,
+          "name": "JR PROPO XG7"
+        },
+        {
+          "clip_count": 7,
+          "name": "JUMPER T14"
+        },
+        {
+          "clip_count": 7,
+          "name": "JUMPER TProV2"
+        },
+        {
+          "clip_count": 7,
+          "name": "RadioMaster TX16S"
+        },
+        {
+          "clip_count": 14,
+          "name": "Radiolink AT10 II"
+        },
+        {
+          "clip_count": 8,
+          "name": "Radiolink AT9S Pro"
+        },
+        {
+          "clip_count": 7,
+          "name": "SIYI FT24"
+        },
+        {
+          "clip_count": 8,
+          "name": "SIYI MK15"
+        },
+        {
+          "clip_count": 6,
+          "name": "SIYI MK32"
+        },
+        {
+          "clip_count": 9,
+          "name": "WFLY ET10"
+        },
+        {
+          "clip_count": 8,
+          "name": "WFLY ET16S"
+        },
+        {
+          "clip_count": 4,
+          "name": "YUNZHUO H12"
+        },
+        {
+          "clip_count": 4,
+          "name": "YUNZHUO H16"
+        },
+        {
+          "clip_count": 4,
+          "name": "YUNZHUO H30"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 6,
+          "name": "DEVENTION"
+        },
+        {
+          "clip_count": 39,
+          "name": "FLYSKY"
+        },
+        {
+          "clip_count": 29,
+          "name": "FUTABA"
+        },
+        {
+          "clip_count": 8,
+          "name": "HERELINKHX4"
+        },
+        {
+          "clip_count": 14,
+          "name": "JRPROPO"
+        },
+        {
+          "clip_count": 14,
+          "name": "JUMPER"
+        },
+        {
+          "clip_count": 22,
+          "name": "RADIOLINK"
+        },
+        {
+          "clip_count": 7,
+          "name": "RADIOMASTER"
+        },
+        {
+          "clip_count": 21,
+          "name": "SIYI"
+        },
+        {
+          "clip_count": 17,
+          "name": "WFLY"
+        },
+        {
+          "clip_count": 12,
+          "name": "YUNZHUO"
+        }
+      ]
+    },
+    {
+      "center_frequency_hz": 2450000000.0,
+      "center_frequency_mhz": 2450.0,
+      "clip_count": 14,
+      "drones": [
+        {
+          "clip_count": 14,
+          "name": "DJI MINI4 PRO"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 14,
+          "name": "DJI"
+        }
+      ]
+    },
+    {
+      "center_frequency_hz": 2470000000.0,
+      "center_frequency_mhz": 2470.0,
+      "clip_count": 26,
+      "drones": [
+        {
+          "clip_count": 9,
+          "name": "DJI MINI 3"
+        },
+        {
+          "clip_count": 8,
+          "name": "SKYDROID H12"
+        },
+        {
+          "clip_count": 9,
+          "name": "SKYDROID T10"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 9,
+          "name": "DJI"
+        },
+        {
+          "clip_count": 17,
+          "name": "SKYDROID"
+        }
+      ]
+    },
+    {
+      "center_frequency_hz": 5760000000.0,
+      "center_frequency_mhz": 5760.0,
+      "clip_count": 73,
+      "drones": [
+        {
+          "clip_count": 35,
+          "name": "DJI AVATA2"
+        },
+        {
+          "clip_count": 38,
+          "name": "DJI FPV COMBO"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 73,
+          "name": "DJI"
+        }
+      ]
+    },
+    {
+      "center_frequency_hz": 5765000000.0,
+      "center_frequency_mhz": 5765.0,
+      "clip_count": 9,
+      "drones": [
+        {
+          "clip_count": 9,
+          "name": "DJI AVATA2"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 9,
+          "name": "DJI"
+        }
+      ]
+    },
+    {
+      "center_frequency_hz": 5770000000.0,
+      "center_frequency_mhz": 5770.0,
+      "clip_count": 13,
+      "drones": [
+        {
+          "clip_count": 13,
+          "name": "DAUTEL EVO NANO"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 13,
+          "name": "DAUTEL"
+        }
+      ]
+    },
+    {
+      "center_frequency_hz": 5800000000.0,
+      "center_frequency_mhz": 5800.0,
+      "clip_count": 18,
+      "drones": [
+        {
+          "clip_count": 18,
+          "name": "DJI MAVIC 3 PRO"
+        }
+      ],
+      "families": [
+        {
+          "clip_count": 18,
+          "name": "DJI"
+        }
+      ]
+    }
+  ],
+  "default_tolerance_hz": 5000000.0,
+  "drone_count": 36,
+  "record_count": 350,
+  "schema": "sdr-shark-rfuav-centers-v1",
+  "source": "/home/jake/workspace/SDR/rf-signal-intelligence/rfuav_metadata/rfuav_centers.json"
+}

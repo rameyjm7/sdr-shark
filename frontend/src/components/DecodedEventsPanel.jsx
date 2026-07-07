@@ -215,6 +215,15 @@ const mergeWifiRows = (rows) => {
   });
 };
 
+const rfuavEvidenceRank = (event) => {
+  const status = String(event?.rfuav_frequency_status || event?.rfuav?.status || '');
+  if (status === 'class_and_frequency') return 4;
+  if (status === 'known_center_other_family') return 3;
+  if (status === 'classification_only') return 2;
+  if (status === 'metadata_no_label') return 1;
+  return 0;
+};
+
 const mergeRfModelRows = (rows) => {
   const groups = new Map();
   rows.filter((row) => isRfModelEvent(row) && !isNoiseRfModelEvent(row)).forEach((row, idx) => {
@@ -233,10 +242,26 @@ const mergeRfModelRows = (rows) => {
       (winner, row) => (Number(row?.confidence || 0) > Number(winner?.confidence || 0) ? row : winner),
       groupRows[0],
     );
+    const bestRfuav = groupRows.reduce(
+      (winner, row) => (
+        rfuavEvidenceRank(row) > rfuavEvidenceRank(winner) ||
+        (
+          rfuavEvidenceRank(row) === rfuavEvidenceRank(winner) &&
+          Number(row?.confidence || 0) > Number(winner?.confidence || 0)
+        )
+          ? row
+          : winner
+      ),
+      groupRows[0],
+    );
     const label = String(latest?.label || best?.label || latest?.identity || 'Unknown').trim();
     return {
       ...best,
       ...latest,
+      rfuav: bestRfuav?.rfuav ?? latest?.rfuav ?? best?.rfuav,
+      rfuav_frequency_status: bestRfuav?.rfuav_frequency_status ?? latest?.rfuav_frequency_status ?? best?.rfuav_frequency_status,
+      rfuav_frequency_match: bestRfuav?.rfuav_frequency_match ?? latest?.rfuav_frequency_match ?? best?.rfuav_frequency_match,
+      rfuav_label_match: bestRfuav?.rfuav_label_match ?? latest?.rfuav_label_match ?? best?.rfuav_label_match,
       protocol: 'rfml',
       kind: 'noisy_drone_classification',
       identity: label,
@@ -464,6 +489,27 @@ const eventFootprintLabel = (event) => {
   return '';
 };
 
+const rfuavStatusLabel = (event) => {
+  const status = String(event?.rfuav_frequency_status || event?.rfuav?.status || '');
+  if (status === 'class_and_frequency') return 'RFUAV CF OK';
+  if (status === 'classification_only') return 'RFUAV class only';
+  if (status === 'known_center_other_family') return 'RFUAV other CF';
+  if (status === 'metadata_no_label') return 'RFUAV no family';
+  if (status === 'metadata_unavailable') return 'RFUAV unavailable';
+  return '';
+};
+
+const rfuavNearestLabel = (event) => {
+  const rfuav = event?.rfuav || {};
+  const nearest = rfuav.nearest_label_center || rfuav.nearest_known_center || null;
+  if (!nearest?.center_frequency_mhz) return '';
+  const offset = Number(nearest.offset_mhz);
+  if (Number.isFinite(offset) && offset > 0.05) {
+    return `RFUAV ${Number(nearest.center_frequency_mhz).toFixed(1)} MHz (${offset.toFixed(1)} away)`;
+  }
+  return `RFUAV ${Number(nearest.center_frequency_mhz).toFixed(1)} MHz`;
+};
+
 const eventDetail = (event) => {
   if (isFmEvent(event)) {
     const excess = Number(event?.excess_db);
@@ -508,12 +554,15 @@ const eventDetail = (event) => {
     return parts.length ? parts.join(' · ') : 'Decoded sub-GHz device packet from rtl_433.';
   }
   if (isRfModelEvent(event)) {
+    if (event?.detail) return event.detail;
     const confidence = Number(event?.confidence);
     const parts = [];
       if (event?.label) parts.push(`prediction ${event.label}`);
     if (Number.isFinite(confidence)) parts.push(`${(confidence * 100).toFixed(1)}% confidence`);
     if (event?.target_mhz) parts.push(`${Number(event.target_mhz).toFixed(3)} MHz target`);
     if (event?.power_db !== undefined) parts.push(`${Number(event.power_db).toFixed(1)} dB capture power`);
+    const rfuav = rfuavStatusLabel(event);
+    if (rfuav) parts.push(rfuav);
     return parts.length ? parts.join(' · ') : 'NoisyDroneRF model classification from the live IQ stream.';
   }
   if (event?.device_type_detail) return event.device_type_detail;
@@ -910,6 +959,14 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           {isRfModel ? <Chip size="small" label="NoisyDroneRF" /> : null}
           {isRfModel && event?.label ? <Chip size="small" color="success" label={String(event.label)} /> : null}
           {isRfModel && event?.raw_label && event.raw_label !== event.label && String(event.raw_label).toLowerCase() !== 'noise' ? <Chip size="small" label={`raw ${event.raw_label}`} /> : null}
+          {isRfModel && rfuavStatusLabel(event) ? (
+            <Chip
+              size="small"
+              color={event?.rfuav_frequency_match ? 'success' : (event?.rfuav_label_match ? 'warning' : 'default')}
+              label={rfuavStatusLabel(event)}
+            />
+          ) : null}
+          {isRfModel && rfuavNearestLabel(event) ? <Chip size="small" label={rfuavNearestLabel(event)} /> : null}
           {isRfModel && event?.target_mhz ? <Chip size="small" label={`${Number(event.target_mhz).toFixed(3)} MHz`} /> : null}
           {isRfModel && event?.power_db !== undefined ? <Chip size="small" label={`${Number(event.power_db).toFixed(1)} dB`} /> : null}
           {isRfModel && Array.isArray(event?.top) ? event.top.filter((row) => String(row?.label || '').toLowerCase() !== 'noise').slice(0, 3).map((row) => (

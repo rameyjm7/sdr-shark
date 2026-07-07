@@ -8,6 +8,8 @@ setup(
     author_email="rameyjm7@gmail.com",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
+    include_package_data=True,
+    package_data={"sdr_plot_backend": ["data/*.json"]},
     install_requires=[
         "flask",
         "numpy",
