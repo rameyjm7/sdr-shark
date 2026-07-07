@@ -91,13 +91,25 @@ class NoisyDroneModelPlugin:
             not in {"0", "false", "no", "off"},
             "scan_windows": os.getenv("SDR_SHARK_RF_MODEL_SCAN_WINDOWS", "1").strip().lower()
             not in {"0", "false", "no", "off"},
-            "scan_rf_offsets": os.getenv("SDR_SHARK_RF_MODEL_SCAN_RF_OFFSETS", "1").strip().lower()
+            "scan_rf_offsets": os.getenv("SDR_SHARK_RF_MODEL_SCAN_RF_OFFSETS", "0").strip().lower()
             not in {"0", "false", "no", "off"},
             "scan_rf_step_hz": max(
                 250_000.0, float(os.getenv("SDR_SHARK_RF_MODEL_SCAN_RF_STEP_HZ", "2000000") or "2000000")
             ),
             "scan_capture_multiplier": max(
                 1.0, float(os.getenv("SDR_SHARK_RF_MODEL_SCAN_CAPTURE_MULTIPLIER", "1") or "1")
+            ),
+            "allow_wideband_classification": os.getenv("SDR_SHARK_RF_MODEL_ALLOW_WIDEBAND", "0").strip().lower()
+            in {"1", "true", "yes", "on"},
+            "use_gateway_iq": os.getenv("SDR_SHARK_RF_MODEL_USE_GATEWAY_IQ", "0").strip().lower()
+            in {"1", "true", "yes", "on"},
+            "gateway_url": os.getenv("SDR_SHARK_RF_MODEL_GATEWAY_URL", "http://127.0.0.1:8080").strip(),
+            "gateway_device_id": os.getenv("SDR_SHARK_RF_MODEL_GATEWAY_DEVICE_ID", "bladerf:0").strip(),
+            "gateway_iq_format": os.getenv("SDR_SHARK_RF_MODEL_GATEWAY_IQ_FORMAT", "i8").strip().lower() or "i8",
+            "gateway_lna_gain": int(os.getenv("SDR_SHARK_RF_MODEL_GATEWAY_LNA_GAIN", "24") or "24"),
+            "gateway_vga_gain": int(os.getenv("SDR_SHARK_RF_MODEL_GATEWAY_VGA_GAIN", "20") or "20"),
+            "gateway_capture_multiplier": max(
+                1.0, float(os.getenv("SDR_SHARK_RF_MODEL_GATEWAY_CAPTURE_MULTIPLIER", "4") or "4")
             ),
             "scan_stride_samples": max(
                 1, int(os.getenv("SDR_SHARK_RF_MODEL_SCAN_STRIDE_SAMPLES", "262144") or "262144")
@@ -187,6 +199,9 @@ class NoisyDroneModelPlugin:
         if not target_in_passband:
             self._set_status("classifying tuned center")
         elif sample_rate_hz > (float(cfg["sample_rate_hz"]) * 1.05):
+            if not bool(cfg.get("allow_wideband_classification")):
+                self._set_status("waiting for native 20 MHz RFML IQ")
+                return
             self._set_status("channelizing wide IQ")
         else:
             self._set_status("collecting IQ")
@@ -250,10 +265,18 @@ class NoisyDroneModelPlugin:
         try:
             cfg = dict(self._configured)
             events = list(self._events)[-max(1, int(max_events)):]
+            latest_debug = self._latest_debug_event(cfg)
+            if latest_debug is not None:
+                latest_seen = float(latest_debug.get("seen_at", 0.0) or 0.0)
+                newest_event_seen = max(
+                    [float(event.get("seen_at", 0.0) or 0.0) for event in events] or [0.0]
+                )
+                if latest_seen > newest_event_seen:
+                    events.append(latest_debug)
             model_loaded = self._model is not None
             last_error = self._last_error
-            last_label = self._last_label
-            last_confidence = self._last_confidence
+            last_label = self._last_label or str((latest_debug or {}).get("label") or "")
+            last_confidence = self._last_confidence or float((latest_debug or {}).get("confidence") or 0.0)
             last_inference = self._last_inference
         finally:
             self._lock.release()
@@ -272,6 +295,8 @@ class NoisyDroneModelPlugin:
             "target_mhz": float(cfg["target_freq_hz"]) / 1e6 if cfg["target_freq_hz"] else 0.0,
             "sample_rate_hz": float(cfg["sample_rate_hz"]),
             "bandwidth_mhz": float(cfg["sample_rate_hz"]) / 1e6 if cfg["sample_rate_hz"] else 0.0,
+            "iq_source": "gateway" if bool(cfg.get("use_gateway_iq")) else "main",
+            "confidence_threshold": float(cfg.get("confidence_threshold", 0.0) or 0.0),
             "event_count": len(events),
             "status": self._status,
             "pending_samples": int(self._pending_samples),
@@ -280,6 +305,54 @@ class NoisyDroneModelPlugin:
             "last_label": last_label,
             "last_confidence": last_confidence,
             "events": events,
+        }
+
+    def _latest_debug_event(self, cfg: dict[str, Any]) -> dict[str, Any] | None:
+        directory = str(cfg.get("debug_capture_dir") or "").strip()
+        if not directory:
+            return None
+        meta_path = Path(directory).expanduser() / "rfml_latest.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        label = str(meta.get("label") or "").strip()
+        if not label or label.casefold() == "noise":
+            return None
+        seen_at = float(meta.get("saved_at") or 0.0)
+        if seen_at <= 0.0 or time.time() - seen_at > 180.0:
+            return None
+        confidence = float(meta.get("confidence") or 0.0)
+        target_hz = float(meta.get("target_freq_hz") or 0.0)
+        safe_label = "".join(ch for ch in label if ch.isalnum() or ch in {"-", "_"}) or "unknown"
+        debug_capture = str(
+            Path(directory).expanduser() / f"rfml_latest_{safe_label}_{target_hz / 1e6:.3f}MHz.npy"
+        )
+        return {
+            "protocol": "rfml",
+            "kind": "noisy_drone_classification",
+            "identity": label,
+            "label": label,
+            "raw_label": label,
+            "confidence": confidence,
+            "raw_confidence": confidence,
+            "target_mhz": float(meta.get("target_mhz") or (target_hz / 1e6 if target_hz else 0.0)),
+            "configured_target_mhz": float(cfg.get("target_freq_hz", 0.0) or 0.0) / 1e6,
+            "auto_target": True,
+            "rf_offset_scan": False,
+            "rf_candidate_count": 1,
+            "rf_quality_factor": 1.0,
+            "rf_quality_reason": "latest debug classification",
+            "debug_capture": debug_capture,
+            "center_freq_hz": target_hz,
+            "sample_rate_hz": float(cfg.get("sample_rate_hz", 0.0) or 0.0),
+            "model_sample_rate_hz": float(cfg.get("sample_rate_hz", 0.0) or 0.0),
+            "power_db": -120.0,
+            "peak": 0.0,
+            "top": [{"label": label, "confidence": confidence}],
+            "decision": "latest_debug_fallback",
+            "seen_at": seen_at,
+            "detail": f"NoisyDroneRF predicted {label} at {confidence * 100:.1f}% confidence",
         }
 
     def _run(self) -> None:
@@ -348,6 +421,19 @@ class NoisyDroneModelPlugin:
         labels = list(helpers["LABEL_NAMES"])
 
         model_sample_rate_hz = float(cfg["sample_rate_hz"])
+        if bool(cfg.get("use_gateway_iq")):
+            gateway_target_hz = self._effective_target_freq_hz(cfg, center_freq_hz, sample_rate_hz)
+            gateway_iq = self._capture_gateway_iq(
+                cfg,
+                target_freq_hz=float(gateway_target_hz),
+                sample_rate_hz=model_sample_rate_hz,
+                helpers=helpers,
+            )
+            if gateway_iq is not None:
+                raw = gateway_iq
+                center_freq_hz = float(gateway_target_hz)
+                sample_rate_hz = model_sample_rate_hz
+                self._set_status("classifying gateway RFML IQ")
         candidates = self._rf_target_candidates(cfg, center_freq_hz, sample_rate_hz)
         frame_config = frame_config_cls(
             window_samples=int(cfg["window_samples"]),
@@ -356,7 +442,7 @@ class NoisyDroneModelPlugin:
             time_bins=int(cfg["time_bins"]),
             scan_windows=bool(cfg.get("scan_windows")),
             scan_stride_samples=int(cfg.get("scan_stride_samples", 262144) or 262144),
-            window_score_mode="non-noise",
+            window_score_mode="raw",
             decision_mode="hybrid",
             non_noise_threshold=float(cfg["non_noise_threshold"]),
             top_k=3,
@@ -492,8 +578,7 @@ class NoisyDroneModelPlugin:
             self._last_error = ""
             self._last_label = label
             self._last_confidence = float(confidence)
-            if float(confidence) >= float(cfg["confidence_threshold"]):
-                self._events.append(event)
+            self._events.append(event)
 
     def _save_debug_capture(
         self,
@@ -659,6 +744,43 @@ class NoisyDroneModelPlugin:
             if str(label).casefold() != "noise":
                 return float(probs[int(idx)])
         return 0.0
+
+    def _capture_gateway_iq(
+        self,
+        cfg: dict[str, Any],
+        *,
+        target_freq_hz: float,
+        sample_rate_hz: float,
+        helpers: dict[str, Any],
+    ) -> np.ndarray | None:
+        gateway_config_cls = helpers.get("GatewayStreamConfig")
+        gateway_source_cls = helpers.get("GatewayIqSource")
+        if gateway_config_cls is None or gateway_source_cls is None:
+            self._set_status("gateway RFML helper unavailable")
+            return None
+        capture_samples = int(
+            max(4096, int(cfg.get("window_samples", 1_048_576) or 1_048_576))
+            * float(cfg.get("gateway_capture_multiplier", 4.0) or 4.0)
+        )
+        try:
+            stream_config = gateway_config_cls(
+                base_url=str(cfg.get("gateway_url") or "http://127.0.0.1:8080"),
+                device_id=str(cfg.get("gateway_device_id") or "bladerf:0"),
+                center_freq_hz=int(round(float(target_freq_hz))),
+                sample_rate_sps=int(round(float(sample_rate_hz))),
+                bandwidth_hz=int(round(float(sample_rate_hz))),
+                lna_gain_db=int(cfg.get("gateway_lna_gain", 24) or 24),
+                vga_gain_db=int(cfg.get("gateway_vga_gain", 20) or 20),
+                iq_format=str(cfg.get("gateway_iq_format") or "i8"),
+            )
+            with gateway_source_cls(stream_config) as source:
+                # Match the validated CLI path: drop one full capture so stale
+                # websocket backlog does not leak into RFML decisions.
+                source.read_iq_pairs(capture_samples)
+                return source.read_iq_pairs(capture_samples)
+        except Exception as exc:
+            self._set_status(f"gateway RFML unavailable: {exc}")
+            return None
 
     def _effective_target_freq_hz(self, cfg: dict[str, Any], center_freq_hz: float, sample_rate_hz: float) -> float:
         configured = float(cfg.get("target_freq_hz", 0.0) or 0.0)
@@ -1017,6 +1139,7 @@ class NoisyDroneModelPlugin:
             os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
         module = importlib.import_module("rf_signal_intelligence.live_noisy_drone_rf_classifier")
         framing_module = importlib.import_module("rf_signal_intelligence.noisy_drone_framing")
+        gateway_module = importlib.import_module("rf_signal_intelligence.gateway_iq")
 
         if use_tensorrt:
             if not engine_file.exists():
@@ -1056,6 +1179,8 @@ class NoisyDroneModelPlugin:
             "best_non_noise_prediction": getattr(module, "best_non_noise_prediction", None),
             "NoisyDroneFrameClassifier": getattr(framing_module, "NoisyDroneFrameClassifier"),
             "NoisyDroneFrameConfig": getattr(framing_module, "NoisyDroneFrameConfig"),
+            "GatewayIqSource": getattr(gateway_module, "GatewayIqSource"),
+            "GatewayStreamConfig": getattr(gateway_module, "GatewayStreamConfig"),
         }
         with self._lock:
             self._model = model
