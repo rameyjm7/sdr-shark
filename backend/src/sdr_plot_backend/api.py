@@ -14,6 +14,8 @@ from sdr_plot_backend.bluetooth_plugin import BluetoothGatewayPlugin
 from sdr_plot_backend.fm_plugin import FmBroadcastPlugin
 from sdr_plot_backend.gps_plugin import GpsdPlugin
 from sdr_plot_backend.iq_session import IQReplaySDR, IQSessionRecorder
+from sdr_plot_backend.rf_model_plugin import NoisyDroneModelPlugin
+from sdr_plot_backend.rtl433_plugin import Rtl433Plugin
 from sdr_plot_backend.signal_utils import perform_and_refine_scan, PeakDetector  # Import the new utility
 from sdr_plot_backend.utils import vars
 from sdr_plot_backend.wifi_plugin import WiFiGatewayPlugin
@@ -22,6 +24,7 @@ from sdr_plot_backend.zigbee_plugin import ZigbeeGatewayPlugin
 api_blueprint = Blueprint('api', __name__)
 
 sample_buffer = np.zeros(vars.sample_size, dtype=np.complex64)  # Increase buffer size to decrease RBW
+secondary_sample_buffer = np.zeros(vars.sample_size, dtype=np.complex64)
 data_buffer = deque(maxlen=vars.sdr_averagingCount())
 waterfall_buffer = deque(maxlen=2000)  # Buffer for waterfall data
 waterfall_buffer2 = deque(maxlen=2000)  # Buffer for waterfall data
@@ -29,6 +32,7 @@ waterfall_buffer2 = deque(maxlen=2000)  # Buffer for waterfall data
 data_lock = threading.Lock()
 fft_data = {
     'original_fft': [],
+    'secondary_fft': [],
     'original_fft2': [],
     'max' : [],
     'peaks': [],
@@ -41,6 +45,8 @@ main_fft_updated_at = 0.0
 scanner_fft_updated_at = 0.0
 main_frame_seq = 0
 scanner_frame_seq = 0
+scanner_center_hz = 0.0
+scanner_sample_rate_hz = 0.0
 analysis_peak_memory = {}
 analysis_memory_lock = threading.Lock()
 settings_update_lock = threading.Lock()
@@ -55,6 +61,7 @@ scanner_plan = {
     'dwell_until': 0.0,
     'started_at': 0.0,
     'last_step': None,
+    'receiver_states': {},
     'error': None,
 }
 bluetooth_plugin = BluetoothGatewayPlugin()
@@ -62,7 +69,9 @@ fm_plugin = FmBroadcastPlugin()
 wifi_plugin = WiFiGatewayPlugin()
 zigbee_plugin = ZigbeeGatewayPlugin()
 adsb_plugin = AdsbGatewayPlugin()
+rtl433_plugin = Rtl433Plugin()
 gps_plugin = GpsdPlugin()
+noisy_drone_plugin = NoisyDroneModelPlugin()
 iq_recorder = IQSessionRecorder()
 live_sdr = None
 replay_sdr = None
@@ -124,6 +133,13 @@ def _active_sdr_key():
 def _scanner_status():
     with scanner_plan_lock:
         step = dict(scanner_plan.get('last_step') or {})
+        receiver_states = {
+            key: {
+                **dict(value or {}),
+                'last_step': dict((value or {}).get('last_step') or {}),
+            }
+            for key, value in dict(scanner_plan.get('receiver_states') or {}).items()
+        }
         return {
             'active': bool(scanner_plan.get('active')),
             'index': int(scanner_plan.get('index') or 0),
@@ -131,9 +147,24 @@ def _scanner_status():
             'dwellUntil': float(scanner_plan.get('dwell_until') or 0.0),
             'startedAt': float(scanner_plan.get('started_at') or 0.0),
             'step': step,
+            'receiverStates': receiver_states,
             'config': dict(scanner_plan.get('config') or {}),
             'error': scanner_plan.get('error'),
+            'worker': vars.worker_sdr_info() if hasattr(vars, "worker_sdr_info") else {},
         }
+
+def _active_scan_step():
+    with scanner_plan_lock:
+        if not scanner_plan.get('active'):
+            return {}
+        return dict(scanner_plan.get('last_step') or {})
+
+def _active_scan_step_for_receiver(receiver):
+    with scanner_plan_lock:
+        if not scanner_plan.get('active'):
+            return {}
+        states = dict(scanner_plan.get('receiver_states') or {})
+        return dict((states.get(receiver) or {}).get('last_step') or {})
 
 def _sanitize_scan_step(raw):
     raw = raw or {}
@@ -153,6 +184,9 @@ def _sanitize_scan_step(raw):
     protocols = raw.get('protocols') or raw.get('protocol') or []
     if isinstance(protocols, str):
         protocols = [protocols]
+    receiver = str(raw.get('receiver') or '').strip().lower()
+    if not receiver:
+        receiver = 'worker' if max(sample_rate_mhz, bandwidth_mhz) <= (float(getattr(vars, "worker_sdr_max_bandwidth", 3e6)) / 1e6) else 'main'
     return {
         'label': label,
         'center_hz': center_mhz * 1e6,
@@ -160,9 +194,69 @@ def _sanitize_scan_step(raw):
         'bandwidth_hz': bandwidth_mhz * 1e6,
         'dwell_sec': max(0.5, min(3600.0, dwell_sec)),
         'protocols': [str(p).strip().lower() for p in protocols if str(p).strip()],
+        'receiver': receiver if receiver in {'main', 'worker'} else 'main',
     }
 
+def _can_worker_handle_step(step):
+    max_bw = float(getattr(vars, "worker_sdr_max_bandwidth", 3e6) or 3e6)
+    return (
+        str(step.get('receiver') or '').lower() == 'worker'
+        and float(step.get('sample_rate_hz') or 0.0) <= max_bw
+        and float(step.get('bandwidth_hz') or 0.0) <= max_bw
+    )
+
+def _apply_worker_scan_step(step):
+    worker = vars.ensure_worker_sdr() if hasattr(vars, "ensure_worker_sdr") else None
+    if worker is None:
+        raise RuntimeError(f"Worker SDR unavailable: {getattr(vars, 'worker_sdr_error', 'unknown error')}")
+    max_sr = float(getattr(worker, "max_sample_rate", getattr(vars, "worker_sdr_max_bandwidth", 3e6)) or 3e6)
+    max_worker_bw = float(getattr(vars, "worker_sdr_max_bandwidth", 3e6) or 3e6)
+    min_freq = float(getattr(worker, "min_frequency", 1e6) or 1e6)
+    max_freq = float(getattr(worker, "max_frequency", 1.8e9) or 1.8e9)
+    requested_frequency = float(step['center_hz'])
+    sample_rate = max(250_000.0, min(float(step['sample_rate_hz']), max_sr, max_worker_bw))
+    bandwidth = max(200_000.0, min(float(step['bandwidth_hz']), sample_rate, max_worker_bw))
+    frequency = max(min_freq, min(requested_frequency, max_freq))
+    if abs(frequency - requested_frequency) > max(1e6, bandwidth / 2):
+        raise ValueError(
+            f"Worker scan step '{step.get('label')}' requests {requested_frequency / 1e6:.1f} MHz, "
+            f"outside worker SDR range {min_freq / 1e6:.1f}-{max_freq / 1e6:.1f} MHz"
+        )
+    worker.configure_receiver(
+        frequency=frequency,
+        sample_rate=sample_rate,
+        bandwidth=bandwidth,
+        gain=float(vars.sdr_settings.get('rtlsdr_worker', vars.sdr_settings[_active_sdr_key()]).gain),
+    )
+    applied_step = dict(step)
+    applied_step.update({
+        'receiver': 'worker',
+        'applied_center_hz': frequency,
+        'applied_sample_rate_hz': sample_rate,
+        'applied_bandwidth_hz': bandwidth,
+        'worker_device_id': getattr(worker, "device_id", None),
+    })
+    vars.signal_stats['scanner_mode'] = f"{applied_step.get('label')} (worker)"
+    return applied_step
+
 def _apply_scan_step(step):
+    protocols = {str(protocol).strip().lower() for protocol in step.get('protocols') or [] if str(protocol).strip()}
+    if ({'rtl433', 'subghz'} & protocols) and str(step.get('receiver') or '').lower() == 'worker':
+        applied_step = dict(step)
+        applied_step.update({
+            'receiver': 'worker',
+            'applied_center_hz': float(step['center_hz']),
+            'applied_sample_rate_hz': float(step.get('sample_rate_hz') or 0.0),
+            'applied_bandwidth_hz': float(step.get('bandwidth_hz') or 0.0),
+            'worker_device_id': 'rtl_433',
+        })
+        vars.signal_stats['scanner_mode'] = f"{applied_step.get('label')} (rtl_433)"
+        return applied_step
+    if not ({'rtl433', 'subghz'} & protocols) and getattr(vars, "worker_sdr_suspended", False):
+        rtl433_plugin.stop()
+        vars.resume_worker_sdr()
+    if _can_worker_handle_step(step):
+        return _apply_worker_scan_step(step)
     sdr_key = _active_sdr_key()
     max_sr = float(getattr(vars.sdr0, "max_sample_rate", vars.sdr_sampleRate()) or vars.sdr_sampleRate())
     min_freq = float(getattr(vars.sdr0, "min_frequency", 1e6) or 1e6)
@@ -192,6 +286,7 @@ def _apply_scan_step(step):
         waterfall_buffer.clear()
     applied_step = dict(step)
     applied_step.update({
+        'receiver': 'main',
         'applied_center_hz': frequency,
         'applied_sample_rate_hz': sample_rate,
         'applied_bandwidth_hz': bandwidth,
@@ -208,23 +303,61 @@ def _advance_scanner_plan(force=False):
         if not steps:
             scanner_plan['active'] = False
             return
-        if not force and scanner_plan.get('last_step') is not None and now < float(scanner_plan.get('dwell_until') or 0.0):
+        states = dict(scanner_plan.get('receiver_states') or {})
+        receivers = sorted({str(step.get('receiver') or 'main').lower() for step in steps})
+        pending = []
+        for receiver in receivers:
+            receiver_steps = [
+                (index, dict(step))
+                for index, step in enumerate(steps)
+                if str(step.get('receiver') or 'main').lower() == receiver
+            ]
+            if not receiver_steps:
+                continue
+            state = dict(states.get(receiver) or {'index': -1, 'dwell_until': 0.0, 'last_step': None})
+            if not force and state.get('last_step') is not None and now < float(state.get('dwell_until') or 0.0):
+                continue
+            if not force and len(receiver_steps) == 1 and state.get('last_step') is not None:
+                state['dwell_until'] = now + float(receiver_steps[0][1].get('dwell_sec') or 5.0)
+                states[receiver] = state
+                continue
+            current_index = int(state.get('index') if state.get('index') is not None else -1)
+            positions = [idx for idx, _step in receiver_steps]
+            if current_index in positions:
+                current_position = positions.index(current_index)
+                next_pair = receiver_steps[(current_position + 1) % len(receiver_steps)]
+            else:
+                next_pair = receiver_steps[0]
+            pending.append((receiver, next_pair[0], next_pair[1]))
+        if not pending:
+            scanner_plan['receiver_states'] = states
             return
-        current_index = scanner_plan.get('index')
-        if current_index is None:
-            current_index = -1
-        next_index = (int(current_index) + 1) % len(steps)
-        step = dict(steps[next_index])
 
     if not settings_update_lock.acquire(timeout=0.05):
         return
     try:
-        applied_step = _apply_scan_step(step)
+        applied_steps = []
+        errors = []
+        for receiver, next_index, step in pending:
+            try:
+                applied_step = _apply_scan_step(step)
+                applied_steps.append((receiver, next_index, step, applied_step))
+            except Exception as exc:
+                errors.append(f"{receiver}: {exc}")
         with scanner_plan_lock:
-            scanner_plan['index'] = next_index
-            scanner_plan['last_step'] = applied_step
-            scanner_plan['dwell_until'] = time.time() + float(step.get('dwell_sec') or 5.0)
-            scanner_plan['error'] = None
+            states = dict(scanner_plan.get('receiver_states') or {})
+            for receiver, next_index, step, applied_step in applied_steps:
+                dwell_until = time.time() + float(step.get('dwell_sec') or 5.0)
+                states[receiver] = {
+                    'index': next_index,
+                    'dwell_until': dwell_until,
+                    'last_step': applied_step,
+                }
+                scanner_plan['index'] = next_index
+                scanner_plan['last_step'] = applied_step
+                scanner_plan['dwell_until'] = dwell_until
+            scanner_plan['receiver_states'] = states
+            scanner_plan['error'] = '; '.join(errors) if errors else None
     except Exception as exc:
         with scanner_plan_lock:
             scanner_plan['error'] = str(exc)
@@ -262,7 +395,73 @@ def _stop_protocol_plugins():
     wifi_plugin.stop()
     zigbee_plugin.stop()
     adsb_plugin.stop()
-    fm_plugin.stop_playback()
+    rtl433_plugin.stop()
+    fm_plugin.stop()
+    noisy_drone_plugin.stop()
+
+def _active_decoder_protocols() -> set[str]:
+    all_protocols = {'btc', 'btle', 'bluetooth', 'wifi', 'zigbee', 'thread', 'adsb', 'fm', 'rtl433', 'subghz'}
+    if bool(getattr(vars, 'decoders_always_enabled', False)):
+        return all_protocols
+    with scanner_plan_lock:
+        scanner_active = bool(scanner_plan.get('active'))
+        states = dict(scanner_plan.get('receiver_states') or {})
+        step = dict(scanner_plan.get('last_step') or {})
+    if not scanner_active:
+        return set()
+    protocol_rows = []
+    if states:
+        protocol_rows = [
+            dict((state or {}).get('last_step') or {})
+            for state in states.values()
+            if (state or {}).get('last_step')
+        ]
+    if not protocol_rows:
+        protocol_rows = [step]
+    protocols = {
+        str(protocol).strip().lower()
+        for row in protocol_rows
+        for protocol in row.get('protocols') or []
+        if str(protocol).strip()
+    }
+    if 'thread' in protocols:
+        protocols.add('zigbee')
+    return protocols
+
+def _receiver_protocols(receiver) -> set[str]:
+    all_protocols = {'btc', 'btle', 'bluetooth', 'wifi', 'zigbee', 'thread', 'adsb', 'fm', 'rtl433', 'subghz'}
+    if bool(getattr(vars, 'decoders_always_enabled', False)) and receiver == 'main':
+        return all_protocols
+    step = _active_scan_step_for_receiver(receiver)
+    protocols = {str(protocol).strip().lower() for protocol in step.get('protocols') or [] if str(protocol).strip()}
+    if 'thread' in protocols:
+        protocols.add('zigbee')
+    return protocols
+
+def _decoder_enabled(protocols: set[str], *names: str) -> bool:
+    return any(str(name).lower() in protocols for name in names)
+
+def _decoder_sdr_for_receiver(receiver):
+    if receiver == 'worker':
+        worker = vars.ensure_worker_sdr() if hasattr(vars, "ensure_worker_sdr") else None
+        return worker
+    return vars.sdr0
+
+def _decoder_context_for(*names):
+    for receiver in ('main', 'worker'):
+        protocols = _receiver_protocols(receiver)
+        if _decoder_enabled(protocols, *names):
+            sdr = _decoder_sdr_for_receiver(receiver)
+            if sdr is not None:
+                return protocols, sdr, _active_scan_step_for_receiver(receiver), receiver
+    return set(), None, {}, ''
+
+def _decoder_step_for(*names):
+    for receiver in ('main', 'worker'):
+        protocols = _receiver_protocols(receiver)
+        if _decoder_enabled(protocols, *names):
+            return protocols, _active_scan_step_for_receiver(receiver), receiver
+    return set(), {}, ''
 
 
 def downsample(data, target_length=256):
@@ -287,10 +486,17 @@ def downsample(data, target_length=256):
     return downsampled
 
 def capture_samples():
-    global sample_buffer
+    global sample_buffer, secondary_sample_buffer
     while vars.sdr0 is None:
         time.sleep(0.1)
     sample_buffer = vars.sdr0.get_latest_samples()
+    secondary_samples = None
+    if hasattr(vars.sdr0, "get_latest_samples_secondary"):
+        secondary_samples = vars.sdr0.get_latest_samples_secondary()
+    if secondary_samples is None:
+        secondary_sample_buffer = np.zeros(vars.sample_size, dtype=np.complex64)
+    else:
+        secondary_sample_buffer = secondary_samples
 
 def process_fft(samples):
     fft_result = np.fft.fftshift(np.fft.fft(samples))
@@ -319,25 +525,89 @@ def generate_fft_data():
 
             # Capture and process FFT samples
             capture_samples()
-            bluetooth_plugin.update(vars.sdr0)
-            wifi_plugin.update(vars.sdr0)
-            zigbee_plugin.update(vars.sdr0)
-            adsb_plugin.update(vars.sdr0)
-            current_fft = process_fft(sample_buffer)
-            fm_plugin.update_from_iq_and_fft(
-                sample_buffer,
-                current_fft,
-                center_freq_hz=vars.sdr_frequency(),
-                sample_rate_hz=vars.sdr_sampleRate(),
+            noisy_drone_plugin.configure(
+                enabled=bool(getattr(vars, 'rf_model_classifier_enabled', False)),
+                repo_path=getattr(vars, 'rf_model_classifier_repo_path', None),
+                model_path=getattr(vars, 'rf_model_classifier_model_path', None),
+                backend=getattr(vars, 'rf_model_classifier_backend', None),
+                engine_path=getattr(vars, 'rf_model_classifier_engine_path', None),
+                target_freq_hz=float(getattr(vars, 'rf_model_classifier_target_mhz', 2399.0) or 0.0) * 1e6,
+                sample_rate_hz=float(getattr(vars, 'rf_model_classifier_bandwidth_mhz', 20.0) or 20.0) * 1e6,
+                interval_sec=float(getattr(vars, 'rf_model_classifier_interval_sec', 1.0) or 1.0),
+                confidence_threshold=float(getattr(vars, 'rf_model_classifier_threshold', 0.45) or 0.45),
             )
+            noisy_drone_plugin.submit_iq(
+                sample_buffer,
+                center_freq_hz=float(vars.sdr_frequency()),
+                sample_rate_hz=float(vars.sdr_sampleRate()),
+            )
+            bluetooth_protocols, bluetooth_sdr, _bluetooth_step, _bluetooth_receiver = _decoder_context_for('btc', 'btle', 'bluetooth')
+            if bluetooth_sdr is not None and _decoder_enabled(bluetooth_protocols, 'btc', 'btle', 'bluetooth'):
+                bluetooth_plugin.update(bluetooth_sdr)
+            else:
+                bluetooth_plugin.stop()
+            wifi_protocols, wifi_sdr, _wifi_step, _wifi_receiver = _decoder_context_for('wifi')
+            if wifi_sdr is not None and _decoder_enabled(wifi_protocols, 'wifi'):
+                wifi_plugin.update(wifi_sdr)
+            else:
+                wifi_plugin.stop()
+            zigbee_protocols, zigbee_sdr, _zigbee_step, _zigbee_receiver = _decoder_context_for('zigbee', 'thread')
+            if zigbee_sdr is not None and _decoder_enabled(zigbee_protocols, 'zigbee', 'thread'):
+                zigbee_plugin.update(zigbee_sdr)
+            else:
+                zigbee_plugin.stop()
+            adsb_protocols, adsb_sdr, _adsb_step, _adsb_receiver = _decoder_context_for('adsb')
+            if adsb_sdr is not None and _decoder_enabled(adsb_protocols, 'adsb'):
+                adsb_plugin.update(adsb_sdr)
+            else:
+                adsb_plugin.stop()
+            rtl433_protocols, rtl433_step, _rtl433_receiver = _decoder_step_for('rtl433', 'subghz')
+            if _decoder_enabled(rtl433_protocols, 'rtl433', 'subghz') and rtl433_step:
+                rtl433_plugin.update(rtl433_step, vars)
+            else:
+                rtl433_plugin.stop()
+                if getattr(vars, "worker_sdr_suspended", False):
+                    vars.resume_worker_sdr()
+            current_fft = process_fft(sample_buffer)
+            secondary_fft = []
+            mimo_info = vars.sdr0.mimo_info() if hasattr(vars.sdr0, "mimo_info") else {}
+            if bool(mimo_info.get("enabled")) and secondary_sample_buffer.size:
+                secondary_fft = process_fft(secondary_sample_buffer)
+            fm_protocols, fm_sdr, _fm_step, _fm_receiver = _decoder_context_for('fm')
+            if fm_sdr is not None and _decoder_enabled(fm_protocols, 'fm'):
+                fm_samples = sample_buffer
+                fm_fft = current_fft
+                fm_center_hz = vars.sdr_frequency()
+                fm_sample_rate_hz = vars.sdr_sampleRate()
+                if fm_sdr is not vars.sdr0:
+                    try:
+                        fm_samples = fm_sdr.get_latest_samples()
+                        fm_fft = process_fft(fm_samples)
+                        fm_center_hz = float(getattr(fm_sdr, "frequency", fm_center_hz) or fm_center_hz)
+                        fm_sample_rate_hz = float(getattr(fm_sdr, "sample_rate", fm_sample_rate_hz) or fm_sample_rate_hz)
+                    except Exception:
+                        fm_samples = sample_buffer
+                        fm_fft = current_fft
+                fm_plugin.update_from_iq_and_fft(
+                    fm_samples,
+                    fm_fft,
+                    center_freq_hz=fm_center_hz,
+                    sample_rate_hz=fm_sample_rate_hz,
+                )
+            else:
+                fm_plugin.stop()
 
             # Suppress DC spike if enabled
             if vars.dc_suppress:
                 dc_index = len(current_fft) // 2
                 current_fft[dc_index] = current_fft[dc_index + 1]
+                if isinstance(secondary_fft, np.ndarray) and len(secondary_fft) > dc_index + 1:
+                    secondary_fft[dc_index] = secondary_fft[dc_index + 1]
 
             # Normalize invalid (inf) values
             current_fft = np.where(np.isinf(current_fft), -20, current_fft)
+            if isinstance(secondary_fft, np.ndarray):
+                secondary_fft = np.where(np.isinf(secondary_fft), -20, secondary_fft)
 
             # Update maximum FFT trace
             fft_max = current_fft if fft_max is None else np.maximum(fft_max, current_fft)
@@ -384,6 +654,7 @@ def generate_fft_data():
                     # Update shared data
                 with data_lock:
                     fft_data['original_fft'] = downsampled_fft_avg.tolist()
+                    fft_data['secondary_fft'] = secondary_fft.tolist() if isinstance(secondary_fft, np.ndarray) else []
                     waterfall_buffer.append(downsampled_fft.tolist())
                     main_fft_updated_at = time.time()
                     main_frame_seq += 1
@@ -421,6 +692,7 @@ def generate_fft_data():
                 bin_count = _safe_int(vars.waterfall_bin_count, default=2048, min_value=64, max_value=max(64, vars.sample_size))
                 with data_lock:
                     fft_data['original_fft'] = full_fft.tolist()
+                    fft_data['secondary_fft'] = secondary_fft.tolist() if isinstance(secondary_fft, np.ndarray) else []
                     fft_data['max'] = fft_max.tolist()
                     fft_data['persist'] = fft_persist_data.tolist()
                     waterfall_buffer.append(
@@ -440,7 +712,7 @@ def generate_fft_data():
             time.sleep(0.05)
 
 def radio_scanner():
-    global scanner_fft_updated_at, scanner_frame_seq, scanner_failure_count
+    global scanner_fft_updated_at, scanner_frame_seq, scanner_failure_count, scanner_center_hz, scanner_sample_rate_hz
     nfft = 8*1024
     detector = None
     detector_sdr = None
@@ -451,15 +723,18 @@ def radio_scanner():
 
         # Get processed scanner data outside shared lock to avoid starving FFT producer updates.
         try:
-            if vars.sdr0 is None:
+            scanner_sdr = vars.ensure_worker_sdr() if hasattr(vars, "ensure_worker_sdr") else None
+            if scanner_sdr is None:
+                scanner_sdr = vars.sdr0
+            if scanner_sdr is None:
                 raise RuntimeError("SDR not ready")
 
-            if detector is None or detector_sdr is not vars.sdr0:
+            if detector is None or detector_sdr is not scanner_sdr:
                 if detector is not None:
                     detector.stop_receiving_data()
-                detector = PeakDetector(sdr=vars.sdr0, averaging_count=vars.sdr_averagingCount(), nfft=nfft)
+                detector = PeakDetector(sdr=scanner_sdr, averaging_count=vars.sdr_averagingCount(), nfft=nfft)
                 detector.start_receiving_data()
-                detector_sdr = vars.sdr0
+                detector_sdr = scanner_sdr
 
             processed_data = detector.get_processed_data()
             if processed_data:
@@ -472,6 +747,8 @@ def radio_scanner():
                         waterfall_buffer2.append(
                             downsample(np.array(fft_magnitude), bin_count).tolist()
                         )
+                    scanner_center_hz = float(getattr(scanner_sdr, "frequency", 0.0) or 0.0)
+                    scanner_sample_rate_hz = float(getattr(scanner_sdr, "sample_rate", 0.0) or 0.0)
                     scanner_fft_updated_at = time.time()
                     scanner_frame_seq += 1
             # Clear stale scanner error once scanner loop succeeds.
@@ -527,14 +804,16 @@ def reset_fft_trace():
 
     return jsonify({'status': 'success', 'trace': trace})
 
-def _build_data_payload(source='main', waterfall_mode='history'):
+def _build_data_payload(source='main', waterfall_mode='history', include_secondary=False):
     source = str(source or 'main').lower()
     waterfall_mode = str(waterfall_mode or 'history').lower()
+    include_secondary = bool(include_secondary)
     with data_lock:
         max_waterfall_rows = _safe_int(vars.waterfall_samples, default=100, min_value=1, max_value=2000)
         # Keep live responses lightweight for lower-latency UI updates.
         max_payload_cells = 150000
         main_fft_snapshot = list(fft_data['original_fft'])
+        secondary_fft_snapshot = list(fft_data.get('secondary_fft') or []) if include_secondary else []
         scanner_fft_snapshot = list(fft_data['original_fft2'])
         waterfall_rows_requested = 0 if waterfall_mode in ('none', 'derive') else (1 if waterfall_mode == 'latest' else max_waterfall_rows)
         main_waterfall_snapshot = _tail_deque_rows(waterfall_buffer, waterfall_rows_requested)
@@ -543,12 +822,22 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         scanner_ts_snapshot = scanner_fft_updated_at
         main_seq_snapshot = main_frame_seq
         scanner_seq_snapshot = scanner_frame_seq
+        scanner_center_snapshot = scanner_center_hz
+        scanner_sample_rate_snapshot = scanner_sample_rate_hz
         
         peaks_snapshot = list(fft_data['peaks'])
 
     scanner_fresh = (time.time() - scanner_ts_snapshot) <= 3.0
     scanner_available = scanner_fresh and len(scanner_fft_snapshot) > 0
     main_available = len(main_fft_snapshot) > 0
+    secondary_source = 'mimo' if secondary_fft_snapshot else ''
+    secondary_center_snapshot = float(vars.sdr_frequency())
+    secondary_sample_rate_snapshot = float(vars.sdr_sampleRate())
+    if include_secondary and not secondary_fft_snapshot and scanner_available:
+        secondary_fft_snapshot = scanner_fft_snapshot
+        secondary_source = 'worker'
+        secondary_center_snapshot = float(scanner_center_snapshot or 0.0)
+        secondary_sample_rate_snapshot = float(scanner_sample_rate_snapshot or 0.0)
 
     if source == 'scanner':
         fft_snapshot = scanner_fft_snapshot if scanner_available else (main_fft_snapshot or scanner_fft_snapshot)
@@ -566,6 +855,7 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         waterfall_snapshot = main_waterfall_snapshot if main_waterfall_snapshot else (scanner_waterfall_snapshot or main_waterfall_snapshot)
 
     fft_response = [float(x) for x in fft_snapshot]
+    secondary_fft_response = [float(x) for x in secondary_fft_snapshot] if secondary_fft_snapshot else []
 
     if waterfall_snapshot:
         cols = len(waterfall_snapshot[0]) if waterfall_snapshot[0] is not None else 0
@@ -575,7 +865,10 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         waterfall_rows = []
     waterfall_response = [[float(y) for y in x] for x in waterfall_rows]
         
-    center_freq_mhz = float(vars.sdr_frequency() / 1e6)
+    if scanner_available and scanner_center_snapshot > 0:
+        center_freq_mhz = float(scanner_center_snapshot / 1e6)
+    else:
+        center_freq_mhz = float(vars.sdr_frequency() / 1e6)
     peaks_response = []
     for idx, peak in enumerate(peaks_snapshot):
         rel_center = _normalize_peak_mhz(peak.get('center_freq', 0.0))
@@ -622,6 +915,12 @@ def _build_data_payload(source='main', waterfall_mode='history'):
 
     response = {
         'fft': fft_response,
+        'secondaryFft': secondary_fft_response,
+        'secondaryMeta': {
+            'source': secondary_source,
+            'centerHz': secondary_center_snapshot,
+            'sampleRateHz': secondary_sample_rate_snapshot,
+        },
         'peaks': peaks_response,
         'waterfall': waterfall_response,
         'waterfallMode': waterfall_mode,
@@ -631,13 +930,20 @@ def _build_data_payload(source='main', waterfall_mode='history'):
         'mainFrameSeq': int(main_seq_snapshot),
         'scannerFrameSeq': int(scanner_seq_snapshot),
         'scannerFresh': bool(scanner_available),
+        'scannerCenterHz': float(scanner_center_snapshot or 0.0),
+        'scannerSampleRateHz': float(scanner_sample_rate_snapshot or 0.0),
         'fftError': fft_error,
         'scannerError': scanner_error,
+        'decodersAlwaysEnabled': bool(getattr(vars, 'decoders_always_enabled', False)),
+        'mimo': vars.sdr0.mimo_info() if hasattr(vars.sdr0, "mimo_info") else {'enabled': False, 'channels': [0]},
+        'workerSdr': vars.worker_sdr_info() if hasattr(vars, "worker_sdr_info") else {},
         'bluetooth': bluetooth_plugin.snapshot(max_events=20),
         'fm': fm_plugin.snapshot(max_events=20),
         'wifi': wifi_plugin.snapshot(max_events=20),
         'zigbee': zigbee_plugin.snapshot(max_events=20),
         'adsb': adsb_plugin.snapshot(max_events=20),
+        'rtl433': rtl433_plugin.snapshot(max_events=20),
+        'rfModel': noisy_drone_plugin.snapshot(max_events=20),
         'gps': gps_plugin.snapshot(),
         'scannerMode': _scanner_status(),
         'iqSession': {
@@ -676,9 +982,11 @@ def _stream_sequence_for_source(source):
 
 @api_blueprint.route('/api/data')
 def get_data():
+    include_secondary = str(request.args.get('secondary', '0')).lower() in {'1', 'true', 'yes', 'on'}
     return jsonify(_build_data_payload(
         source=request.args.get('source', 'main'),
         waterfall_mode=request.args.get('waterfall', 'history'),
+        include_secondary=include_secondary,
     ))
 
 
@@ -687,6 +995,7 @@ def stream_data():
     source = request.args.get('source', 'main')
     waterfall_mode = request.args.get('waterfall', 'latest')
     min_interval_ms = _safe_int(request.args.get('interval', 50), default=50, min_value=20, max_value=2000)
+    include_secondary = str(request.args.get('secondary', '0')).lower() in {'1', 'true', 'yes', 'on'}
 
     def event_stream():
         last_seq = -1
@@ -695,7 +1004,11 @@ def stream_data():
             seq = _stream_sequence_for_source(source)
             now = time.time()
             if seq != last_seq:
-                payload = _build_data_payload(source=source, waterfall_mode=waterfall_mode)
+                payload = _build_data_payload(
+                    source=source,
+                    waterfall_mode=waterfall_mode,
+                    include_secondary=include_secondary,
+                )
                 last_seq = seq
                 heartbeat_at = now
                 yield f"id: {seq}\nevent: frame\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
@@ -1142,6 +1455,16 @@ def get_settings():
         'averagingCount': vars.sdr_settings[vars.sdr_name].averagingCount,
         'dcSuppress': vars.dc_suppress,
         'showWaterfall': vars.show_waterfall,
+        'decodersAlwaysEnabled': bool(getattr(vars, 'decoders_always_enabled', False)),
+        'rfModelClassifierEnabled': bool(getattr(vars, 'rf_model_classifier_enabled', False)),
+        'rfModelClassifierRepoPath': getattr(vars, 'rf_model_classifier_repo_path', ''),
+        'rfModelClassifierModelPath': getattr(vars, 'rf_model_classifier_model_path', ''),
+        'rfModelClassifierBackend': getattr(vars, 'rf_model_classifier_backend', 'auto'),
+        'rfModelClassifierEnginePath': getattr(vars, 'rf_model_classifier_engine_path', ''),
+        'rfModelClassifierTargetMHz': float(getattr(vars, 'rf_model_classifier_target_mhz', 2399.0) or 0.0),
+        'rfModelClassifierBandwidthMHz': float(getattr(vars, 'rf_model_classifier_bandwidth_mhz', 20.0) or 20.0),
+        'rfModelClassifierIntervalSec': float(getattr(vars, 'rf_model_classifier_interval_sec', 1.0) or 1.0),
+        'rfModelClassifierThreshold': float(getattr(vars, 'rf_model_classifier_threshold', 0.45) or 0.45),
         'updateInterval': vars.sleeptime * 1000,  # Convert to ms
         'waterfallSamples': vars.waterfall_samples,
         'waterfallBinCount': vars.waterfall_bin_count,
@@ -1162,8 +1485,12 @@ def get_settings():
 
 @api_blueprint.route('/api/update_settings', methods=['POST'])
 def update_settings():
-    if not settings_update_lock.acquire(timeout=2.0):
-        return jsonify({'success': False, 'error': 'Settings update already in progress'}), 429
+    if not settings_update_lock.acquire(timeout=0.1):
+        return jsonify({
+            'success': True,
+            'busy': True,
+            'message': 'Settings update already in progress; duplicate request ignored'
+        }), 202
     try:
         settings = request.json
         if settings['frequency'] == 0 or  settings['frequency'] is None or  settings['sampleRate'] is None or settings['bandwidth'] is None:
@@ -1189,6 +1516,23 @@ def update_settings():
         new_settings['frequency_start'] = settings['frequency_start'] * 1e6
         new_settings['sampleRate'] = settings['sampleRate'] * 1e6
         new_settings['bandwidth'] = settings['bandwidth'] * 1e6
+        current_tuning = (
+            float(vars.sdr_frequency()),
+            float(vars.sdr_sampleRate()),
+            float(vars.sdr_bandwidth()),
+        )
+        requested_tuning = (
+            float(new_settings['frequency']),
+            float(new_settings['sampleRate']),
+            float(new_settings['bandwidth']),
+        )
+        tuning_changed = any(abs(left - right) > 1.0 for left, right in zip(current_tuning, requested_tuning))
+        if tuning_changed:
+            with scanner_plan_lock:
+                scanner_plan['active'] = False
+                scanner_plan['dwell_until'] = 0.0
+                scanner_plan['receiver_states'] = {}
+            vars.signal_stats.pop('scanner_mode', None)
         vars.apply_settings(new_settings)
         vars.save_settings()
 
@@ -1204,6 +1548,7 @@ def start_sweep():
     vars.sweeping_enabled = True
     with scanner_plan_lock:
         scanner_plan['active'] = False
+        scanner_plan['receiver_states'] = {}
     return jsonify({'status': 'success', 'sweeping_enabled': vars.sweeping_enabled})
 
 @api_blueprint.route('/api/stop_sweep', methods=['POST'])
@@ -1225,6 +1570,10 @@ def start_scanner_plan():
             merged.setdefault('dwellSec', default_dwell)
             steps.append(_sanitize_scan_step(merged))
         with scanner_plan_lock:
+            receiver_states = {
+                receiver: {'index': -1, 'dwell_until': 0.0, 'last_step': None}
+                for receiver in {str(step.get('receiver') or 'main').lower() for step in steps}
+            }
             scanner_plan.update({
                 'active': True,
                 'steps': steps,
@@ -1233,6 +1582,7 @@ def start_scanner_plan():
                 'dwell_until': 0.0,
                 'started_at': time.time(),
                 'last_step': None,
+                'receiver_states': receiver_states,
                 'error': None,
             })
         _advance_scanner_plan(force=True)
@@ -1247,6 +1597,10 @@ def start_scanner_plan():
 def stop_scanner_plan():
     with scanner_plan_lock:
         scanner_plan['active'] = False
+        scanner_plan['receiver_states'] = {}
+    rtl433_plugin.stop()
+    if getattr(vars, "worker_sdr_suspended", False):
+        vars.resume_worker_sdr()
     vars.signal_stats.pop('scanner_mode', None)
     return jsonify({'success': True, 'scanner': _to_builtin(_scanner_status())})
 
@@ -1267,6 +1621,7 @@ def cleanup():
     wifi_plugin.stop()
     zigbee_plugin.stop()
     adsb_plugin.stop()
+    rtl433_plugin.stop()
     gps_plugin.stop()
     if replay_sdr is not None:
         try:
@@ -1277,6 +1632,12 @@ def cleanup():
         vars.sdr0.stop()
     except Exception:
         pass
+    worker = getattr(vars, "worker_sdr", None)
+    if worker is not None:
+        try:
+            worker.stop()
+        except Exception:
+            pass
     for thread in (fft_thread, scanner_thread):
         try:
             if thread.is_alive():
