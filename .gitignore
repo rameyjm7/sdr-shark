@@ -33,3 +33,4 @@ backend/tests/scan_data.pkl
 scan_data.pkl
 backend/.venv/
 backend/.venv
+sdr-gateway/
