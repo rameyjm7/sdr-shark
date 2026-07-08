@@ -231,8 +231,20 @@ const ControlPanel = ({
         waterfallBinCount: toFinite(data.waterfallBinCount, 2048),
         waterfallSamples: clampWaterfallSamples(data.waterfallSamples),
         updateInterval: toFinite(data.updateInterval, 500),
-        showSecondTrace: selectedSdr === 'hackrf',
+        showSecondTrace: typeof data.showSecondTrace === 'boolean'
+          ? data.showSecondTrace
+          : String(selectedSdr || '').toLowerCase().startsWith('bladerf'),
         dcSuppress: typeof data.dcSuppress === 'boolean' ? data.dcSuppress : true,
+        decodersAlwaysEnabled: typeof data.decodersAlwaysEnabled === 'boolean' ? data.decodersAlwaysEnabled : false,
+        rfModelClassifierEnabled: typeof data.rfModelClassifierEnabled === 'boolean' ? data.rfModelClassifierEnabled : false,
+        rfModelClassifierRepoPath: data.rfModelClassifierRepoPath || '/home/jake/workspace/SDR/rf-signal-intelligence',
+        rfModelClassifierModelPath: data.rfModelClassifierModelPath || '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
+        rfModelClassifierBackend: data.rfModelClassifierBackend || 'auto',
+        rfModelClassifierEnginePath: data.rfModelClassifierEnginePath || '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
+        rfModelClassifierTargetMHz: toFinite(data.rfModelClassifierTargetMHz, 2399),
+        rfModelClassifierBandwidthMHz: toFinite(data.rfModelClassifierBandwidthMHz, 20),
+        rfModelClassifierIntervalSec: toFinite(data.rfModelClassifierIntervalSec, 1),
+        rfModelClassifierThreshold: toFinite(data.rfModelClassifierThreshold, 0.45),
         sweeping_enabled: typeof data.sweeping_enabled === 'boolean' ? data.sweeping_enabled : false,
       };
 
@@ -299,12 +311,14 @@ const ControlPanel = ({
     const newSettings = { ...settings, [name]: newValue };
     setSettings(newSettings);
 
-    // Sweep toggle should apply immediately to avoid requiring a manual save.
-    if (name === 'sweeping_enabled') {
+    // These toggles should apply immediately to avoid requiring a manual save.
+    if (name === 'sweeping_enabled' || name === 'decodersAlwaysEnabled' || name === 'rfModelClassifierEnabled') {
       try {
-        await axios.post(newValue ? '/api/start_sweep' : '/api/stop_sweep');
+        if (name === 'sweeping_enabled') {
+          await axios.post(newValue ? '/api/start_sweep' : '/api/stop_sweep');
+        }
       } catch (error) {
-        console.error('Error toggling sweep state:', error);
+        console.error('Error toggling immediate setting:', error);
       }
       await applySettings(newSettings);
     }
@@ -349,7 +363,7 @@ const ControlPanel = ({
     setSettings({
       ...settings,
       sdr: newSdr,
-      showSecondTrace: newSdr === 'hackrf',
+      showSecondTrace: String(newSdr || '').toLowerCase().startsWith('bladerf'),
     });
 
     try {
@@ -434,6 +448,7 @@ const ControlPanel = ({
     frequency_start: toFinite(settings.frequency_start, 700),
     frequency_stop: toFinite(settings.frequency_stop, 820),
     sweeping_enabled: typeof settings.sweeping_enabled === 'boolean' ? settings.sweeping_enabled : false,
+    decodersAlwaysEnabled: typeof settings.decodersAlwaysEnabled === 'boolean' ? settings.decodersAlwaysEnabled : false,
     lockBandwidthSampleRate: typeof settings.lockBandwidthSampleRate === 'boolean' ? settings.lockBandwidthSampleRate : true,
     dcSuppress: typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : true,
     waterfallBinCount: toFinite(settings.waterfallBinCount, 2048),

@@ -75,6 +75,16 @@ const App = () => {
     bandwidth: 1,
     averagingCount: 10,
     dcSuppress: true,
+    decodersAlwaysEnabled: false,
+    rfModelClassifierEnabled: false,
+    rfModelClassifierRepoPath: '/home/jake/workspace/SDR/rf-signal-intelligence',
+    rfModelClassifierModelPath: '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
+    rfModelClassifierBackend: 'auto',
+    rfModelClassifierEnginePath: '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
+    rfModelClassifierTargetMHz: 2399,
+    rfModelClassifierBandwidthMHz: 20,
+    rfModelClassifierIntervalSec: 1,
+    rfModelClassifierThreshold: 0.45,
     peakDetection: true,
     minPeakDistance: 0.1,
     numberOfPeaks: 5,
@@ -84,7 +94,6 @@ const App = () => {
     activityLogRetentionSec: initialActivityLogRetentionSec(),
     updateInterval: 500
   });
-  const [showSecondTrace, setShowSecondTrace] = useState(false);
   const [minY, setMinY] = useState(-120);
   const [maxY, setMaxY] = useState(0);
   // const [waterfallSamples, setWaterfallSamples] = useState(100);
@@ -118,7 +127,11 @@ const App = () => {
     wifi: null,
     zigbee: null,
     adsb: null,
+    rtl433: null,
+    rfModel: null,
     gps: null,
+    mimo: null,
+    workerSdr: null,
   });
 
 
@@ -178,7 +191,6 @@ const App = () => {
           updateInterval: toFinite(data.updateInterval, prev.updateInterval || 500),
           activityLogRetentionSec: prev.activityLogRetentionSec,
         }));
-        setShowSecondTrace(selectedSdr === 'hackrf');
       } catch (error) {
         console.error('Error bootstrapping SDR settings:', error);
       }
@@ -339,6 +351,7 @@ const App = () => {
     },
   };
   const telemetryWideChipSx = { ...telemetryChipSx, width: 170, minWidth: 170, maxWidth: 170, flex: '0 0 170px' };
+  const telemetryAdsbChipSx = { ...telemetryChipSx, width: 170, minWidth: 170, maxWidth: 170, flex: '0 0 170px' };
   const bluetoothEvents = Array.isArray(telemetry.bluetooth?.events) ? telemetry.bluetooth.events : [];
   const bluetoothAdvCount = bluetoothEvents.filter((event) => event?.kind === 'ble_adv').length;
   const bluetoothBtcCount = bluetoothEvents.filter((event) => String(event?.protocol || '').toLowerCase() === 'btc').length;
@@ -351,6 +364,12 @@ const App = () => {
   const zigbeeChunkCount = Number(telemetry.zigbee?.chunk_count || 0);
   const adsbAircraftCount = Number(telemetry.adsb?.aircraft_count || 0);
   const adsbEventCount = Number(telemetry.adsb?.event_count || 0);
+  const rtl433EventCount = Number(telemetry.rtl433?.event_count || 0);
+  const rtl433DeviceCount = Number(telemetry.rtl433?.device_count || 0);
+  const rfModelEventCount = Number(telemetry.rfModel?.event_count || 0);
+  const rfModelActive = Boolean(telemetry.rfModel?.active || telemetry.rfModel?.enabled);
+  const rfModelLabel = telemetry.rfModel?.last_label || telemetry.rfModel?.status || 'idle';
+  const rfModelConfidence = Number(telemetry.rfModel?.last_confidence || 0);
   const adsbMbFed = Number(telemetry.adsb?.byte_count || 0) / (1024 * 1024);
   const zigbeeRuntimeChannels = Array.isArray(telemetry.zigbee?.runtime_channels) ? telemetry.zigbee.runtime_channels : [];
   const zigbeeChannelLabel = zigbeeRuntimeChannels.length > 0
@@ -358,6 +377,20 @@ const App = () => {
     : '-';
   const scannerModeActive = Boolean(telemetry.scannerMode?.active);
   const scannerModeLabel = telemetry.scannerMode?.step?.label || 'Idle';
+  const scannerProtocolActive = (names) => {
+    const wanted = new Set(names.map((name) => String(name).toLowerCase()));
+    const states = telemetry.scannerMode?.receiverStates || {};
+    return Object.values(states).some((state) => {
+      const protocols = state?.last_step?.protocols || state?.lastStep?.protocols || [];
+      return protocols.some((protocol) => wanted.has(String(protocol).toLowerCase()));
+    });
+  };
+  const bluetoothActive = Boolean(telemetry.bluetooth?.active || scannerProtocolActive(['btc', 'btle', 'bluetooth']));
+  const fmActive = Boolean(telemetry.fm?.active || scannerProtocolActive(['fm']));
+  const wifiActive = Boolean(telemetry.wifi?.active || scannerProtocolActive(['wifi']));
+  const zigbeeActive = Boolean(telemetry.zigbee?.active || scannerProtocolActive(['zigbee', 'thread']));
+  const adsbActive = Boolean(telemetry.adsb?.active || scannerProtocolActive(['adsb']));
+  const rtl433Active = Boolean(telemetry.rtl433?.active || scannerProtocolActive(['rtl433', 'subghz']));
   const gpsLock = telemetry.gps?.lock || 'NO';
   const gpsConnected = Boolean(telemetry.gps?.connected);
   const GpsIcon = gpsConnected && gpsLock !== 'NO' ? GpsFixedIcon : GpsNotFixedIcon;
@@ -496,32 +529,61 @@ const App = () => {
           <Chip
             size="small"
             sx={telemetryWideChipSx}
-            color={telemetry.bluetooth?.active ? 'success' : 'default'}
-            label={`BT: ${telemetry.bluetooth?.active ? 'on' : 'off'} BLE ${bluetoothAdvCount} BTC ${bluetoothBtcCount}`}
+            color={bluetoothActive ? 'success' : 'default'}
+            label={`BT: ${bluetoothActive ? 'on' : 'off'} BLE ${bluetoothAdvCount} BTC ${bluetoothBtcCount}`}
           />
           <Chip
             size="small"
             sx={telemetryWideChipSx}
-            color={telemetry.fm?.active ? 'success' : 'default'}
-            label={`FM: ${telemetry.fm?.active ? 'on' : 'off'} ${fmStationCount} stn ${fmPotentialCount} pot`}
+            color={fmActive ? 'success' : 'default'}
+            label={`FM: ${fmActive ? 'on' : 'off'} ${fmStationCount} stn ${fmPotentialCount} pot`}
           />
           <Chip
             size="small"
             sx={telemetryWideChipSx}
-            color={telemetry.wifi?.active ? 'success' : 'default'}
-            label={`WiFi: ${telemetry.wifi?.active ? 'on' : 'off'} ${wifiActivityCount} act ${wifiFrameCount} frm`}
+            color={wifiActive ? 'success' : 'default'}
+            label={`WiFi: ${wifiActive ? 'on' : 'off'} ${wifiActivityCount} act ${wifiFrameCount} frm`}
           />
           <Chip
             size="small"
             sx={telemetryWideChipSx}
-            color={telemetry.zigbee?.active ? 'success' : 'default'}
-            label={`ZB: ${telemetry.zigbee?.active ? 'on' : 'off'} ch ${zigbeeChannelLabel} ${zigbeeFrameCount}f ${zigbeeBurstCount}b ${zigbeeChunkCount}iq`}
+            color={zigbeeActive ? 'success' : 'default'}
+            label={`ZB: ${zigbeeActive ? 'on' : 'off'} ch ${zigbeeChannelLabel} ${zigbeeFrameCount}f ${zigbeeBurstCount}b ${zigbeeChunkCount}iq`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryAdsbChipSx}
+            color={adsbActive ? 'success' : 'default'}
+            label={`ADSB: ${adsbActive ? 'on' : 'off'} ${adsbAircraftCount} ac ${adsbEventCount} msg`}
+            title={`${adsbMbFed.toFixed(0)} MB IQ fed to ADS-B decoder`}
           />
           <Chip
             size="small"
             sx={telemetryWideChipSx}
-            color={telemetry.adsb?.active ? 'success' : 'default'}
-            label={`ADSB: ${telemetry.adsb?.active ? 'on' : 'off'} ${adsbAircraftCount} ac ${adsbEventCount} evt ${adsbMbFed.toFixed(0)}MB`}
+            color={rtl433Active ? 'success' : 'default'}
+            label={`SubGHz: ${rtl433Active ? 'on' : 'off'} ${rtl433DeviceCount} dev ${rtl433EventCount} evt`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={rfModelActive ? 'success' : 'default'}
+            label={`RFML: ${rfModelActive ? 'on' : 'off'} ${rfModelLabel}${rfModelConfidence ? ` ${Math.round(rfModelConfidence * 100)}%` : ''}`}
+            title={telemetry.rfModel?.last_error || `${rfModelEventCount} model events`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryChipSx}
+            color={telemetry.mimo?.enabled ? 'success' : 'default'}
+            label={telemetry.mimo?.enabled ? `MIMO: ${Number(telemetry.mimo?.channels?.length || 1)} RX` : 'MIMO: 1 RX'}
+          />
+          <Chip
+            size="small"
+            sx={telemetryWideChipSx}
+            color={telemetry.workerSdr?.available ? 'info' : 'default'}
+            label={telemetry.workerSdr?.available
+              ? `Worker: ${telemetry.workerSdr.device_id || 'SDR'}`
+              : 'Worker: none'}
+            title={telemetry.workerSdr?.error || 'Auxiliary narrowband worker SDR'}
           />
           {telemetry.fftError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`FFT err`} /> : null}
           {telemetry.scannerError ? <Chip size="small" sx={telemetryChipSx} color="error" label={`Scanner err`} /> : null}
@@ -549,7 +611,7 @@ const App = () => {
               // updateInterval={updateInterval}
               // waterfallSamples={waterfallSamples}
               showWaterfall={showWaterfall}
-              showSecondTrace={showSecondTrace}
+              showSecondTrace={Boolean(settings.showSecondTrace)}
               plotWidth={plotWidth}
               addVerticalLines={addVerticalLines}
               verticalLines={verticalLines}

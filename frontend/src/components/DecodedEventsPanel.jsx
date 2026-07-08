@@ -81,6 +81,8 @@ const eventKey = (event, idx) => (
   (event?.kind === 'wifi_frame' ? `wifi-frame-${event.bssid || event.transmitter || event.source_mac || 'mac'}-${event.sequence || event.seen_at || idx}` : '') ||
   (event?.kind === 'wifi_activity' ? `wifi-${event.channel || event.likely_center_freq_hz || 'wide'}-${event.sample_index || event.seen_at || idx}` : '') ||
   (event?.kind === 'zigbee_frame' && event?.psdu_hex ? `zigbee-${event.channel || 'ch'}-${event.psdu_hex}` : '') ||
+  (event?.kind === 'rtl433_event' ? `rtl433-${event.identity || event.device_id || event.model || 'device'}-${event.seen_at || idx}` : '') ||
+  (event?.kind === 'noisy_drone_classification' ? `rfml-${event.label || event.identity || 'model'}-${event.seen_at || idx}` : '') ||
   (event?.lap ? `btc-${event.lap}-${event?.type || 'event'}-${event?.seen_at || idx}` : '') ||
   `${event?.protocol || 'event'}-${event?.kind || 'unknown'}-${event?.seen_at || idx}`
 );
@@ -106,6 +108,9 @@ const isWifiEvent = (event) => String(event?.protocol || '').toLowerCase() === '
 const isWifiFrame = (event) => isWifiEvent(event) && event?.kind === 'wifi_frame';
 const isZigbeeEvent = (event) => String(event?.protocol || '').toLowerCase() === 'zigbee' || event?.kind === 'zigbee_frame';
 const isAdsbEvent = (event) => String(event?.protocol || '').toLowerCase() === 'adsb' || String(event?.kind || '').startsWith('adsb_');
+const isRtl433Event = (event) => String(event?.protocol || '').toLowerCase() === 'rtl433' || event?.kind === 'rtl433_event';
+const isRfModelEvent = (event) => String(event?.protocol || '').toLowerCase() === 'rfml' || event?.kind === 'noisy_drone_classification';
+const isNoiseRfModelEvent = (event) => isRfModelEvent(event) && String(event?.label || event?.identity || '').trim().toLowerCase().endsWith('noise');
 
 const protocolKey = (event) => {
   const protocol = String(event?.protocol || '').toLowerCase();
@@ -115,6 +120,8 @@ const protocolKey = (event) => {
   if (protocol === 'wifi' || event?.kind === 'wifi_activity') return 'WIFI';
   if (protocol === 'zigbee' || event?.kind === 'zigbee_frame') return 'ZIGBEE';
   if (protocol === 'adsb' || String(event?.kind || '').startsWith('adsb_')) return 'ADSB';
+  if (protocol === 'rtl433' || event?.kind === 'rtl433_event') return 'SUB-GHZ';
+  if (protocol === 'rfml' || event?.kind === 'noisy_drone_classification') return 'RFML';
   return protocol ? protocol.toUpperCase() : 'RF';
 };
 
@@ -208,16 +215,80 @@ const mergeWifiRows = (rows) => {
   });
 };
 
+const rfuavEvidenceRank = (event) => {
+  const status = String(event?.rfuav_frequency_status || event?.rfuav?.status || '');
+  if (status === 'class_and_frequency') return 4;
+  if (status === 'known_center_other_family') return 3;
+  if (status === 'classification_only') return 2;
+  if (status === 'metadata_no_label') return 1;
+  return 0;
+};
+
+const mergeRfModelRows = (rows) => {
+  const groups = new Map();
+  rows.filter((row) => isRfModelEvent(row) && !isNoiseRfModelEvent(row)).forEach((row, idx) => {
+    const label = String(row?.label || row?.identity || 'unknown').trim() || 'unknown';
+    const key = `rfml:${label.toUpperCase()}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+
+  return Array.from(groups.values()).map((groupRows) => {
+    const latest = groupRows.reduce(
+      (winner, row) => (eventSeenAt(row) > eventSeenAt(winner) ? row : winner),
+      groupRows[0],
+    );
+    const best = groupRows.reduce(
+      (winner, row) => (Number(row?.confidence || 0) > Number(winner?.confidence || 0) ? row : winner),
+      groupRows[0],
+    );
+    const bestRfuav = groupRows.reduce(
+      (winner, row) => (
+        rfuavEvidenceRank(row) > rfuavEvidenceRank(winner) ||
+        (
+          rfuavEvidenceRank(row) === rfuavEvidenceRank(winner) &&
+          Number(row?.confidence || 0) > Number(winner?.confidence || 0)
+        )
+          ? row
+          : winner
+      ),
+      groupRows[0],
+    );
+    const label = String(latest?.label || best?.label || latest?.identity || 'Unknown').trim();
+    return {
+      ...best,
+      ...latest,
+      rfuav: bestRfuav?.rfuav ?? latest?.rfuav ?? best?.rfuav,
+      rfuav_frequency_status: bestRfuav?.rfuav_frequency_status ?? latest?.rfuav_frequency_status ?? best?.rfuav_frequency_status,
+      rfuav_frequency_match: bestRfuav?.rfuav_frequency_match ?? latest?.rfuav_frequency_match ?? best?.rfuav_frequency_match,
+      rfuav_label_match: bestRfuav?.rfuav_label_match ?? latest?.rfuav_label_match ?? best?.rfuav_label_match,
+      protocol: 'rfml',
+      kind: 'noisy_drone_classification',
+      identity: label,
+      label,
+      detections: groupRows.length,
+      group_count: groupRows.length,
+      first_seen_at: Math.min(...groupRows.map(eventSeenAt)),
+      seen_at: eventSeenAt(latest),
+      confidence: Number(latest?.confidence ?? best?.confidence ?? 0),
+      best_confidence: Number(best?.confidence ?? latest?.confidence ?? 0),
+      top: Array.isArray(latest?.top) ? latest.top : best?.top,
+    };
+  });
+};
+
 const mergeDisplayEvents = (events) => {
   const btcRows = mergeBtcRows(events);
   const wifiRows = mergeWifiRows(events);
+  const rfModelRows = mergeRfModelRows(events);
   const hasWifiFrames = wifiRows.length > 0;
   const nonMergedRows = events.filter((event) => (
     !isBtcEvent(event) &&
     !isWifiFrame(event) &&
+    !isRfModelEvent(event) &&
     !(hasWifiFrames && event?.kind === 'wifi_activity')
   ));
-  return [...nonMergedRows, ...wifiRows, ...btcRows].sort((a, b) => {
+  return [...nonMergedRows, ...wifiRows, ...rfModelRows, ...btcRows].sort((a, b) => {
     const aFm = isFmEvent(a);
     const bFm = isFmEvent(b);
     if (aFm && bFm) return Number(a?.frequency_mhz || 0) - Number(b?.frequency_mhz || 0);
@@ -230,8 +301,10 @@ const eventIdentity = (event) => {
   if (isBtcEvent(event)) return event?.full_mac || candidateMac(event);
   if (event?.address) return event.address;
   if (isAdsbEvent(event)) return event?.icao || event?.flight || '';
+  if (isRtl433Event(event)) return event?.identity || event?.device_id || event?.model || '';
   if (isWifiEvent(event)) return wifiIdentity(event) || `wifi-${event?.channel || event?.likely_center_freq_hz || ''}`;
   if (isZigbeeEvent(event)) return event?.mac?.source_address || event?.mac?.destination_address || event?.psdu_hex || '';
+  if (isRfModelEvent(event)) return event?.identity || event?.label || '';
   if (event?.identity) return event.identity;
   if (event?.name) return event.name;
   if (event?.lap) return `BTC LAP ${event.lap}`;
@@ -298,6 +371,7 @@ const patternChipSx = {
 };
 
 const isDeviceEvent = (event) => Boolean(
+  !isNoiseRfModelEvent(event) && (
   eventIdentity(event) ||
   event?.device_type ||
   event?.device_type_detail ||
@@ -305,7 +379,10 @@ const isDeviceEvent = (event) => Boolean(
   isWifiEvent(event) ||
   isZigbeeEvent(event) ||
   isAdsbEvent(event) ||
-  String(event?.protocol || '').toLowerCase() === 'btc',
+  isRtl433Event(event) ||
+  isRfModelEvent(event) ||
+  String(event?.protocol || '').toLowerCase() === 'btc'
+  ),
 );
 
 const eventTitle = (event) => {
@@ -316,6 +393,8 @@ const eventTitle = (event) => {
     const flight = String(event?.flight || '').trim();
     return flight || (event?.icao ? `Aircraft ${event.icao}` : 'ADS-B aircraft');
   }
+  if (isRtl433Event(event)) return event?.identity || event?.model || 'Sub-GHz device';
+  if (isRfModelEvent(event)) return event?.label || event?.identity || 'RF model detection';
   if (isBtcEvent(event)) return event?.full_mac || candidateMac(event);
   if (isFmEvent(event)) return event?.identity || `FM ${Number(event?.frequency_mhz || 0).toFixed(1)} MHz`;
   if (isWifiEvent(event)) {
@@ -343,13 +422,15 @@ const protocolGroupLabel = (protocol) => {
     WIFI: 'WiFi / 802.11',
     ZIGBEE: 'Zigbee / 802.15.4',
     ADSB: 'ADS-B Aircraft',
+    'SUB-GHZ': 'Sub-GHz / rtl_433',
+    RFML: 'RF Model Classifier',
     RF: 'Radio Events',
   };
   return labels[String(protocol || 'RF').toUpperCase()] || String(protocol || 'RF');
 };
 
 const protocolSortRank = (protocol) => {
-  const rank = ['BTC', 'BTLE', 'WIFI', 'ZIGBEE', 'FM', 'ADSB', 'RF'].indexOf(String(protocol || '').toUpperCase());
+  const rank = ['BTC', 'BTLE', 'WIFI', 'ZIGBEE', 'SUB-GHZ', 'FM', 'ADSB', 'RFML', 'RF'].indexOf(String(protocol || '').toUpperCase());
   return rank < 0 ? 999 : rank;
 };
 
@@ -367,6 +448,7 @@ const manufacturerGroupLabel = (event) => {
     return event?.channel ? `WiFi CH ${event.channel}` : 'WiFi / 802.11';
   }
   if (isZigbeeEvent(event)) return event?.mac?.source_pan_id ? `PAN ${event.mac.source_pan_id}` : 'Zigbee / 802.15.4';
+  if (isRfModelEvent(event)) return 'NoisyDroneRF model';
   if (isBtcEvent(event)) return 'BT Classic / manufacturer unknown';
   const manufacturer = String(
     event?.manufacturer?.company_name ||
@@ -402,7 +484,30 @@ const eventFootprintLabel = (event) => {
   if (protocol === 'fm') return '~200 kHz ch';
   if (protocol === 'zigbee') return '~2 MHz ch';
   if (protocol === 'adsb') return '1090 MHz';
+  if (protocol === 'rtl433') return '315/433 MHz';
+  if (protocol === 'rfml') return 'IQ model';
   return '';
+};
+
+const rfuavStatusLabel = (event) => {
+  const status = String(event?.rfuav_frequency_status || event?.rfuav?.status || '');
+  if (status === 'class_and_frequency') return 'RFUAV CF OK';
+  if (status === 'classification_only') return 'RFUAV class only';
+  if (status === 'known_center_other_family') return 'RFUAV other CF';
+  if (status === 'metadata_no_label') return 'RFUAV no family';
+  if (status === 'metadata_unavailable') return 'RFUAV unavailable';
+  return '';
+};
+
+const rfuavNearestLabel = (event) => {
+  const rfuav = event?.rfuav || {};
+  const nearest = rfuav.nearest_label_center || rfuav.nearest_known_center || null;
+  if (!nearest?.center_frequency_mhz) return '';
+  const offset = Number(nearest.offset_mhz);
+  if (Number.isFinite(offset) && offset > 0.05) {
+    return `RFUAV ${Number(nearest.center_frequency_mhz).toFixed(1)} MHz (${offset.toFixed(1)} away)`;
+  }
+  return `RFUAV ${Number(nearest.center_frequency_mhz).toFixed(1)} MHz`;
 };
 
 const eventDetail = (event) => {
@@ -440,6 +545,26 @@ const eventDetail = (event) => {
     if (Number(event?.track_deg)) parts.push(`track ${Number(event.track_deg)}°`);
     return parts.length ? parts.join(' · ') : 'Decoded Mode S / ADS-B message from 1090 MHz.';
   }
+  if (isRtl433Event(event)) {
+    const parts = [];
+    if (event?.model) parts.push(event.model);
+    if (event?.device_id !== undefined) parts.push(`id ${event.device_id}`);
+    if (event?.channel !== undefined) parts.push(`channel ${event.channel}`);
+    if (event?.frequency_mhz) parts.push(`${Number(event.frequency_mhz).toFixed(3)} MHz`);
+    return parts.length ? parts.join(' · ') : 'Decoded sub-GHz device packet from rtl_433.';
+  }
+  if (isRfModelEvent(event)) {
+    if (event?.detail) return event.detail;
+    const confidence = Number(event?.confidence);
+    const parts = [];
+      if (event?.label) parts.push(`prediction ${event.label}`);
+    if (Number.isFinite(confidence)) parts.push(`${(confidence * 100).toFixed(1)}% confidence`);
+    if (event?.target_mhz) parts.push(`${Number(event.target_mhz).toFixed(3)} MHz target`);
+    if (event?.power_db !== undefined) parts.push(`${Number(event.power_db).toFixed(1)} dB capture power`);
+    const rfuav = rfuavStatusLabel(event);
+    if (rfuav) parts.push(rfuav);
+    return parts.length ? parts.join(' · ') : 'NoisyDroneRF model classification from the live IQ stream.';
+  }
   if (event?.device_type_detail) return event.device_type_detail;
   if (isZigbeeEvent(event)) {
     const mac = event?.mac || {};
@@ -476,9 +601,11 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
       const wifiEvents = Array.isArray(telemetry?.wifi?.events) ? telemetry.wifi.events : [];
       const zigbeeEvents = Array.isArray(telemetry?.zigbee?.events) ? telemetry.zigbee.events : [];
       const adsbEvents = Array.isArray(telemetry?.adsb?.events) ? telemetry.adsb.events : [];
-      return [...bluetoothEvents, ...fmEvents, ...wifiEvents, ...zigbeeEvents, ...adsbEvents];
+      const rtl433Events = Array.isArray(telemetry?.rtl433?.events) ? telemetry.rtl433.events : [];
+      const rfModelEvents = Array.isArray(telemetry?.rfModel?.events) ? telemetry.rfModel.events : [];
+      return [...bluetoothEvents, ...fmEvents, ...wifiEvents, ...zigbeeEvents, ...adsbEvents, ...rtl433Events, ...rfModelEvents];
     },
-    [telemetry?.bluetooth?.events, telemetry?.fm?.events, telemetry?.wifi?.events, telemetry?.zigbee?.events, telemetry?.adsb?.events],
+    [telemetry?.bluetooth?.events, telemetry?.fm?.events, telemetry?.wifi?.events, telemetry?.zigbee?.events, telemetry?.adsb?.events, telemetry?.rtl433?.events, telemetry?.rfModel?.events],
   );
   const retentionSec = Math.max(60, Math.min(3600, Number(settings?.activityLogRetentionSec) || 600));
   const maxHistoryEvents = Math.max(500, Math.min(5000, Math.round((retentionSec / 60) * 240)));
@@ -593,10 +720,19 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
   const wifiFrameCount = sortedEvents.filter((event) => isWifiEvent(event) && event?.kind === 'wifi_frame').length;
   const zigbeeCount = sortedEvents.filter(isZigbeeEvent).length;
   const adsbCount = sortedEvents.filter(isAdsbEvent).length;
+  const rtl433Count = sortedEvents.filter(isRtl433Event).length;
+  const rfModelCount = sortedEvents.filter((event) => isRfModelEvent(event) && !isNoiseRfModelEvent(event)).length;
   const deviceEvents = displayEvents.filter(isDeviceEvent);
   const uniqueDevices = new Set(deviceEvents.map(eventIdentity).filter(Boolean)).size;
-  const decoderActive = Boolean(telemetry?.bluetooth?.active || telemetry?.fm?.active || telemetry?.wifi?.active || telemetry?.zigbee?.active || telemetry?.adsb?.active);
   const scannerMode = telemetry?.scannerMode || null;
+  const scannerProtocolActive = (() => {
+    const states = scannerMode?.receiverStates || {};
+    return Object.values(states).some((state) => {
+      const protocols = state?.last_step?.protocols || state?.lastStep?.protocols || [];
+      return protocols.length > 0;
+    });
+  })();
+  const decoderActive = Boolean(telemetry?.bluetooth?.active || telemetry?.fm?.active || telemetry?.wifi?.active || telemetry?.zigbee?.active || telemetry?.adsb?.active || telemetry?.rtl433?.active || telemetry?.rfModel?.active || scannerProtocolActive);
   const scannerStep = scannerMode?.step || {};
   const scannerCenterMHz = Number(scannerStep?.applied_center_hz || scannerStep?.center_hz || 0) / 1e6;
   const scannerLabel = scannerStep?.label || 'selected protocols';
@@ -745,8 +881,10 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
     const isWifi = isWifiEvent(event);
     const isZigbee = isZigbeeEvent(event);
     const isAdsb = isAdsbEvent(event);
-    const accent = isFm ? '#ffb347' : (isWifi ? '#6ecbff' : (isZigbee ? '#b084ff' : (isAdsb ? '#ff6b6b' : (isBtc ? '#ffd166' : '#64f0d2'))));
-    const EventIcon = isFm ? RadioIcon : (isWifi ? WifiIcon : (isZigbee ? SensorsIcon : (isAdsb ? FlightTakeoffIcon : BluetoothIcon)));
+    const isRtl433 = isRtl433Event(event);
+    const isRfModel = isRfModelEvent(event);
+    const accent = isFm ? '#ffb347' : (isWifi ? '#6ecbff' : (isZigbee ? '#b084ff' : (isAdsb ? '#ff6b6b' : (isRfModel ? '#c6f35a' : (isRtl433 ? '#64f0d2' : (isBtc ? '#ffd166' : '#64f0d2'))))));
+    const EventIcon = isFm ? RadioIcon : (isWifi ? WifiIcon : (isZigbee ? SensorsIcon : (isAdsb ? FlightTakeoffIcon : (isRfModel ? SensorsIcon : (isRtl433 ? SensorsIcon : BluetoothIcon)))));
     const uaps = Array.isArray(event?.uap_options) ? event.uap_options : [];
     const footprintLabel = eventFootprintLabel(event);
     const pattern = patternForEvent(event);
@@ -815,6 +953,25 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           {isAdsb && Number(event?.speed_kt) ? <Chip size="small" label={`${Number(event.speed_kt)} kt`} /> : null}
           {isAdsb && Number(event?.track_deg) ? <Chip size="small" label={`TRK ${Number(event.track_deg)}°`} /> : null}
           {isAdsb && event?.squawk ? <Chip size="small" color={[7500, 7600, 7700].includes(Number(event.squawk)) ? 'error' : 'default'} label={`Squawk ${event.squawk}`} /> : null}
+          {isRtl433 && event?.model ? <Chip size="small" label={event.model} /> : null}
+          {isRtl433 && event?.device_id !== undefined ? <Chip size="small" label={`ID ${event.device_id}`} /> : null}
+          {isRtl433 && event?.frequency_mhz ? <Chip size="small" label={`${Number(event.frequency_mhz).toFixed(3)} MHz`} /> : null}
+          {isRfModel ? <Chip size="small" label="NoisyDroneRF" /> : null}
+          {isRfModel && event?.label ? <Chip size="small" color="success" label={String(event.label)} /> : null}
+          {isRfModel && event?.raw_label && event.raw_label !== event.label && String(event.raw_label).toLowerCase() !== 'noise' ? <Chip size="small" label={`raw ${event.raw_label}`} /> : null}
+          {isRfModel && rfuavStatusLabel(event) ? (
+            <Chip
+              size="small"
+              color={event?.rfuav_frequency_match ? 'success' : (event?.rfuav_label_match ? 'warning' : 'default')}
+              label={rfuavStatusLabel(event)}
+            />
+          ) : null}
+          {isRfModel && rfuavNearestLabel(event) ? <Chip size="small" label={rfuavNearestLabel(event)} /> : null}
+          {isRfModel && event?.target_mhz ? <Chip size="small" label={`${Number(event.target_mhz).toFixed(3)} MHz`} /> : null}
+          {isRfModel && event?.power_db !== undefined ? <Chip size="small" label={`${Number(event.power_db).toFixed(1)} dB`} /> : null}
+          {isRfModel && Array.isArray(event?.top) ? event.top.filter((row) => String(row?.label || '').toLowerCase() !== 'noise').slice(0, 3).map((row) => (
+            <Chip key={`${eventKey(event, idx)}-${row.label}`} size="small" label={`${row.label} ${Math.round(Number(row.confidence || 0) * 100)}%`} />
+          )) : null}
           {isZigbee && event?.fcs_ok !== undefined ? <Chip size="small" color={event.fcs_ok ? 'success' : 'warning'} label={event.fcs_ok ? 'FCS OK' : 'FCS bad'} /> : null}
           {isZigbee && event?.mac?.frame_type ? <Chip size="small" label={String(event.mac.frame_type)} /> : null}
           {isZigbee && event?.mac?.source_pan_id !== undefined && event?.mac?.source_pan_id !== null ? <Chip size="small" label={`PAN ${event.mac.source_pan_id}`} /> : null}
@@ -824,7 +981,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           {isBtc && normalizedLap(event) ? <Chip size="small" label={`LAP ${normalizedLap(event)}`} /> : null}
           {hasValue(event?.channel) ? <Chip size="small" label={`CH ${event.channel}`} /> : null}
           {isBtc && Number(event?.candidate_count || 0) > 1 ? <Chip size="small" label={`${Number(event.candidate_count)} UAP candidates`} /> : null}
-          {(isBtc || isWifi) && Number(event?.detections || 0) > 1 ? <Chip size="small" label={`${Number(event.detections)} sightings`} /> : null}
+          {(isBtc || isWifi || isRfModel) && Number(event?.detections || 0) > 1 ? <Chip size="small" label={`${Number(event.detections)} sightings`} /> : null}
           {isBtc && uaps.length > 1 ? <Chip size="small" label={`UAPs ${uaps.slice(0, 4).join(' ')}`} /> : null}
           {event?.rssi_dbm !== undefined ? <Chip size="small" label={`RSSI ${Number(event.rssi_dbm).toFixed(0)} dBm`} /> : null}
           {event?.rssi_dbm === undefined && event?.rssi_dbfs !== undefined ? <Chip size="small" label={`RSSI ${Number(event.rssi_dbfs).toFixed(1)} dBFS`} /> : null}
@@ -885,13 +1042,18 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
             ].filter(Boolean).join('  ')}
           </Typography>
         ) : null}
+        {isRfModel && Array.isArray(event?.top) ? (
+          <Typography variant="caption" sx={{ mt: 0.75, display: 'block', fontFamily: 'monospace' }}>
+            {event.top.filter((row) => String(row?.label || '').toLowerCase() !== 'noise').map((row) => `${row.label}:${Number(row.confidence || 0).toFixed(3)}`).join('  ')}
+          </Typography>
+        ) : null}
       </Paper>
     );
   };
 
   const renderGroupedEvents = () => protocolGroups.map(({ protocol, rows, stats }, groupIndex) => {
-    const accent = protocol === 'FM' ? '#ffb347' : (protocol === 'WIFI' ? '#6ecbff' : (protocol === 'ZIGBEE' ? '#b084ff' : (protocol === 'ADSB' ? '#ff6b6b' : (protocol === 'BTC' ? '#ffd166' : '#64f0d2'))));
-    const GroupIcon = protocol === 'FM' ? RadioIcon : (protocol === 'WIFI' ? WifiIcon : (protocol === 'ZIGBEE' ? SensorsIcon : (protocol === 'ADSB' ? FlightTakeoffIcon : BluetoothIcon)));
+    const accent = protocol === 'FM' ? '#ffb347' : (protocol === 'WIFI' ? '#6ecbff' : (protocol === 'ZIGBEE' ? '#b084ff' : (protocol === 'ADSB' ? '#ff6b6b' : (protocol === 'RFML' ? '#c6f35a' : (protocol === 'BTC' ? '#ffd166' : '#64f0d2')))));
+    const GroupIcon = protocol === 'FM' ? RadioIcon : (protocol === 'WIFI' ? WifiIcon : (protocol === 'ZIGBEE' ? SensorsIcon : (protocol === 'ADSB' ? FlightTakeoffIcon : (protocol === 'RFML' ? SensorsIcon : BluetoothIcon))));
     const defaultOpen = !foldProtocolGroups || groupIndex < 1;
     const groupPattern = bestPatternForRows(rows);
     const body = protocol === 'BTLE'
@@ -1016,6 +1178,8 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
           <Chip size="small" label={`${wifiFrameCount} WiFi frames`} />
           <Chip size="small" label={`${zigbeeCount} Zigbee`} />
           <Chip size="small" label={`${adsbCount} ADS-B`} />
+          <Chip size="small" label={`${rtl433Count} Sub-GHz`} />
+          <Chip size="small" label={`${rfModelCount} RFML`} />
           <Chip size="small" label={`${fmStationCount} FM stations`} />
           <Chip size="small" label={`${fmPotentialCount} potential`} />
           <Chip size="small" label={`${uniqueDevices} devices`} />
