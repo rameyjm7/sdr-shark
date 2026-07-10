@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 
-DEFAULT_RF_INTELLIGENCE_ROOT = Path("/home/jake/workspace/SDR/rf-signal-intelligence")
+DEFAULT_RF_INTELLIGENCE_ROOT = Path("/home/jake/workspace/SDR/rf-signal-intelligence-private")
 DEFAULT_NOISY_DRONE_MODEL = (
     DEFAULT_RF_INTELLIGENCE_ROOT
     / "models"
@@ -71,6 +71,9 @@ class NoisyDroneModelPlugin:
         self._pending_samples = 0
         self._last_label = ""
         self._last_confidence = 0.0
+        self._last_diagnostic: dict[str, Any] = {}
+        self._native_event_offset = 0
+        self._native_event_inode: tuple[int, int] | None = None
         self._configured = {
             "enabled": False,
             "repo_path": str(DEFAULT_RF_INTELLIGENCE_ROOT),
@@ -99,8 +102,8 @@ class NoisyDroneModelPlugin:
             "scan_capture_multiplier": max(
                 1.0, float(os.getenv("SDR_SHARK_RF_MODEL_SCAN_CAPTURE_MULTIPLIER", "1") or "1")
             ),
-            "allow_wideband_classification": os.getenv("SDR_SHARK_RF_MODEL_ALLOW_WIDEBAND", "0").strip().lower()
-            in {"1", "true", "yes", "on"},
+            "allow_wideband_classification": os.getenv("SDR_SHARK_RF_MODEL_ALLOW_WIDEBAND", "1").strip().lower()
+            not in {"0", "false", "no", "off"},
             "use_gateway_iq": os.getenv("SDR_SHARK_RF_MODEL_USE_GATEWAY_IQ", "0").strip().lower()
             in {"1", "true", "yes", "on"},
             "gateway_url": os.getenv("SDR_SHARK_RF_MODEL_GATEWAY_URL", "http://127.0.0.1:8080").strip(),
@@ -120,11 +123,19 @@ class NoisyDroneModelPlugin:
             "min_quality_factor": max(
                 0.0, float(os.getenv("SDR_SHARK_RF_MODEL_MIN_QUALITY_FACTOR", "0.2") or "0.2")
             ),
+            "min_snr_db": max(0.0, float(os.getenv("SDR_SHARK_RF_MODEL_MIN_SNR_DB", "5") or "5")),
+            "min_signal_power_db": float(os.getenv("SDR_SHARK_RF_MODEL_MIN_SIGNAL_POWER_DB", "-45") or "-45"),
+            "min_occupied_fraction": max(
+                0.0, float(os.getenv("SDR_SHARK_RF_MODEL_MIN_OCCUPIED_FRACTION", "0.002") or "0.002")
+            ),
             "target_guard_hz": 2_000_000.0,
             "target_guard_margin_db": 4.0,
             "rfuav_centers_path": os.getenv("SDR_SHARK_RFUAV_CENTERS_PATH", str(DEFAULT_RFUAV_CENTERS_PATH)),
             "rfuav_tolerance_hz": float(os.getenv("SDR_SHARK_RFUAV_TOLERANCE_HZ", "5000000") or 5_000_000.0),
             "debug_capture_dir": os.getenv("SDR_SHARK_RF_MODEL_DEBUG_CAPTURE_DIR", "").strip(),
+            "native_event_jsonl": os.getenv("SDR_SHARK_RF_MODEL_EVENT_JSONL", "/var/log/rfiq/rfml-events.jsonl").strip(),
+            "use_native_events": os.getenv("SDR_SHARK_RF_MODEL_USE_NATIVE_EVENTS", "1").strip().lower()
+            not in {"0", "false", "no", "off"},
         }
 
     @staticmethod
@@ -183,7 +194,7 @@ class NoisyDroneModelPlugin:
                 self._status = "configured"
                 self._drain_queue()
 
-        if enabled:
+        if enabled and not self._native_events_enabled(self._config_snapshot()):
             self.start()
         else:
             self.stop()
@@ -191,6 +202,10 @@ class NoisyDroneModelPlugin:
     def submit_iq(self, samples: np.ndarray, *, center_freq_hz: float, sample_rate_hz: float) -> None:
         cfg = self._config_snapshot()
         if not cfg["enabled"]:
+            return
+        if self._native_events_enabled(cfg):
+            self._ingest_native_events(cfg)
+            self._set_status("native rfiq events")
             return
         target_in_passband = self._passband_contains_target(center_freq_hz, sample_rate_hz, cfg["target_freq_hz"])
         if not target_in_passband and not bool(cfg.get("auto_target")):
@@ -236,6 +251,7 @@ class NoisyDroneModelPlugin:
         self._drain_queue()
 
     def snapshot(self, max_events: int = 20) -> dict[str, Any]:
+        self._ingest_native_events(self._config_snapshot())
         acquired = self._lock.acquire(blocking=False)
         if not acquired:
             active_label, active_path = self._active_artifact(self._configured)
@@ -277,6 +293,7 @@ class NoisyDroneModelPlugin:
             last_error = self._last_error
             last_label = self._last_label or str((latest_debug or {}).get("label") or "")
             last_confidence = self._last_confidence or float((latest_debug or {}).get("confidence") or 0.0)
+            last_diagnostic = dict(self._last_diagnostic)
             last_inference = self._last_inference
         finally:
             self._lock.release()
@@ -296,6 +313,8 @@ class NoisyDroneModelPlugin:
             "sample_rate_hz": float(cfg["sample_rate_hz"]),
             "bandwidth_mhz": float(cfg["sample_rate_hz"]) / 1e6 if cfg["sample_rate_hz"] else 0.0,
             "iq_source": "gateway" if bool(cfg.get("use_gateway_iq")) else "main",
+            "native_event_jsonl": str(cfg.get("native_event_jsonl") or ""),
+            "native_events": bool(self._native_events_enabled(cfg)),
             "confidence_threshold": float(cfg.get("confidence_threshold", 0.0) or 0.0),
             "event_count": len(events),
             "status": self._status,
@@ -304,7 +323,114 @@ class NoisyDroneModelPlugin:
             "last_error": last_error,
             "last_label": last_label,
             "last_confidence": last_confidence,
+            "last_diagnostic": last_diagnostic,
             "events": events,
+        }
+
+    @staticmethod
+    def _native_events_enabled(cfg: dict[str, Any]) -> bool:
+        path = str(cfg.get("native_event_jsonl") or "").strip()
+        return bool(cfg.get("use_native_events")) and bool(path)
+
+    def _ingest_native_events(self, cfg: dict[str, Any]) -> None:
+        if not self._native_events_enabled(cfg):
+            return
+        path = Path(str(cfg.get("native_event_jsonl") or "")).expanduser()
+        try:
+            stat = path.stat()
+        except OSError:
+            self._set_status("waiting for native RFML events")
+            return
+        inode = (int(stat.st_dev), int(stat.st_ino))
+        if self._native_event_inode != inode or stat.st_size < self._native_event_offset:
+            self._native_event_inode = inode
+            self._native_event_offset = 0
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                handle.seek(self._native_event_offset)
+                lines = handle.readlines()
+                self._native_event_offset = handle.tell()
+        except OSError as exc:
+            self._set_status(f"native RFML unreadable: {exc}")
+            return
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            event = self._native_event_to_card(payload, cfg)
+            prediction = payload.get("prediction") or {}
+            label = str(prediction.get("label") or "")
+            confidence = float(prediction.get("confidence") or 0.0)
+            with self._lock:
+                self._last_error = ""
+                self._last_diagnostic = {
+                    "decision": str(payload.get("event_type") or "native_rfml"),
+                    "label": label,
+                    "confidence": confidence,
+                    "source": "native_rfiq_jsonl",
+                    "seen_at": time.time(),
+                }
+                if event is None:
+                    self._status = "native RFML no alert"
+                    self._last_label = ""
+                    self._last_confidence = 0.0
+                else:
+                    self._status = "native RFML event"
+                    self._last_label = str(event.get("label") or "")
+                    self._last_confidence = float(event.get("confidence") or 0.0)
+                    self._events.append(event)
+
+    def _native_event_to_card(self, payload: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any] | None:
+        prediction = payload.get("prediction") or {}
+        source = payload.get("source") or {}
+        capture_stats = payload.get("capture_stats") or {}
+        timing = payload.get("timing_ms") or {}
+        label = str(prediction.get("label") or "").strip()
+        confidence = float(prediction.get("confidence") or 0.0)
+        event_type = str(payload.get("event_type") or "")
+        if not label or label.casefold() == "noise" or event_type.endswith(".no_alert"):
+            return None
+        if confidence < float(cfg.get("confidence_threshold", 0.0) or 0.0):
+            return None
+        center_hz = float(source.get("freq") or source.get("center_freq_hz") or 0.0)
+        sample_rate_hz = float(source.get("sample_rate") or source.get("sample_rate_hz") or 0.0)
+        top = list(prediction.get("top") or [])
+        sequence = int(payload.get("sequence") or 0)
+        return {
+            "protocol": "rfml",
+            "kind": "noisy_drone_classification",
+            "identity": label,
+            "label": label,
+            "raw_label": str(prediction.get("raw_label") or label),
+            "confidence": confidence,
+            "raw_confidence": float(prediction.get("raw_confidence") or confidence),
+            "target_mhz": center_hz / 1e6 if center_hz else 0.0,
+            "configured_target_mhz": 0.0,
+            "auto_target": True,
+            "rf_offset_scan": False,
+            "rf_candidate_count": int((payload.get("window") or {}).get("candidate_count") or 0),
+            "rf_quality_factor": 1.0,
+            "rf_quality_reason": "native rfiq TensorRT event",
+            "center_freq_hz": center_hz,
+            "sample_rate_hz": sample_rate_hz,
+            "model_sample_rate_hz": sample_rate_hz,
+            "window_start": int((payload.get("window") or {}).get("selected_start") or 0),
+            "power_db": float(capture_stats.get("power_db") or -120.0),
+            "peak": float(capture_stats.get("peak") or 0.0),
+            "top": top,
+            "decision": event_type or "native_rfiq_rfml",
+            "native_sequence": sequence,
+            "native_event_jsonl": str(cfg.get("native_event_jsonl") or ""),
+            "timing_ms": timing,
+            "seen_at": time.time(),
+            "detail": (
+                f"Native rfiq/TensorRT predicted {label} at {confidence * 100:.1f}% confidence"
+                + (f" - {center_hz / 1e6:.3f} MHz" if center_hz else "")
+            ),
         }
 
     def _latest_debug_event(self, cfg: dict[str, Any]) -> dict[str, Any] | None:
@@ -422,18 +548,14 @@ class NoisyDroneModelPlugin:
 
         model_sample_rate_hz = float(cfg["sample_rate_hz"])
         if bool(cfg.get("use_gateway_iq")):
-            gateway_target_hz = self._effective_target_freq_hz(cfg, center_freq_hz, sample_rate_hz)
-            gateway_iq = self._capture_gateway_iq(
+            self._classify_gateway_component(
+                model,
+                helpers,
                 cfg,
-                target_freq_hz=float(gateway_target_hz),
-                sample_rate_hz=model_sample_rate_hz,
-                helpers=helpers,
+                center_freq_hz=float(center_freq_hz),
+                sample_rate_hz=float(sample_rate_hz),
             )
-            if gateway_iq is not None:
-                raw = gateway_iq
-                center_freq_hz = float(gateway_target_hz)
-                sample_rate_hz = model_sample_rate_hz
-                self._set_status("classifying gateway RFML IQ")
+            return
         candidates = self._rf_target_candidates(cfg, center_freq_hz, sample_rate_hz)
         frame_config = frame_config_cls(
             window_samples=int(cfg["window_samples"]),
@@ -490,6 +612,14 @@ class NoisyDroneModelPlugin:
                     payload,
                 )
         if best_result is None:
+            self._remember_diagnostic(
+                {
+                    "decision": "no_candidate_result",
+                    "center_mhz": float(center_freq_hz) / 1e6 if center_freq_hz else 0.0,
+                    "sample_rate_hz": float(sample_rate_hz),
+                    "seen_at": time.time(),
+                }
+            )
             return
         (
             _score,
@@ -504,13 +634,7 @@ class NoisyDroneModelPlugin:
         ) = best_result
         alignment = self._target_alignment_stats(capture, effective_sample_rate_hz)
         stats = capture_stats(capture)
-        debug_capture = self._save_debug_capture(
-            capture,
-            label=str(raw_label),
-            confidence=float(raw_confidence),
-            target_freq_hz=float(effective_target_freq_hz),
-            cfg=cfg,
-        )
+        spectral_quality = self._spectral_quality(capture)
         label = str(payload.get("prediction") or raw_label)
         confidence = float(payload.get("confidence") or raw_confidence)
         decision = str(payload.get("decision") or "")
@@ -521,6 +645,53 @@ class NoisyDroneModelPlugin:
                 self._status = "noise suppressed"
                 self._last_label = ""
                 self._last_confidence = 0.0
+                self._last_diagnostic = self._diagnostic_payload(
+                    decision="noise_suppressed",
+                    label=label,
+                    confidence=confidence,
+                    raw_label=raw_label,
+                    raw_confidence=raw_confidence,
+                    target_freq_hz=effective_target_freq_hz,
+                    center_freq_hz=center_freq_hz,
+                    stats=stats,
+                    quality=quality,
+                    spectral_quality=spectral_quality,
+                    top=top,
+                )
+            return
+        min_signal_power_db = float(cfg.get("min_signal_power_db", -45.0) or -45.0)
+        min_occupied = float(cfg.get("min_occupied_fraction", 0.002) or 0.002)
+        power_db = float(stats.get("power_db", -120.0) or -120.0)
+        occupied = float(spectral_quality.get("occupied_fraction", 0.0) or 0.0)
+        if power_db < min_signal_power_db or occupied < min_occupied:
+            with self._lock:
+                self._last_error = ""
+                self._status = (
+                    "RFML suppressed: "
+                    f"weak capture power={power_db:.1f}dB need>={min_signal_power_db:.1f}dB "
+                    f"occupied={occupied:.4f} need>={min_occupied:.4f}"
+                )
+                self._last_label = ""
+                self._last_confidence = 0.0
+                self._last_diagnostic = self._diagnostic_payload(
+                    decision="weak_capture_suppressed",
+                    label=label,
+                    confidence=confidence,
+                    raw_label=raw_label,
+                    raw_confidence=raw_confidence,
+                    target_freq_hz=effective_target_freq_hz,
+                    center_freq_hz=center_freq_hz,
+                    stats=stats,
+                    quality=quality,
+                    spectral_quality=spectral_quality,
+                    top=top,
+                    gate={
+                        "power_db": power_db,
+                        "min_signal_power_db": min_signal_power_db,
+                        "occupied_fraction": occupied,
+                        "min_occupied_fraction": min_occupied,
+                    },
+                )
             return
         min_quality = float(cfg.get("min_quality_factor", 0.2) or 0.2)
         if float(quality.get("factor", 1.0)) < min_quality:
@@ -529,7 +700,32 @@ class NoisyDroneModelPlugin:
                 self._status = f"low-quality RFML suppressed: {quality.get('reason', 'narrow capture')}"
                 self._last_label = ""
                 self._last_confidence = 0.0
+                self._last_diagnostic = self._diagnostic_payload(
+                    decision="low_quality_suppressed",
+                    label=label,
+                    confidence=confidence,
+                    raw_label=raw_label,
+                    raw_confidence=raw_confidence,
+                    target_freq_hz=effective_target_freq_hz,
+                    center_freq_hz=center_freq_hz,
+                    stats=stats,
+                    quality=quality,
+                    spectral_quality=spectral_quality,
+                    top=top,
+                    gate={
+                        "quality_factor": float(quality.get("factor", 1.0)),
+                        "min_quality_factor": min_quality,
+                        "reason": quality.get("reason", ""),
+                    },
+                )
             return
+        debug_capture = self._save_debug_capture(
+            capture,
+            label=str(raw_label),
+            confidence=float(raw_confidence),
+            target_freq_hz=float(effective_target_freq_hz),
+            cfg=cfg,
+        )
         rfuav_evidence = self._rfuav_frequency_evidence(
             str(label),
             target_freq_hz=float(effective_target_freq_hz),
@@ -560,6 +756,8 @@ class NoisyDroneModelPlugin:
             "peak_offset_hz": float(alignment.get("peak_offset_hz", 0.0)),
             "center_guard_db": float(alignment.get("center_guard_db", -120.0)),
             "off_center_db": float(alignment.get("off_center_db", -120.0)),
+            "spectral_snr_db": float(spectral_quality.get("snr_db", 0.0)),
+            "occupied_fraction": float(spectral_quality.get("occupied_fraction", 0.0)),
             "top": top,
             "decision": decision or "",
             "seen_at": time.time(),
@@ -578,7 +776,250 @@ class NoisyDroneModelPlugin:
             self._last_error = ""
             self._last_label = label
             self._last_confidence = float(confidence)
+            self._last_diagnostic = self._diagnostic_payload(
+                decision="classified",
+                label=label,
+                confidence=confidence,
+                raw_label=raw_label,
+                raw_confidence=raw_confidence,
+                target_freq_hz=effective_target_freq_hz,
+                center_freq_hz=center_freq_hz,
+                stats=stats,
+                quality=quality,
+                spectral_quality=spectral_quality,
+                top=top,
+            )
             self._events.append(event)
+
+    def _classify_gateway_component(
+        self,
+        model: Any,
+        helpers: dict[str, Any],
+        cfg: dict[str, Any],
+        *,
+        center_freq_hz: float,
+        sample_rate_hz: float,
+    ) -> None:
+        gateway_component_cls = helpers.get("NoisyDroneGatewayClassifier")
+        gateway_runtime_config_cls = helpers.get("NoisyDroneGatewayClassifierConfig")
+        gateway_config_cls = helpers.get("GatewayStreamConfig")
+        frame_config_cls = helpers.get("NoisyDroneFrameConfig")
+        capture_stats = helpers["capture_stats"]
+        labels = list(helpers["LABEL_NAMES"])
+        if (
+            gateway_component_cls is None
+            or gateway_runtime_config_cls is None
+            or gateway_config_cls is None
+            or frame_config_cls is None
+        ):
+            self._set_status("gateway RFML component unavailable")
+            return
+
+        model_sample_rate_hz = float(cfg["sample_rate_hz"])
+        target_freq_hz = self._effective_target_freq_hz(cfg, center_freq_hz, sample_rate_hz)
+        capture_samples = int(
+            max(4096, int(cfg.get("window_samples", 1_048_576) or 1_048_576))
+            * float(cfg.get("gateway_capture_multiplier", 4.0) or 4.0)
+        )
+        stream_config = gateway_config_cls(
+            base_url=str(cfg.get("gateway_url") or "http://127.0.0.1:8080"),
+            device_id=str(cfg.get("gateway_device_id") or "bladerf:0"),
+            center_freq_hz=int(round(float(target_freq_hz))),
+            sample_rate_sps=int(round(model_sample_rate_hz)),
+            bandwidth_hz=int(round(model_sample_rate_hz)),
+            lna_gain_db=int(cfg.get("gateway_lna_gain", 24) or 24),
+            vga_gain_db=int(cfg.get("gateway_vga_gain", 20) or 20),
+            iq_format=str(cfg.get("gateway_iq_format") or "i8"),
+        )
+        frame_config = frame_config_cls(
+            window_samples=int(cfg["window_samples"]),
+            nfft=int(cfg["nfft"]),
+            hop=int(cfg["hop"]),
+            time_bins=int(cfg["time_bins"]),
+            scan_windows=bool(cfg.get("scan_windows")),
+            scan_stride_samples=int(cfg.get("scan_stride_samples", 262144) or 262144),
+            window_score_mode="raw",
+            decision_mode="hybrid",
+            non_noise_threshold=float(cfg["non_noise_threshold"]),
+            top_k=3,
+            sample_rate_hz=model_sample_rate_hz,
+        )
+        runtime_config = gateway_runtime_config_cls(
+            capture_samples=capture_samples,
+            discard_captures=1,
+            min_snr_db=float(cfg.get("min_snr_db", 5.0) or 5.0),
+            min_occupied_fraction=float(cfg.get("min_occupied_fraction", 0.002) or 0.002),
+            min_detection_confidence=float(cfg.get("confidence_threshold", 0.0) or 0.0),
+        )
+        classifier = gateway_component_cls(
+            lambda batch: model.predict(batch, verbose=0),
+            labels=labels,
+            stream_config=stream_config,
+            frame_config=frame_config,
+            runtime_config=runtime_config,
+        )
+        self._set_status("classifying gateway RFML IQ")
+        result = classifier.classify_once(target_label=None, signal_present=False)
+        payload = result.payload
+        capture = np.asarray(result.selected_iq, dtype=np.float32)
+        raw_label = str(payload.get("raw_prediction") or payload.get("prediction") or "")
+        raw_confidence = float(payload.get("raw_confidence") or payload.get("confidence") or 0.0)
+        label = str(payload.get("prediction") or raw_label)
+        confidence = float(payload.get("confidence") or raw_confidence)
+        if label.casefold() == "noise":
+            with self._lock:
+                self._last_error = ""
+                self._status = str(payload.get("decision") or "noise suppressed")
+                self._last_label = ""
+                self._last_confidence = 0.0
+                self._last_diagnostic = {
+                    "decision": str(payload.get("decision") or "noise_suppressed"),
+                    "label": label,
+                    "confidence": confidence,
+                    "raw_label": raw_label,
+                    "raw_confidence": raw_confidence,
+                    "target_mhz": float(target_freq_hz) / 1e6 if target_freq_hz else 0.0,
+                    "center_mhz": float(center_freq_hz) / 1e6 if center_freq_hz else 0.0,
+                    "quality": dict(payload.get("quality") or {}),
+                    "top": list(payload.get("top") or []),
+                    "gate": {
+                        "snr": payload.get("snr_gate") or {},
+                        "power": payload.get("power_gate") or {},
+                        "confidence": payload.get("detection_confidence_gate") or {},
+                    },
+                    "seen_at": time.time(),
+                }
+            return
+
+        stats = capture_stats(capture)
+        spectral_quality = dict(payload.get("quality") or {})
+        alignment = self._target_alignment_stats(capture, model_sample_rate_hz)
+        debug_capture = self._save_debug_capture(
+            capture,
+            label=raw_label,
+            confidence=raw_confidence,
+            target_freq_hz=float(target_freq_hz),
+            cfg=cfg,
+        )
+        rfuav_evidence = self._rfuav_frequency_evidence(
+            label,
+            target_freq_hz=float(target_freq_hz),
+            cfg=cfg,
+        )
+        scan = payload.get("scan") or {}
+        event = {
+            "protocol": "rfml",
+            "kind": "noisy_drone_classification",
+            "identity": label,
+            "label": label,
+            "raw_label": raw_label,
+            "confidence": confidence,
+            "raw_confidence": raw_confidence,
+            "target_mhz": float(target_freq_hz) / 1e6 if target_freq_hz else 0.0,
+            "configured_target_mhz": float(cfg["target_freq_hz"]) / 1e6 if cfg["target_freq_hz"] else 0.0,
+            "auto_target": bool(float(target_freq_hz) != float(cfg["target_freq_hz"])),
+            "rf_offset_scan": False,
+            "rf_candidate_count": len(scan.get("candidates") or []) or 1,
+            "rf_quality_factor": 1.0,
+            "rf_quality_reason": "gateway component",
+            "debug_capture": debug_capture,
+            "center_freq_hz": float(target_freq_hz),
+            "sample_rate_hz": model_sample_rate_hz,
+            "model_sample_rate_hz": model_sample_rate_hz,
+            "window_start": int(scan.get("selected_start", 0) or 0),
+            "power_db": float(stats.get("power_db", 0.0)),
+            "peak": float(stats.get("peak", 0.0)),
+            "peak_offset_hz": float(alignment.get("peak_offset_hz", 0.0)),
+            "center_guard_db": float(alignment.get("center_guard_db", -120.0)),
+            "off_center_db": float(alignment.get("off_center_db", -120.0)),
+            "spectral_snr_db": float(spectral_quality.get("snr_db", 0.0)),
+            "occupied_fraction": float(spectral_quality.get("occupied_fraction", 0.0)),
+            "top": list(payload.get("top") or []),
+            "decision": str(payload.get("decision") or ""),
+            "seen_at": time.time(),
+            "rfuav": rfuav_evidence,
+            "rfuav_frequency_status": rfuav_evidence.get("status", "metadata_unavailable"),
+            "rfuav_frequency_match": bool(rfuav_evidence.get("frequency_match")),
+            "rfuav_label_match": bool(rfuav_evidence.get("label_match")),
+            "component": payload.get("component") or {},
+            "gate": {
+                "snr": payload.get("snr_gate") or {},
+                "power": payload.get("power_gate") or {},
+                "confidence": payload.get("detection_confidence_gate") or {},
+            },
+            "detail": self._rfuav_detail(
+                label=label,
+                confidence=confidence,
+                target_freq_hz=float(target_freq_hz),
+                rfuav=rfuav_evidence,
+            ),
+        }
+        with self._lock:
+            self._last_error = ""
+            self._status = "gateway component classified"
+            self._last_label = label
+            self._last_confidence = confidence
+            self._last_diagnostic = {
+                "decision": "gateway_component_classified",
+                "label": label,
+                "confidence": confidence,
+                "raw_label": raw_label,
+                "raw_confidence": raw_confidence,
+                "target_mhz": float(target_freq_hz) / 1e6 if target_freq_hz else 0.0,
+                "center_mhz": float(center_freq_hz) / 1e6 if center_freq_hz else 0.0,
+                "quality": spectral_quality,
+                "top": list(payload.get("top") or []),
+                "gate": event["gate"],
+                "seen_at": time.time(),
+            }
+            self._events.append(event)
+
+    def _remember_diagnostic(self, diagnostic: dict[str, Any]) -> None:
+        with self._lock:
+            self._last_diagnostic = dict(diagnostic)
+
+    @staticmethod
+    def _diagnostic_payload(
+        *,
+        decision: str,
+        label: str,
+        confidence: float,
+        raw_label: str,
+        raw_confidence: float,
+        target_freq_hz: float,
+        center_freq_hz: float,
+        stats: dict[str, Any],
+        quality: dict[str, Any],
+        spectral_quality: dict[str, Any],
+        top: list[Any],
+        gate: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "decision": decision,
+            "label": str(label),
+            "confidence": float(confidence),
+            "raw_label": str(raw_label),
+            "raw_confidence": float(raw_confidence),
+            "target_mhz": float(target_freq_hz) / 1e6 if target_freq_hz else 0.0,
+            "center_mhz": float(center_freq_hz) / 1e6 if center_freq_hz else 0.0,
+            "power_db": float(stats.get("power_db", -120.0) or -120.0),
+            "peak": float(stats.get("peak", 0.0) or 0.0),
+            "quality": {
+                "factor": float(quality.get("factor", 1.0) or 1.0),
+                "reason": str(quality.get("reason", "") or ""),
+                "peak_offset_hz": float(quality.get("peak_offset_hz", 0.0) or 0.0),
+                "occupied_fraction": float(quality.get("occupied_fraction", 0.0) or 0.0),
+                "peak_over_median_db": float(quality.get("peak_over_median_db", 0.0) or 0.0),
+            },
+            "spectral": {
+                "snr_db": float(spectral_quality.get("snr_db", 0.0) or 0.0),
+                "occupied_fraction": float(spectral_quality.get("occupied_fraction", 0.0) or 0.0),
+                "peak_over_floor_db": float(spectral_quality.get("peak_over_floor_db", 0.0) or 0.0),
+            },
+            "top": list(top or []),
+            "gate": dict(gate or {}),
+            "seen_at": time.time(),
+        }
 
     def _save_debug_capture(
         self,
@@ -732,6 +1173,27 @@ class NoisyDroneModelPlugin:
             "peak_offset_hz": peak_offset,
             "occupied_fraction": occupied,
             "peak_over_median_db": float(peak_db - median_db),
+        }
+
+    def _spectral_quality(self, capture: np.ndarray) -> dict[str, float]:
+        complex_iq = self._complex_iq(capture)
+        if complex_iq.size < 1024:
+            return {
+                "snr_db": 0.0,
+                "peak_over_floor_db": 0.0,
+                "occupied_fraction": 0.0,
+            }
+        nfft = int(min(16384, 2 ** int(np.floor(np.log2(complex_iq.size)))))
+        nfft = max(1024, nfft)
+        segment = complex_iq[-nfft:]
+        spectrum = np.fft.fftshift(np.fft.fft(segment * np.hanning(nfft).astype(np.float32), n=nfft))
+        power_db = 20.0 * np.log10(np.abs(spectrum).astype(np.float64) + 1e-12)
+        floor_db = float(np.median(power_db))
+        peak_db = float(np.percentile(power_db, 99.7))
+        return {
+            "snr_db": float(peak_db - floor_db),
+            "peak_over_floor_db": float(np.max(power_db) - floor_db),
+            "occupied_fraction": float(np.mean(power_db > floor_db + 10.0)),
         }
 
     def _classification_score(self, probs: np.ndarray, labels: list[str], best_non_noise_prediction: Any) -> float:
@@ -1015,7 +1477,7 @@ class NoisyDroneModelPlugin:
         target_mhz = float(target_freq_hz or 0.0) / 1e6
         parts = [
             f"NoisyDroneRF predicted {label} at {confidence * 100:.1f}% confidence",
-            f"{target_mhz:.3f} MHz target" if target_mhz else "",
+            f"{target_mhz:.3f} MHz tuned" if target_mhz else "",
         ]
         status = str(rfuav.get("status") or "")
         nearest_label = rfuav.get("nearest_label_center") or {}
@@ -1140,6 +1602,13 @@ class NoisyDroneModelPlugin:
         module = importlib.import_module("rf_signal_intelligence.live_noisy_drone_rf_classifier")
         framing_module = importlib.import_module("rf_signal_intelligence.noisy_drone_framing")
         gateway_module = importlib.import_module("rf_signal_intelligence.gateway_iq")
+        try:
+            gateway_component_module = importlib.import_module("rf_signal_intelligence.noisy_drone_gateway_component")
+        except ModuleNotFoundError:
+            # The gateway component is optional. Native Soapy/rfiq IQ paths use
+            # the shared framer directly and should not fail because the legacy
+            # gateway-only wrapper is not installed.
+            gateway_component_module = None
 
         if use_tensorrt:
             if not engine_file.exists():
@@ -1181,6 +1650,16 @@ class NoisyDroneModelPlugin:
             "NoisyDroneFrameConfig": getattr(framing_module, "NoisyDroneFrameConfig"),
             "GatewayIqSource": getattr(gateway_module, "GatewayIqSource"),
             "GatewayStreamConfig": getattr(gateway_module, "GatewayStreamConfig"),
+            "NoisyDroneGatewayClassifier": (
+                getattr(gateway_component_module, "NoisyDroneGatewayClassifier", None)
+                if gateway_component_module is not None
+                else None
+            ),
+            "NoisyDroneGatewayClassifierConfig": (
+                getattr(gateway_component_module, "NoisyDroneGatewayClassifierConfig", None)
+                if gateway_component_module is not None
+                else None
+            ),
         }
         with self._lock:
             self._model = model
