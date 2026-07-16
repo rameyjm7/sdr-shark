@@ -4,6 +4,8 @@ from contextlib import contextmanager
 import os
 from pathlib import Path
 import queue
+import socket
+import struct
 import threading
 import time
 import sys
@@ -64,6 +66,9 @@ class SDRGeneric:
         self.gateway_token = (os.getenv("SDR_GATEWAY_API_TOKEN", "") or "").strip()
         self.gateway_requested_iq_format = (os.getenv("SDR_GATEWAY_IQ_FORMAT", "native") or "native").strip().lower()
         self.gateway_iq_format = self.gateway_requested_iq_format
+        self.rfiq_socket_path = os.getenv("SDR_RFIQ_SOCKET", "/tmp/rfiq.sock")
+        self._rfiq_socket: socket.socket | None = None
+        self._rfiq_header = struct.Struct("<IHHHHQQIIdddd")
 
         self._devices_cache: list[dict[str, Any]] = []
         self._selected_device_hint: str | None = None
@@ -76,6 +81,7 @@ class SDRGeneric:
         self._lock = threading.Lock()
         self._latest_samples = np.zeros(self.size, dtype=np.complex64)
         self._latest_samples_secondary = np.zeros(self.size, dtype=np.complex64)
+        self._latest_iq_chunk = np.zeros(self.size, dtype=np.complex64)
         self._iq_tap_lock = threading.Lock()
         self._iq_tap_subscribers: dict[str, queue.Queue[bytes | None]] = {}
         self._iq_tap_last_publish = 0.0
@@ -99,7 +105,9 @@ class SDRGeneric:
 
     def start(self) -> None:
         self._should_run = True
-        if self.backend == "soapy":
+        if self.backend == "rfiq":
+            self._start_rfiq_stream()
+        elif self.backend == "soapy":
             self._ensure_soapy_device()
             self._start_soapy_stream()
         else:
@@ -116,6 +124,12 @@ class SDRGeneric:
             except Exception:
                 pass
             self._ws = None
+        if self._rfiq_socket is not None:
+            try:
+                self._rfiq_socket.close()
+            except Exception:
+                pass
+            self._rfiq_socket = None
         if (
             self._rx_thread
             and self._rx_thread.is_alive()
@@ -127,6 +141,8 @@ class SDRGeneric:
 
     def set_frequency(self, frequency: float) -> None:
         self.frequency = float(frequency)
+        if self.backend == "rfiq":
+            return
         if self.backend == "soapy" and self._soapy_device is not None:
             try:
                 with self._quiet_soapy():
@@ -139,10 +155,14 @@ class SDRGeneric:
 
     def set_sample_rate(self, sample_rate: float) -> None:
         self.sample_rate = float(sample_rate)
+        if self.backend == "rfiq":
+            return
         self._restart_stream()
 
     def set_bandwidth(self, bandwidth: float) -> None:
         self.bandwidth = float(bandwidth)
+        if self.backend == "rfiq":
+            return
         if self.backend == "soapy" and self._soapy_device is not None:
             try:
                 with self._quiet_soapy():
@@ -153,6 +173,8 @@ class SDRGeneric:
 
     def set_gain(self, gain: float) -> None:
         self.gain = float(gain)
+        if self.backend == "rfiq":
+            return
         if self.backend == "soapy" and self._soapy_device is not None:
             self._apply_soapy_gain(self._soapy_device, self._soapy_driver(), self.gain)
             return
@@ -176,6 +198,11 @@ class SDRGeneric:
             self.bandwidth = float(bandwidth)
         if gain is not None:
             self.gain = float(gain)
+
+        if self.backend == "rfiq":
+            # The first rfiq daemon integration is receive-only. The daemon owns
+            # tuning; SDR-Shark mirrors the requested values for UI metadata.
+            return
 
         if self.backend != "soapy":
             self._restart_stream()
@@ -212,6 +239,11 @@ class SDRGeneric:
                 return None
             return self._latest_samples_secondary.copy()
 
+    def get_latest_iq_chunk(self) -> np.ndarray:
+        """Return the freshest full-rate IQ chunk, not the plot-sized FFT preview."""
+        with self._lock:
+            return self._latest_iq_chunk.copy()
+
     def mimo_info(self) -> dict[str, Any]:
         active_channels = self._soapy_channels if self.backend == "soapy" else self._gateway_channels
         return {
@@ -224,7 +256,7 @@ class SDRGeneric:
     def iq_tap_info(self) -> dict[str, Any]:
         return {
             "backend": self.backend,
-            "source": "soapy_tap",
+            "source": "rfiq_tap" if self.backend == "rfiq" else "soapy_tap",
             "device_id": self.device_id or self.name or "",
             "iq_format": "i8",
             "center_freq_hz": int(round(self.frequency)),
@@ -261,6 +293,8 @@ class SDRGeneric:
         }
 
     def list_devices(self) -> list[dict[str, Any]]:
+        if self.backend == "rfiq":
+            return [self._rfiq_device()]
         if self.backend == "soapy":
             devices = self._fetch_soapy_devices()
             return [dict(d) for d in devices]
@@ -268,6 +302,15 @@ class SDRGeneric:
         return [dict(d) for d in devices]
 
     def select_device(self, selector: str) -> bool:
+        if self.backend == "rfiq":
+            selected = self._rfiq_device()
+            if selector not in {selected["id"], selected["driver"]}:
+                return False
+            self.device_id = selected["id"]
+            self._selected_device_hint = selected["id"]
+            self._apply_device_limits(selected)
+            return True
+
         if self.backend == "soapy":
             return self._select_soapy_device(selector)
 
@@ -404,6 +447,110 @@ class SDRGeneric:
                 })
         self._devices_cache = devices
         return devices
+
+    def _rfiq_device(self) -> dict[str, Any]:
+        return {
+            "id": "rfiq:0",
+            "driver": "rfiq",
+            "label": f"RF IQ daemon ({self.rfiq_socket_path})",
+            "serial": "",
+            "backend": "rfiq",
+            "freq_min_hz": 1e6,
+            "freq_max_hz": 6e9,
+            "max_sample_rate_sps": 61.44e6,
+            "notes": "External rfiq_daemon CF32 socket stream",
+        }
+
+    def _start_rfiq_stream(self) -> None:
+        self.device_id = "rfiq:0"
+        self._selected_device_hint = self.device_id
+        self._apply_device_limits(self._rfiq_device())
+        self._running = True
+        self._rx_thread = threading.Thread(target=self._rfiq_rx_loop, daemon=True)
+        self._rx_thread.start()
+
+    def _read_exact(self, sock: socket.socket, byte_count: int) -> bytes:
+        chunks: list[bytes] = []
+        remaining = int(byte_count)
+        while remaining > 0:
+            chunk = sock.recv(remaining)
+            if not chunk:
+                raise RuntimeError("rfiq daemon socket closed")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
+    def _connect_rfiq_socket(self) -> socket.socket:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(5.0)
+        sock.connect(self.rfiq_socket_path)
+        sock.settimeout(1.0)
+        return sock
+
+    def _decode_rfiq_frame(self, sock: socket.socket) -> np.ndarray:
+        header_bytes = self._read_exact(sock, self._rfiq_header.size)
+        (
+            magic,
+            version,
+            header_size,
+            fmt,
+            channels,
+            _sequence,
+            _timestamp_ns,
+            sample_count,
+            payload_bytes,
+            center_hz,
+            sample_rate_hz,
+            bandwidth_hz,
+            gain_db,
+        ) = self._rfiq_header.unpack(header_bytes)
+        expected_payload = int(sample_count) * int(channels) * 2 * 4
+        if magic != 0x31465152 or version != 1 or header_size != self._rfiq_header.size or fmt != 1:
+            raise RuntimeError("Invalid rfiq daemon frame header")
+        if channels != 1:
+            raise RuntimeError(f"Unsupported rfiq channel count: {channels}")
+        if payload_bytes != expected_payload:
+            raise RuntimeError("Invalid rfiq daemon payload size")
+        payload = self._read_exact(sock, payload_bytes)
+        raw = np.frombuffer(payload, dtype="<f4")
+        iq = (raw[0::2] + 1j * raw[1::2]).astype(np.complex64, copy=False)
+        self.frequency = float(center_hz)
+        self.sample_rate = float(sample_rate_hz)
+        self.bandwidth = float(bandwidth_hz)
+        self.gain = float(gain_db)
+        return iq
+
+    def _rfiq_rx_loop(self) -> None:
+        while self._running and self._should_run:
+            sock = None
+            try:
+                sock = self._connect_rfiq_socket()
+                self._rfiq_socket = sock
+                while self._running and self._should_run:
+                    iq = self._decode_rfiq_frame(sock)
+                    if self._should_publish_iq_tap():
+                        self._publish_iq_tap(self._complex_to_cs8(iq))
+                    if iq.size >= self.size:
+                        out = iq[: self.size]
+                    else:
+                        out = np.zeros(self.size, dtype=np.complex64)
+                        out[: iq.size] = iq
+                    with self._lock:
+                        self._latest_samples = out.astype(np.complex64, copy=False)
+                        self._latest_samples_secondary = np.zeros(self.size, dtype=np.complex64)
+                        self._latest_iq_chunk = iq.astype(np.complex64, copy=False)
+            except Exception:
+                if not self._should_run:
+                    break
+                time.sleep(0.25)
+            finally:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except Exception:
+                        pass
+                if self._rfiq_socket is sock:
+                    self._rfiq_socket = None
 
     def _default_max_sample_rate(self, driver: str) -> float:
         return {
@@ -690,6 +837,7 @@ class SDRGeneric:
                 with self._lock:
                     self._latest_samples = out.astype(np.complex64, copy=False)
                     self._latest_samples_secondary = secondary_out.astype(np.complex64, copy=False)
+                    self._latest_iq_chunk = iq.astype(np.complex64, copy=False)
             except Exception:
                 if not self._should_run:
                     break

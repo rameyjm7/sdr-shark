@@ -1,12 +1,28 @@
 // Author: Jacob M. Ramey
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Typography, CssBaseline, Box, Chip, Button, Dialog, DialogContent, DialogTitle, IconButton } from '@mui/material';
+import {
+  Typography,
+  CssBaseline,
+  Box,
+  Chip,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  RadioGroup,
+  Radio,
+  FormControlLabel,
+  Checkbox,
+  Divider,
+} from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
 import GpsFixedIcon from '@mui/icons-material/GpsFixed';
 import GpsNotFixedIcon from '@mui/icons-material/GpsNotFixed';
 import SettingsIcon from '@mui/icons-material/Settings';
+import DisplaySettingsIcon from '@mui/icons-material/DisplaySettings';
 import Split from 'split.js';
 import ControlPanel from './components/ControlPanel';
 import GpsDialog from './components/GpsDialog';
@@ -21,6 +37,8 @@ import './App.css';
 const ACTIVITY_LOG_RETENTION_STORAGE_KEY = 'sdrshark_activity_log_retention_sec_v1';
 const LAST_SDR_STORAGE_KEY = 'sdrshark_last_selected_sdr_v1';
 const PANEL_SPLIT_STORAGE_KEY = 'sdrshark_panel_split_v1';
+const DISPLAY_MODE_STORAGE_KEY = 'sdrshark_display_mode_v1';
+const SIGNAL_ACTIVITY_VISIBLE_STORAGE_KEY = 'sdrshark_signal_activity_visible_v1';
 
 const initialActivityLogRetentionSec = () => {
   const saved = Number(localStorage.getItem(ACTIVITY_LOG_RETENTION_STORAGE_KEY));
@@ -40,6 +58,23 @@ const writeLastSdr = (sdrId) => {
     if (sdrId) localStorage.setItem(LAST_SDR_STORAGE_KEY, sdrId);
   } catch (error) {
     // Non-fatal: storage may be disabled.
+  }
+};
+
+const readDisplayMode = () => {
+  try {
+    const saved = localStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
+    return ['fft', 'fft_waterfall', 'waterfall'].includes(saved) ? saved : 'fft_waterfall';
+  } catch (error) {
+    return 'fft_waterfall';
+  }
+};
+
+const readSignalActivityVisible = () => {
+  try {
+    return localStorage.getItem(SIGNAL_ACTIVITY_VISIBLE_STORAGE_KEY) !== '0';
+  } catch (error) {
+    return true;
   }
 };
 
@@ -77,11 +112,10 @@ const App = () => {
     dcSuppress: true,
     decodersAlwaysEnabled: false,
     rfModelClassifierEnabled: false,
-    rfModelClassifierRepoPath: '/home/jake/workspace/SDR/rf-signal-intelligence',
-    rfModelClassifierModelPath: '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
+    rfModelClassifierRepoPath: '/home/jake/workspace/SDR/rf-signal-intelligence-private',
+    rfModelClassifierModelPath: '/home/jake/workspace/SDR/rf-signal-intelligence-private/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
     rfModelClassifierBackend: 'auto',
-    rfModelClassifierEnginePath: '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
-    rfModelClassifierTargetMHz: 2399,
+    rfModelClassifierEnginePath: '/home/jake/workspace/SDR/rf-signal-intelligence-private/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
     rfModelClassifierBandwidthMHz: 20,
     rfModelClassifierIntervalSec: 1,
     rfModelClassifierThreshold: 0.45,
@@ -103,6 +137,9 @@ const App = () => {
   const [verticalLines, setVerticalLines] = useState([]);  // State for vertical lines
   const [horizontalLines, setHorizontalLines] = useState([]);  // State for horizontal lines
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [displayConfigOpen, setDisplayConfigOpen] = useState(false);
+  const [displayMode, setDisplayMode] = useState(readDisplayMode);
+  const [signalActivityVisible, setSignalActivityVisible] = useState(readSignalActivityVisible);
   const [gpsOpen, setGpsOpen] = useState(false);
   const [telemetry, setTelemetry] = useState({
     sdr: 'n/a',
@@ -132,6 +169,7 @@ const App = () => {
     gps: null,
     mimo: null,
     workerSdr: null,
+    systemMetrics: null,
   });
 
 
@@ -213,6 +251,17 @@ const App = () => {
     );
   }, [settings.activityLogRetentionSec]);
 
+  useEffect(() => {
+    localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, displayMode);
+  }, [displayMode]);
+
+  useEffect(() => {
+    localStorage.setItem(SIGNAL_ACTIVITY_VISIBLE_STORAGE_KEY, signalActivityVisible ? '1' : '0');
+    setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+    }, 0);
+  }, [signalActivityVisible]);
+
 
   const addVerticalLines = (frequency, bandwidth) => {
     if (typeof frequency == "string") {
@@ -286,6 +335,11 @@ const App = () => {
   };
 
   useEffect(() => {
+    if (!signalActivityVisible) {
+      setPlotWidth(100);
+      return undefined;
+    }
+
     const adjustPlotWidth = () => {
       const leftPanelWidth = document.getElementById('leftPanel')?.clientWidth || 0;
       const totalWidth = document.getElementById('plotsContainer')?.clientWidth || 1;
@@ -330,7 +384,7 @@ const App = () => {
       splitInstance.destroy();
       window.removeEventListener('resize', adjustPlotWidth);
     };
-  }, []);
+  }, [signalActivityVisible]);
 
   const telemetryChipSx = {
     width: 132,
@@ -387,13 +441,22 @@ const App = () => {
   };
   const bluetoothActive = Boolean(telemetry.bluetooth?.active || scannerProtocolActive(['btc', 'btle', 'bluetooth']));
   const fmActive = Boolean(telemetry.fm?.active || scannerProtocolActive(['fm']));
-  const wifiActive = Boolean(telemetry.wifi?.active || scannerProtocolActive(['wifi']));
+  const wifiDecoderEnabled = telemetry.wifiDecoderEnabled !== false && telemetry.settings?.wifiDecoderEnabled !== false;
+  const wifiActive = Boolean(wifiDecoderEnabled && (telemetry.wifi?.active || scannerProtocolActive(['wifi'])));
   const zigbeeActive = Boolean(telemetry.zigbee?.active || scannerProtocolActive(['zigbee', 'thread']));
   const adsbActive = Boolean(telemetry.adsb?.active || scannerProtocolActive(['adsb']));
   const rtl433Active = Boolean(telemetry.rtl433?.active || scannerProtocolActive(['rtl433', 'subghz']));
   const gpsLock = telemetry.gps?.lock || 'NO';
   const gpsConnected = Boolean(telemetry.gps?.connected);
   const GpsIcon = gpsConnected && gpsLock !== 'NO' ? GpsFixedIcon : GpsNotFixedIcon;
+  const cpuPercent = Number(telemetry.systemMetrics?.cpuPercent);
+  const gpuPercent = Number(telemetry.systemMetrics?.gpuPercent);
+  const memoryPercent = Number(telemetry.systemMetrics?.memoryPercent);
+  const loadAverage = Array.isArray(telemetry.systemMetrics?.loadAverage) ? telemetry.systemMetrics.loadAverage : [];
+  const cpuLabel = Number.isFinite(cpuPercent) ? `${Math.round(cpuPercent)}%` : 'n/a';
+  const gpuLabel = Number.isFinite(gpuPercent) ? `${Math.round(gpuPercent)}%` : 'n/a';
+  const memLabel = Number.isFinite(memoryPercent) ? `${Math.round(memoryPercent)}%` : 'n/a';
+  const loadLabel = Number.isFinite(Number(loadAverage[0])) ? Number(loadAverage[0]).toFixed(1) : 'n/a';
   const modalTitles = {
     scanner: 'Scanner',
     analysis: 'Analysis',
@@ -470,6 +533,21 @@ const App = () => {
             >
               GPS {gpsConnected ? gpsLock : 'OFF'}
             </Button>
+            <IconButton
+              size="small"
+              onClick={() => setDisplayConfigOpen(true)}
+              aria-label="Open display configuration"
+              title="Display configuration"
+              sx={{
+                border: '1px solid #3d556d',
+                borderRadius: '6px',
+                color: '#d9f0ff',
+                width: 34,
+                height: 30,
+              }}
+            >
+              <DisplaySettingsIcon fontSize="small" />
+            </IconButton>
             <Button
               size="small"
               variant="outlined"
@@ -516,6 +594,20 @@ const App = () => {
             label={`Render: ${telemetry.renderEngine || 'CPU'}`}
           />
           <Chip size="small" sx={telemetryChipSx} label={`Latency: ${Math.round(telemetry.latencyMs || 0)} ms`} />
+          <Chip
+            size="small"
+            sx={telemetryChipSx}
+            color={Number.isFinite(cpuPercent) && cpuPercent > 85 ? 'warning' : 'default'}
+            label={`CPU: ${cpuLabel}`}
+            title={`Memory ${memLabel}, load ${loadLabel}`}
+          />
+          <Chip
+            size="small"
+            sx={telemetryChipSx}
+            color={Number.isFinite(gpuPercent) && gpuPercent > 0 ? 'success' : 'default'}
+            label={`GPU: ${gpuLabel}`}
+            title="Jetson GPU load from sysfs when available"
+          />
           <Chip size="small" sx={telemetryWideChipSx} color={(telemetry.staleMs || 0) > 3000 ? 'error' : 'default'} label={`Last data age: ${Math.round(telemetry.staleMs || 0)} ms`} />
           <Chip size="small" sx={telemetryWideChipSx} label={`Time: ${telemetry.frameTime || 'n/a'}`} />
           <Chip
@@ -599,6 +691,7 @@ const App = () => {
               minHeight: 0,
               overflow: 'hidden',
               flex: '0 0 auto',
+              width: signalActivityVisible ? undefined : '100%',
             }}
           >
             <Plots
@@ -611,6 +704,7 @@ const App = () => {
               // updateInterval={updateInterval}
               // waterfallSamples={waterfallSamples}
               showWaterfall={showWaterfall}
+              displayMode={displayMode}
               showSecondTrace={Boolean(settings.showSecondTrace)}
               plotWidth={plotWidth}
               addVerticalLines={addVerticalLines}
@@ -623,17 +717,17 @@ const App = () => {
           <Box
             id="rightPanel"
             sx={{
-              pl: '8px',
+              pl: signalActivityVisible ? '8px' : 0,
               height: '100%',
               minHeight: 0,
               overflow: 'hidden',
-              display: 'flex',
+              display: signalActivityVisible ? 'flex' : 'none',
               flexDirection: 'column',
               flex: '0 0 auto',
             }}
           >
             <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-              <DecodedEventsPanel telemetry={telemetry} settings={settings} />
+              {signalActivityVisible && <DecodedEventsPanel telemetry={telemetry} settings={settings} />}
             </Box>
           </Box>
         </Box>
@@ -719,6 +813,60 @@ const App = () => {
                 </Typography>
               </Box>
             )}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={displayConfigOpen}
+          onClose={() => setDisplayConfigOpen(false)}
+          fullWidth
+          maxWidth="xs"
+          PaperProps={{
+            sx: {
+              bgcolor: '#101418',
+              backgroundImage: 'linear-gradient(145deg, rgba(20, 40, 50, 0.96), rgba(6, 8, 10, 0.98))',
+              border: '1px solid rgba(144,202,249,0.18)',
+            },
+          }}
+        >
+          <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', pb: 1 }}>
+            <Box>
+              <Typography variant="overline" color="text.secondary">SDR Shark</Typography>
+              <Typography variant="h6">Display</Typography>
+            </Box>
+            <IconButton onClick={() => setDisplayConfigOpen(false)} aria-label="Close display configuration">
+              <CloseIcon />
+            </IconButton>
+          </DialogTitle>
+          <DialogContent sx={{ pt: 1.5, pb: 2.5 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+              Choose which live visual layers to render. Decoders and RFML keep running independently.
+            </Typography>
+            <RadioGroup
+              value={displayMode}
+              onChange={(event) => {
+                setDisplayMode(event.target.value);
+                if (!showWaterfall) {
+                  setShowWaterfall(true);
+                  setSettings((prev) => ({ ...prev, showWaterfall: true }));
+                  axios.post('/api/update_settings', { ...settings, showWaterfall: true }).catch(() => {});
+                }
+              }}
+            >
+              <FormControlLabel value="fft" control={<Radio />} label="FFT only" />
+              <FormControlLabel value="fft_waterfall" control={<Radio />} label="FFT / waterfall" />
+              <FormControlLabel value="waterfall" control={<Radio />} label="Waterfall only" />
+            </RadioGroup>
+            <Divider sx={{ my: 1.5, borderColor: 'rgba(144,202,249,0.16)' }} />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={signalActivityVisible}
+                  onChange={(event) => setSignalActivityVisible(event.target.checked)}
+                />
+              }
+              label="Signal Activity"
+            />
           </DialogContent>
         </Dialog>
 

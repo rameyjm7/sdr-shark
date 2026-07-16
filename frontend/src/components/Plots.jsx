@@ -10,6 +10,7 @@ const Plots = ({
   updateInterval,
   showSecondTrace,
   showWaterfall,
+  displayMode,
   minY,
   maxY,
   setMinY,
@@ -78,6 +79,7 @@ const Plots = ({
           setMaxY={setMaxY}
           updateInterval={updateInterval}
           showWaterfall={showWaterfall}
+          displayMode={displayMode}
           showSecondTrace={showSecondTrace}
           verticalLines={verticalLines}  // Pass verticalLines to ChartComponent
           horizontalLines={horizontalLines}

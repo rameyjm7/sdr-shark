@@ -74,6 +74,7 @@ class NoisyDroneModelPlugin:
         self._last_diagnostic: dict[str, Any] = {}
         self._native_event_offset = 0
         self._native_event_inode: tuple[int, int] | None = None
+        self._native_label_history: deque[str] = deque(maxlen=5)
         self._configured = {
             "enabled": False,
             "repo_path": str(DEFAULT_RF_INTELLIGENCE_ROOT),
@@ -116,6 +117,12 @@ class NoisyDroneModelPlugin:
             ),
             "scan_stride_samples": max(
                 1, int(os.getenv("SDR_SHARK_RF_MODEL_SCAN_STRIDE_SAMPLES", "262144") or "262144")
+            ),
+            "native_stability_window": max(
+                1, int(os.getenv("SDR_SHARK_RF_MODEL_NATIVE_STABILITY_WINDOW", "3") or "3")
+            ),
+            "native_stability_votes": max(
+                1, int(os.getenv("SDR_SHARK_RF_MODEL_NATIVE_STABILITY_VOTES", "3") or "3")
             ),
             "submit_interval_floor_sec": max(
                 0.0, float(os.getenv("SDR_SHARK_RF_MODEL_SUBMIT_INTERVAL_FLOOR_SEC", "0.02") or "0.02")
@@ -365,6 +372,7 @@ class NoisyDroneModelPlugin:
             prediction = payload.get("prediction") or {}
             label = str(prediction.get("label") or "")
             confidence = float(prediction.get("confidence") or 0.0)
+            stable_event = self._stabilize_native_event(event, cfg) if event is not None else None
             with self._lock:
                 self._last_error = ""
                 self._last_diagnostic = {
@@ -375,14 +383,37 @@ class NoisyDroneModelPlugin:
                     "seen_at": time.time(),
                 }
                 if event is None:
+                    self._native_label_history.clear()
                     self._status = "native RFML no alert"
+                    self._last_label = ""
+                    self._last_confidence = 0.0
+                elif stable_event is None:
+                    self._status = "native RFML stabilizing"
                     self._last_label = ""
                     self._last_confidence = 0.0
                 else:
                     self._status = "native RFML event"
-                    self._last_label = str(event.get("label") or "")
-                    self._last_confidence = float(event.get("confidence") or 0.0)
-                    self._events.append(event)
+                    self._last_label = str(stable_event.get("label") or "")
+                    self._last_confidence = float(stable_event.get("confidence") or 0.0)
+                    self._events.append(stable_event)
+
+    def _stabilize_native_event(self, event: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any] | None:
+        label = str(event.get("label") or "").strip()
+        if not label:
+            return None
+        window = max(1, int(cfg.get("native_stability_window", 3) or 3))
+        votes_required = max(1, int(cfg.get("native_stability_votes", 2) or 2))
+        if self._native_label_history.maxlen != max(window, votes_required):
+            self._native_label_history = deque(self._native_label_history, maxlen=max(window, votes_required))
+        self._native_label_history.append(label)
+        recent = list(self._native_label_history)[-window:]
+        votes = sum(1 for item in recent if item == label)
+        event["rfml_stability_votes"] = votes
+        event["rfml_stability_window"] = len(recent)
+        event["rfml_stability_required_votes"] = votes_required
+        if len(recent) >= votes_required and votes >= votes_required:
+            return event
+        return None
 
     def _native_event_to_card(self, payload: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any] | None:
         prediction = payload.get("prediction") or {}

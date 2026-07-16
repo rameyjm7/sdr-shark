@@ -16,6 +16,7 @@ const ChartComponent = ({
   setMaxY,
   updateInterval,
   showWaterfall,
+  displayMode = 'fft_waterfall',
   showSecondTrace,
   plotWidth,
   verticalLines,
@@ -33,6 +34,12 @@ const ChartComponent = ({
   const maxWaterfallSamples = 375;
   const chartRendererMode = String(process.env.REACT_APP_SDR_SHARK_CHART_RENDERER || 'gpu').trim().toLowerCase();
   const useGpuCharts = ['gpu', 'webgl', 'opengl'].includes(chartRendererMode);
+  const displayProcessingEnabled = Boolean(showWaterfall);
+  const normalizedDisplayMode = ['fft', 'fft_waterfall', 'waterfall'].includes(displayMode)
+    ? displayMode
+    : 'fft_waterfall';
+  const showSpectrumLayer = displayProcessingEnabled && normalizedDisplayMode !== 'waterfall';
+  const showWaterfallLayer = displayProcessingEnabled && normalizedDisplayMode !== 'fft';
   const signalClassificationOverlaysEnabled = false;
   const signalMarkerHoldMs = 15000;
   const plotMargin = {
@@ -219,7 +226,7 @@ const ChartComponent = ({
           const response = await axios.get('/api/data', {
             params: {
               source: 'main',
-              waterfall: showWaterfall ? 'derive' : 'none',
+              waterfall: showWaterfallLayer ? 'derive' : 'none',
               secondary: traceStyles.secondary.visible ? '1' : '0',
               _ts: Date.now(),
             },
@@ -341,7 +348,7 @@ const ChartComponent = ({
           }
           return next.slice(-safeWaterfallSamples);
         };
-        if (showWaterfall) {
+        if (showWaterfallLayer) {
           if (sanitizedWaterfallData.length > 0 && data?.waterfallMode !== 'derive' && (frameAdvanced || fftChanged)) {
             const latestServerRow = sanitizedWaterfallData[sanitizedWaterfallData.length - 1];
             const targetBins = Math.max(64, Math.min(8192, toFinite(settings.waterfallBinCount, latestServerRow?.length || 2048)));
@@ -449,6 +456,7 @@ const ChartComponent = ({
             gps: data?.gps || null,
             mimo: data?.mimo || null,
             workerSdr: data?.workerSdr || null,
+            systemMetrics: data?.systemMetrics || null,
             secondaryMeta: rawSecondaryMeta,
           });
         }
@@ -461,7 +469,7 @@ const ChartComponent = ({
           setSpectrumNoSignal(true);
         }
         const safeWaterfallSamples = Math.max(1, Math.min(maxWaterfallSamples, toFinite(settings.waterfallSamples, 200)));
-        if (showWaterfall) {
+        if (showWaterfallLayer) {
           setWaterfallData((prev) => {
             const bins = (Array.isArray(prev[0]) && prev[0].length > 0)
               ? prev[0].length
@@ -488,7 +496,7 @@ const ChartComponent = ({
     if (typeof window !== 'undefined' && typeof window.EventSource === 'function') {
       const streamParams = new URLSearchParams({
         source: 'main',
-        waterfall: showWaterfall ? 'derive' : 'none',
+        waterfall: showWaterfallLayer ? 'derive' : 'none',
         interval: String(safeInterval),
         secondary: traceStyles.secondary.visible ? '1' : '0',
       });
@@ -517,11 +525,16 @@ const ChartComponent = ({
       sseHealthyRef.current = false;
       queuedSsePayloadRef.current = null;
     };
-  }, [settings.updateInterval, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, showWaterfall, traceStyles.secondary.visible, onTelemetryUpdate]);
+  }, [settings.updateInterval, setSweepSettings, settings.frequency, settings.sampleRate, settings.sdr, showWaterfallLayer, traceStyles.secondary.visible, onTelemetryUpdate]);
 
 
 
   useEffect(() => {
+    if (!displayProcessingEnabled) {
+      setFftMaxData([]);
+      setPersistanceData([]);
+      return undefined;
+    }
     const fetchData = async () => {
       try {
         const response = await axios.get('/api/data_ext', {
@@ -542,7 +555,7 @@ const ChartComponent = ({
     fetchData();
     const interval = setInterval(fetchData, 500);
     return () => clearInterval(interval);
-  }, [updateInterval, settings.frequency, settings.sampleRate]);
+  }, [updateInterval, settings.frequency, settings.sampleRate, displayProcessingEnabled]);
 
   useEffect(() => {
     setQuickCenterMHz(toFinite(settings.frequency, 0));
@@ -550,14 +563,14 @@ const ChartComponent = ({
   }, [settings.frequency, settings.sampleRate]);
 
   useEffect(() => {
-    if (!showWaterfall) {
+    if (!showWaterfallLayer) {
       setWaterfallData([]);
       setWaterfallNoSignal(false);
       return;
     }
     waterfallEnabledAtRef.current = Date.now();
     setWaterfallData([]);
-  }, [showWaterfall]);
+  }, [showWaterfallLayer]);
 
   useEffect(() => {
     setTraceStyles((prev) => ({
@@ -866,7 +879,7 @@ const ChartComponent = ({
   const renderedWaterfallCellCount = renderedWaterfallData.length * waterfallCols;
   const maxClassifiedWaterfallCells = 4_000_000;
   const waterfallSmooth = cellCount <= 1800000 ? 'best' : false;
-  const waterfallWarmup = showWaterfall && (Date.now() - waterfallEnabledAtRef.current) < 1200;
+  const waterfallWarmup = showWaterfallLayer && (Date.now() - waterfallEnabledAtRef.current) < 1200;
   const peakAnnotations = generateAnnotations(peaks, baseFreq, freqStep);
   const peakNameAnnotations = signalClassificationOverlaysEnabled ? generateSignalNameAnnotations(peaks) : [];
   const classifiedSignalMarkers = useMemo(
@@ -912,7 +925,7 @@ const ChartComponent = ({
   const waterfallZMax = waterfallCenterDb + (waterfallDbWindow / 2);
   const classifiedWaterfallMarks = useMemo(() => {
     if (
-      !showWaterfall ||
+      !showWaterfallLayer ||
       waterfallWarmup ||
       renderedWaterfallCellCount > maxClassifiedWaterfallCells ||
       !activeClassifiedSignalMarkers.length ||
@@ -983,7 +996,7 @@ const ChartComponent = ({
     waterfallFreqStep,
     requestedWaterfallRows,
     waterfallZMin,
-    showWaterfall,
+    showWaterfallLayer,
     waterfallWarmup,
     renderedWaterfallCellCount,
   ]);
@@ -1282,6 +1295,11 @@ const ChartComponent = ({
   };
 
   const applyQuickTune = async (nextCenterMHz, nextSpanMHz) => {
+    if (settings.backendReadOnly || settings.sdrBackend === 'rfiq') {
+      setQuickCenterMHz(safeFrequencyMHz);
+      setQuickSpanMHz(safeSampleRateMHz);
+      return;
+    }
     const safeCenterMHz = Math.max(1, toFinite(nextCenterMHz, safeFrequencyMHz));
     const safeSpanMHz = Math.max(0.2, toFinite(nextSpanMHz, safeSampleRateMHz));
     const lockBw = Boolean(settings.lockBandwidthSampleRate);
@@ -1320,6 +1338,7 @@ const ChartComponent = ({
   }, [settings.frequency, settings.sampleRate, settings.bandwidth]);
 
   const nudgeFrequency = (deltaMHz) => {
+    if (settings.backendReadOnly || settings.sdrBackend === 'rfiq') return;
     applyQuickTune(toFinite(quickCenterMHz, safeFrequencyMHz) + deltaMHz, quickSpanMHz);
   };
 
@@ -1424,6 +1443,27 @@ const ChartComponent = ({
     pushSettings({ showSecondTrace: showSecond });
   };
 
+  const setDisplayProcessingEnabled = (enabled) => {
+    const checked = Boolean(enabled);
+    waterfallEnabledAtRef.current = Date.now();
+    setWaterfallData([]);
+    setWaterfallNoSignal(false);
+    setSpectrumNoSignal(false);
+    if (!checked) {
+      setFftData([]);
+      setSecondaryFftData([]);
+      setFftMaxData([]);
+      setPersistanceData([]);
+      setTraceStyles((prev) => ({ ...prev, live: { ...prev.live, opacity: 0 } }));
+    } else {
+      setTraceStyles((prev) => ({
+        ...prev,
+        live: { ...prev.live, opacity: Math.max(0.35, toFinite(prev.live.opacity, 1)) },
+      }));
+    }
+    pushSettings({ showWaterfall: checked });
+  };
+
   const resetZoom = () => {
     if (spectrumPlotRef.current && window.Plotly) {
       window.Plotly.relayout(spectrumPlotRef.current, {
@@ -1432,6 +1472,8 @@ const ChartComponent = ({
       });
     }
   };
+
+  const receiverReadOnly = Boolean(settings.backendReadOnly || settings.sdrBackend === 'rfiq');
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -1458,6 +1500,7 @@ const ChartComponent = ({
         event.preventDefault();
         resetZoom();
       } else if (event.key.toLowerCase() === 'g') {
+        if (receiverReadOnly) return;
         event.preventDefault();
         const nextGain = prompt('Set gain (dB):', String(toFinite(settings.gain, 10)));
         if (nextGain !== null) {
@@ -1481,7 +1524,9 @@ const ChartComponent = ({
           onChange={(e) => setQuickCenterMHz(e.target.value)}
           onKeyDown={handleQuickTuneKeyDown}
           onBlur={() => applyQuickTune(quickCenterMHz, quickSpanMHz)}
-          style={quickTuneInputStyle}
+          disabled={receiverReadOnly}
+          title={receiverReadOnly ? 'RF IQ daemon owns tuning for now' : ''}
+          style={{ ...quickTuneInputStyle, opacity: receiverReadOnly ? 0.55 : 1 }}
         />
         <label style={quickTuneLabelStyle}>Span (MHz)</label>
         <input
@@ -1491,20 +1536,23 @@ const ChartComponent = ({
           onChange={(e) => setQuickSpanMHz(e.target.value)}
           onKeyDown={handleQuickTuneKeyDown}
           onBlur={() => applyQuickTune(quickCenterMHz, quickSpanMHz)}
-          style={quickTuneInputStyle}
+          disabled={receiverReadOnly}
+          title={receiverReadOnly ? 'RF IQ daemon owns tuning for now' : ''}
+          style={{ ...quickTuneInputStyle, opacity: receiverReadOnly ? 0.55 : 1 }}
         />
         <label style={quickTuneLabelStyle}>Step</label>
         <select
           value={quickStepMHz}
           onChange={(e) => setQuickStepMHz(toFinite(e.target.value, 1))}
-          style={quickTuneSelectStyle}
+          disabled={receiverReadOnly}
+          style={{ ...quickTuneSelectStyle, opacity: receiverReadOnly ? 0.55 : 1 }}
         >
           {[0.025, 0.1, 0.5, 1, 2, 5, 10].map((step) => (
             <option key={step} value={step}>{step} MHz</option>
           ))}
         </select>
-        <button type="button" style={quickTuneButtonStyle} onClick={() => nudgeFrequency(-quickStepMHz)}> -Step </button>
-        <button type="button" style={quickTuneButtonStyle} onClick={() => nudgeFrequency(quickStepMHz)}> +Step </button>
+        <button type="button" style={{ ...quickTuneButtonStyle, opacity: receiverReadOnly ? 0.55 : 1 }} disabled={receiverReadOnly} onClick={() => nudgeFrequency(-quickStepMHz)}> -Step </button>
+        <button type="button" style={{ ...quickTuneButtonStyle, opacity: receiverReadOnly ? 0.55 : 1 }} disabled={receiverReadOnly} onClick={() => nudgeFrequency(quickStepMHz)}> +Step </button>
         <span style={{ ...quickTuneLabelStyle, marginLeft: 8 }}>
           RBW est: {(safeBandwidthHz / Math.max(1, safeBins) / 1e3).toFixed(1)} kHz/bin
         </span>
@@ -1598,16 +1646,10 @@ const ChartComponent = ({
           <label style={quickTuneLabelStyle}>
             <input
               type="checkbox"
-              checked={Boolean(showWaterfall)}
-              onChange={(e) => {
-                const checked = Boolean(e.target.checked);
-                waterfallEnabledAtRef.current = Date.now();
-                setWaterfallData([]);
-                setWaterfallNoSignal(false);
-                pushSettings({ showWaterfall: checked });
-              }}
+              checked={displayProcessingEnabled}
+              onChange={(e) => setDisplayProcessingEnabled(e.target.checked)}
             />
-            WF
+            Display
           </label>
           <label style={quickTuneLabelStyle}>W</label>
           <input
@@ -1629,11 +1671,19 @@ const ChartComponent = ({
           <label style={quickTuneLabelStyle}>Op</label>
           <input
             type="range"
-            min="0.1"
+            min="0"
             max="1"
             step="0.05"
-            value={traceStyles.live.opacity}
-            onChange={(e) => setTraceStyles((prev) => ({ ...prev, live: { ...prev.live, opacity: toFinite(e.target.value, 1) } }))}
+            value={displayProcessingEnabled ? traceStyles.live.opacity : 0}
+            onChange={(e) => {
+              const opacity = toFinite(e.target.value, 1);
+              setTraceStyles((prev) => ({ ...prev, live: { ...prev.live, opacity } }));
+              if (opacity <= 0) {
+                setDisplayProcessingEnabled(false);
+              } else if (!displayProcessingEnabled) {
+                setDisplayProcessingEnabled(true);
+              }
+            }}
           />
         </div>
         {(markerPrimary || markerSecondary) && (
@@ -1644,7 +1694,19 @@ const ChartComponent = ({
             <button type="button" style={quickTuneButtonStyle} onClick={clearMarkers}>Clear Markers</button>
           </div>
         )}
-        {useGpuCharts ? (
+        {!displayProcessingEnabled ? (
+          <div style={{ ...displayOffPanelStyle, width: `${plotWidth}vw` }}>
+            <div style={displayOffTitleStyle}>FFT and waterfall display are off</div>
+            <div style={displayOffTextStyle}>
+              IQ capture and enabled decoders keep running. Drag Op above zero or enable Display to resume plots.
+            </div>
+          </div>
+        ) : !showSpectrumLayer ? (
+          <div style={{ ...displayOffPanelStyle, width: `${plotWidth}vw`, height: '10vh', minHeight: 74 }}>
+            <div style={displayOffTitleStyle}>FFT hidden</div>
+            <div style={displayOffTextStyle}>Waterfall-only mode is active.</div>
+          </div>
+        ) : useGpuCharts ? (
           <GpuSpectrum
             data={traceStyles.live.visible ? fftData : []}
             secondaryData={traceStyles.secondary.visible ? secondaryFftData : []}
@@ -1659,7 +1721,7 @@ const ChartComponent = ({
             secondaryFreqStopHz={secondaryBaseFreq + secondaryBandwidthHz}
             margin={plotMargin}
             width={`${plotWidth}vw`}
-            height={showWaterfall ? '42vh' : '78vh'}
+            height={showWaterfallLayer ? '42vh' : '78vh'}
             opacity={traceStyles.live.opacity}
             widthScale={traceStyles.live.width}
             markers={[markerPrimary, markerSecondary]}
@@ -1794,7 +1856,7 @@ const ChartComponent = ({
             ].filter(Boolean),
           }}
           config={{ responsive: true }}
-          style={{ ...sharedPlotStyle, height: showWaterfall ? '42vh' : '78vh' }}
+          style={{ ...sharedPlotStyle, height: showWaterfallLayer ? '42vh' : '78vh' }}
           onClick={handlePlotClick}
           onInitialized={(figure, graphDiv) => {
             spectrumPlotRef.current = graphDiv;
@@ -1805,7 +1867,7 @@ const ChartComponent = ({
           />
         )}
       </div>
-      {showWaterfall && (
+      {showWaterfallLayer && (
         <div style={{ position: 'relative' }}>
           <div style={waterfallDrawerContainerStyle}>
             <button
@@ -2058,6 +2120,35 @@ const waterfallDrawerContainerStyle = {
   display: 'flex',
   alignItems: 'stretch',
   gap: 0,
+};
+
+const displayOffPanelStyle = {
+  height: '78vh',
+  maxWidth: '100%',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: '1px dashed rgba(124, 247, 212, 0.35)',
+  borderRadius: 12,
+  background: 'linear-gradient(135deg, rgba(5, 18, 24, 0.88), rgba(2, 5, 8, 0.94))',
+  color: '#dffff8',
+  boxSizing: 'border-box',
+};
+
+const displayOffTitleStyle = {
+  fontSize: 18,
+  fontWeight: 800,
+  letterSpacing: 0.2,
+};
+
+const displayOffTextStyle = {
+  marginTop: 8,
+  maxWidth: 520,
+  color: '#9fb8bf',
+  fontSize: 13,
+  textAlign: 'center',
+  lineHeight: 1.45,
 };
 
 const waterfallToolbarStyle = (open) => ({

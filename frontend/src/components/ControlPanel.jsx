@@ -52,6 +52,7 @@ const fallbackDeviceForSdr = (sdrId) => {
     airspy: { label: 'Airspy', freq_min_hz: 24_000_000, freq_max_hz: 1_800_000_000, max_sample_rate_sps: 10_000_000 },
     rtlsdr: { label: 'RTL-SDR', freq_min_hz: 24_000_000, freq_max_hz: 1_766_000_000, max_sample_rate_sps: 3_200_000 },
     sidekiq: { label: 'Sidekiq', freq_min_hz: 70_000_000, freq_max_hz: 6_000_000_000, max_sample_rate_sps: 61_440_000 },
+    rfiq: { label: 'RF IQ daemon', freq_min_hz: 1_000_000, freq_max_hz: 6_000_000_000, max_sample_rate_sps: 61_440_000 },
   };
   if (!defaults[driver]) return null;
   return { id: sdrId, driver, ...defaults[driver] };
@@ -101,6 +102,8 @@ const ControlPanel = ({
   const discoveredSelectedDevice = availableSdrs.find((d) => d.id === sdr) || null;
   const selectedDevice = discoveredSelectedDevice || fallbackDeviceForSdr(sdr);
   const savedSelectedDevice = selectedDevice || { id: sdr, label: sdr };
+  const selectedBackend = settings.sdrBackend || 'soapy';
+  const backendReadOnly = Boolean(settings.backendReadOnly || selectedBackend === 'rfiq');
   const displayedSdrs = discoveredSelectedDevice || !sdr
     ? availableSdrs
     : [{ ...savedSelectedDevice, id: sdr, label: `${savedSelectedDevice.label || sdr} (last selected)` }, ...availableSdrs];
@@ -236,12 +239,13 @@ const ControlPanel = ({
           : String(selectedSdr || '').toLowerCase().startsWith('bladerf'),
         dcSuppress: typeof data.dcSuppress === 'boolean' ? data.dcSuppress : true,
         decodersAlwaysEnabled: typeof data.decodersAlwaysEnabled === 'boolean' ? data.decodersAlwaysEnabled : false,
+        sdrBackend: data.sdrBackend || 'soapy',
+        backendReadOnly: Boolean(data.backendReadOnly),
         rfModelClassifierEnabled: typeof data.rfModelClassifierEnabled === 'boolean' ? data.rfModelClassifierEnabled : false,
-        rfModelClassifierRepoPath: data.rfModelClassifierRepoPath || '/home/jake/workspace/SDR/rf-signal-intelligence',
-        rfModelClassifierModelPath: data.rfModelClassifierModelPath || '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
+        rfModelClassifierRepoPath: data.rfModelClassifierRepoPath || '/home/jake/workspace/SDR/rf-signal-intelligence-private',
+        rfModelClassifierModelPath: data.rfModelClassifierModelPath || '/home/jake/workspace/SDR/rf-signal-intelligence-private/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras',
         rfModelClassifierBackend: data.rfModelClassifierBackend || 'auto',
-        rfModelClassifierEnginePath: data.rfModelClassifierEnginePath || '/home/jake/workspace/SDR/rf-signal-intelligence/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
-        rfModelClassifierTargetMHz: toFinite(data.rfModelClassifierTargetMHz, 2399),
+        rfModelClassifierEnginePath: data.rfModelClassifierEnginePath || '/home/jake/workspace/SDR/rf-signal-intelligence-private/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine',
         rfModelClassifierBandwidthMHz: toFinite(data.rfModelClassifierBandwidthMHz, 20),
         rfModelClassifierIntervalSec: toFinite(data.rfModelClassifierIntervalSec, 1),
         rfModelClassifierThreshold: toFinite(data.rfModelClassifierThreshold, 0.45),
@@ -381,6 +385,24 @@ const ControlPanel = ({
       setSdr(prevSdr);
       setSettings(prevSettings);
       updateStatus(`Error changing SDR to ${newSdr}`, 'error');
+    }
+  };
+
+  const handleBackendChange = async (e) => {
+    const backend = e.target.value;
+    updateStatus(`Switching backend to ${backend}...`, 'info');
+    setSettings({ ...settings, sdrBackend: backend, backendReadOnly: backend === 'rfiq' });
+    try {
+      const response = await axios.post('/api/sdr_backend', { backend });
+      if (!response?.data?.success) {
+        throw new Error(response?.data?.error || `Failed to switch backend to ${backend}`);
+      }
+      await fetchSettings({ refreshDevices: true });
+      updateStatus(`Backend switched to ${backend}`, 'success');
+    } catch (error) {
+      console.error('Error changing backend:', error);
+      updateStatus(`Error switching backend to ${backend}`, 'error');
+      await fetchSettings({ refreshDevices: true });
     }
   };
 
@@ -537,6 +559,17 @@ const ControlPanel = ({
         {tabIndex === 0 && (
           <>
             <Typography variant="body1">Select SDR:</Typography>
+            <Box sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+              <Typography variant="body2" sx={{ minWidth: 78 }}>Backend:</Typography>
+              <Select size="small" value={selectedBackend} onChange={handleBackendChange} sx={{ flex: 1 }}>
+                <MenuItem value="soapy">SoapySDR direct</MenuItem>
+                <MenuItem value="gateway">sdr-gateway</MenuItem>
+                <MenuItem value="rfiq">RF IQ daemon</MenuItem>
+              </Select>
+              {backendReadOnly && (
+                <Chip size="small" color="warning" variant="outlined" label="daemon owns tuning" />
+              )}
+            </Box>
             <Select value={sdr || ''} onChange={handleSdrChange} fullWidth disabled={displayedSdrs.length === 0}>
               {displayedSdrs.map((device) => (
                 <MenuItem key={device.id} value={device.id}>
@@ -576,6 +609,7 @@ const ControlPanel = ({
                   size="small"
                   label={`${freq.toFixed(3)} MHz`}
                   onClick={() => tuneRecentFrequency(freq)}
+                  disabled={backendReadOnly}
                   variant="outlined"
                 />
               ))}
@@ -586,6 +620,7 @@ const ControlPanel = ({
               handleChange={handleChange}
               handleKeyPress={handleKeyPress}
               setSettings={setSettings}
+              backendReadOnly={backendReadOnly}
             />
           </>
         )}

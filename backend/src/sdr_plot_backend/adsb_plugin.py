@@ -115,7 +115,7 @@ class AdsbGatewayPlugin:
 
     def _should_decode(self, info: dict[str, Any]) -> bool:
         backend = info.get("backend")
-        if backend not in {"gateway", "soapy", "replay"}:
+        if backend not in {"gateway", "soapy", "replay", "rfiq"}:
             return False
         center = int(info.get("center_freq_hz") or 0)
         rate = int(info.get("sample_rate_sps") or 0)

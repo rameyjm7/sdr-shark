@@ -559,7 +559,7 @@ const eventDetail = (event) => {
     const parts = [];
       if (event?.label) parts.push(`prediction ${event.label}`);
     if (Number.isFinite(confidence)) parts.push(`${(confidence * 100).toFixed(1)}% confidence`);
-    if (event?.target_mhz) parts.push(`${Number(event.target_mhz).toFixed(3)} MHz target`);
+    if (event?.target_mhz) parts.push(`${Number(event.target_mhz).toFixed(3)} MHz tuned`);
     if (event?.power_db !== undefined) parts.push(`${Number(event.power_db).toFixed(1)} dB capture power`);
     const rfuav = rfuavStatusLabel(event);
     if (rfuav) parts.push(rfuav);

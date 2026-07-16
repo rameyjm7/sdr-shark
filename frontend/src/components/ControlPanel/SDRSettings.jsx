@@ -15,7 +15,7 @@ import {
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import axios from 'axios';
 
-const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, setSettings }) => {
+const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, setSettings, backendReadOnly = false }) => {
   const toFinite = (value, fallback) => {
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
@@ -39,7 +39,6 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
   const rfModelClassifierModelPath = settings.rfModelClassifierModelPath || `${rfModelClassifierRepoPath}/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras`;
   const rfModelClassifierBackend = settings.rfModelClassifierBackend || 'auto';
   const rfModelClassifierEnginePath = settings.rfModelClassifierEnginePath || `${rfModelClassifierRepoPath}/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine`;
-  const rfModelClassifierTargetMHz = toFinite(settings.rfModelClassifierTargetMHz, 2399);
   const rfModelClassifierBandwidthMHz = toFinite(settings.rfModelClassifierBandwidthMHz, 20);
   const rfModelClassifierIntervalSec = toFinite(settings.rfModelClassifierIntervalSec, 1);
   const rfModelClassifierThreshold = toFinite(settings.rfModelClassifierThreshold, 0.45);
@@ -55,7 +54,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
 
   // Effect to handle bandwidth update when sample rate changes
   useEffect(() => {
-    if (lockBandwidthSampleRate && bandwidth !== sampleRate) {
+    if (!backendReadOnly && lockBandwidthSampleRate && bandwidth !== sampleRate) {
       handleChange({
         target: {
           name: 'bandwidth',
@@ -63,7 +62,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
         },
       });
     }
-  }, [sampleRate, lockBandwidthSampleRate, bandwidth, handleChange]);
+  }, [sampleRate, lockBandwidthSampleRate, bandwidth, handleChange, backendReadOnly]);
 
   const handleSecondTraceToggle = (e) => {
     setSettings((prevSettings) => ({
@@ -163,6 +162,15 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
         </AccordionSummary>
         <AccordionDetails sx={{ px: 1.5, pb: 1.5 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
+            {backendReadOnly && (
+              <Chip
+                size="small"
+                color="warning"
+                variant="outlined"
+                label="RF IQ daemon mode: tuning is controlled by rfiq_daemon"
+                sx={{ mb: 1 }}
+              />
+            )}
             <TextField
               size="small"
               margin="dense"
@@ -175,7 +183,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               variant="outlined"
               InputLabelProps={{ shrink: true }}
               inputProps={{ step: 0.1 }}
-              disabled={sweepingEnabled}
+              disabled={sweepingEnabled || backendReadOnly}
               sx={{ flex: 1, mr: 2 }}
             />
             <TextField
@@ -190,6 +198,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               variant="outlined"
               InputLabelProps={{ shrink: true }}
               inputProps={{ step: 1 }}
+              disabled={backendReadOnly}
               sx={{ flex: 1, ml: 2 }}
             />
           </Box>
@@ -206,7 +215,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               variant="outlined"
               InputLabelProps={{ shrink: true }}
               inputProps={{ step: 0.1 }}
-              disabled={sweepingEnabled}
+              disabled={sweepingEnabled || backendReadOnly}
               sx={{ flex: 1, mr: 2 }}
             />
             <TextField
@@ -221,7 +230,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               variant="outlined"
               InputLabelProps={{ shrink: true }}
               inputProps={{ step: 0.1 }}
-              disabled={sweepingEnabled || lockBandwidthSampleRate}
+              disabled={sweepingEnabled || lockBandwidthSampleRate || backendReadOnly}
               sx={{ flex: 1, ml: 2 }}
             />
           </Box>
@@ -233,6 +242,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
                   onChange={handleChange}
                   name="lockBandwidthSampleRate"
                   color="primary"
+                  disabled={backendReadOnly}
                 />
               }
               label="Lock Bandwidth to Sample Rate"
@@ -244,6 +254,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
                   onChange={handleChange}
                   name="dcSuppress"
                   color="primary"
+                  disabled={backendReadOnly}
                 />
               }
               label="Suppress DC Spike"
@@ -302,7 +313,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
               label="Run NoisyDroneRF classifier on the live IQ stream"
             />
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 5 }}>
-              Uses the current SDR-Shark samples when the configured target frequency is inside the receive passband. TensorRT is preferred when an engine is configured; Keras remains available as a fallback.
+              Uses the current tuned center/passband. TensorRT is preferred when an engine is configured; Keras remains available as a fallback.
             </Typography>
           </Box>
           <TextField
@@ -360,20 +371,6 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
             InputLabelProps={{ shrink: true }}
           />
           <Box display="flex" justifyContent="space-between" alignItems="center" sx={{ mt: 0.5, gap: 1 }}>
-            <TextField
-              size="small"
-              margin="dense"
-              label="Target (MHz)"
-              name="rfModelClassifierTargetMHz"
-              type="number"
-              value={rfModelClassifierTargetMHz}
-              onChange={handleChange}
-              onKeyPress={handleKeyPress}
-              variant="outlined"
-              InputLabelProps={{ shrink: true }}
-              inputProps={{ step: 0.001 }}
-              sx={{ flex: 1 }}
-            />
             <TextField
               size="small"
               margin="dense"

@@ -7,6 +7,7 @@ from werkzeug.utils import secure_filename
 import os
 import numpy as np
 import json
+from pathlib import Path
 from flask import Blueprint, jsonify, request, current_app, Response
 
 from sdr_plot_backend.adsb_plugin import AdsbGatewayPlugin
@@ -64,6 +65,13 @@ scanner_plan = {
     'receiver_states': {},
     'error': None,
 }
+system_metrics_lock = threading.Lock()
+system_metrics_cache = {
+    'updated_at': 0.0,
+    'cpu_prev': None,
+    'gpu_path': None,
+    'payload': {},
+}
 bluetooth_plugin = BluetoothGatewayPlugin()
 fm_plugin = FmBroadcastPlugin()
 wifi_plugin = WiFiGatewayPlugin()
@@ -77,6 +85,108 @@ live_sdr = None
 replay_sdr = None
 live_state = None
 replay_lock = threading.Lock()
+
+
+def _read_proc_stat_cpu():
+    try:
+        with open('/proc/stat', 'r', encoding='utf-8') as fh:
+            parts = fh.readline().strip().split()
+        if not parts or parts[0] != 'cpu':
+            return None
+        values = [int(value) for value in parts[1:]]
+        idle = values[3] + (values[4] if len(values) > 4 else 0)
+        total = sum(values)
+        return total, idle
+    except Exception:
+        return None
+
+
+def _read_meminfo_percent():
+    try:
+        info = {}
+        with open('/proc/meminfo', 'r', encoding='utf-8') as fh:
+            for line in fh:
+                key, _, rest = line.partition(':')
+                value = rest.strip().split()[0]
+                info[key] = float(value)
+        total = info.get('MemTotal', 0.0)
+        available = info.get('MemAvailable', 0.0)
+        if total <= 0:
+            return None
+        return max(0.0, min(100.0, (1.0 - (available / total)) * 100.0))
+    except Exception:
+        return None
+
+
+def _read_loadavg():
+    try:
+        with open('/proc/loadavg', 'r', encoding='utf-8') as fh:
+            parts = fh.read().strip().split()
+        return [float(parts[idx]) for idx in range(min(3, len(parts)))]
+    except Exception:
+        return []
+
+
+def _read_jetson_gpu_percent():
+    cached_path = system_metrics_cache.get('gpu_path')
+    candidates = [cached_path] if cached_path else []
+    candidates.extend([
+        '/sys/devices/platform/17000000.ga10b/load',
+        '/sys/devices/platform/host1x/17000000.ga10b/load',
+        '/sys/devices/gpu.0/load',
+        '/sys/kernel/debug/gpu.0/load',
+        '/sys/devices/platform/gpu.0/load',
+    ])
+    seen = set()
+    for path in candidates:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            with open(path, 'r', encoding='utf-8') as fh:
+                raw = fh.read().strip()
+            if not raw:
+                continue
+            value = float(raw.split()[0])
+            # Jetson sysfs GPU load is commonly permille.
+            if value > 100.0:
+                value = value / 10.0
+            system_metrics_cache['gpu_path'] = path
+            return max(0.0, min(100.0, value))
+        except Exception:
+            continue
+    return None
+
+
+def _system_metrics_snapshot():
+    now = time.monotonic()
+    with system_metrics_lock:
+        cached_at = float(system_metrics_cache.get('updated_at') or 0.0)
+        if (now - cached_at) < 1.0 and system_metrics_cache.get('payload'):
+            return dict(system_metrics_cache['payload'])
+
+        cpu_now = _read_proc_stat_cpu()
+        cpu_prev = system_metrics_cache.get('cpu_prev')
+        cpu_percent = None
+        if cpu_now is not None and cpu_prev is not None:
+            total_delta = cpu_now[0] - cpu_prev[0]
+            idle_delta = cpu_now[1] - cpu_prev[1]
+            if total_delta > 0:
+                cpu_percent = max(0.0, min(100.0, (1.0 - (idle_delta / total_delta)) * 100.0))
+        if cpu_now is not None:
+            system_metrics_cache['cpu_prev'] = cpu_now
+
+        payload = {
+            'cpuPercent': cpu_percent,
+            'gpuPercent': _read_jetson_gpu_percent(),
+            'memoryPercent': _read_meminfo_percent(),
+            'loadAverage': _read_loadavg(),
+            'updatedAt': time.time(),
+        }
+        system_metrics_cache['payload'] = payload
+        system_metrics_cache['updated_at'] = now
+        return dict(payload)
+rfuav_center_cache = None
 
 
 def _quantize_mhz(value, step_mhz=0.05):
@@ -399,8 +509,14 @@ def _stop_protocol_plugins():
     fm_plugin.stop()
     noisy_drone_plugin.stop()
 
+def _decoder_protocol_catalog() -> set[str]:
+    protocols = {'btc', 'btle', 'bluetooth', 'wifi', 'zigbee', 'thread', 'adsb', 'fm', 'rtl433', 'subghz'}
+    if not bool(getattr(vars, 'wifi_decoder_enabled', False)):
+        protocols.discard('wifi')
+    return protocols
+
 def _active_decoder_protocols() -> set[str]:
-    all_protocols = {'btc', 'btle', 'bluetooth', 'wifi', 'zigbee', 'thread', 'adsb', 'fm', 'rtl433', 'subghz'}
+    all_protocols = _decoder_protocol_catalog()
     if bool(getattr(vars, 'decoders_always_enabled', False)):
         return all_protocols
     with scanner_plan_lock:
@@ -426,16 +542,18 @@ def _active_decoder_protocols() -> set[str]:
     }
     if 'thread' in protocols:
         protocols.add('zigbee')
+    protocols &= all_protocols
     return protocols
 
 def _receiver_protocols(receiver) -> set[str]:
-    all_protocols = {'btc', 'btle', 'bluetooth', 'wifi', 'zigbee', 'thread', 'adsb', 'fm', 'rtl433', 'subghz'}
+    all_protocols = _decoder_protocol_catalog()
     if bool(getattr(vars, 'decoders_always_enabled', False)) and receiver == 'main':
         return all_protocols
     step = _active_scan_step_for_receiver(receiver)
     protocols = {str(protocol).strip().lower() for protocol in step.get('protocols') or [] if str(protocol).strip()}
     if 'thread' in protocols:
         protocols.add('zigbee')
+    protocols &= all_protocols
     return protocols
 
 def _decoder_enabled(protocols: set[str], *names: str) -> bool:
@@ -462,6 +580,40 @@ def _decoder_step_for(*names):
         if _decoder_enabled(protocols, *names):
             return protocols, _active_scan_step_for_receiver(receiver), receiver
     return set(), {}, ''
+
+
+def _rfuav_center_frequencies_hz() -> list[float]:
+    global rfuav_center_cache
+    if rfuav_center_cache is not None:
+        return rfuav_center_cache
+    centers = set()
+    path = Path(__file__).resolve().parent / "data" / "rfuav_centers.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for rows in (data.get("by_family") or {}).values():
+            for row in rows or []:
+                hz = float(row.get("center_frequency_hz") or 0.0)
+                if hz > 0:
+                    centers.add(hz)
+    except Exception:
+        centers = set()
+    rfuav_center_cache = sorted(centers)
+    return rfuav_center_cache
+
+
+def _rf_model_passband_enabled(center_freq_hz: float, sample_rate_hz: float) -> bool:
+    if not bool(getattr(vars, 'rf_model_classifier_enabled', False)):
+        return False
+    half_bw = max(0.0, float(sample_rate_hz or 0.0)) / 2.0
+    center = float(center_freq_hz or 0.0)
+    if center <= 0.0 or half_bw <= 0.0:
+        return False
+    # Give the gate a small edge cushion so the model can still classify a
+    # channelized 20 MHz window near the side of a wider receive span.
+    margin_hz = max(2_000_000.0, min(10_000_000.0, half_bw * 0.15))
+    low = center - half_bw - margin_hz
+    high = center + half_bw + margin_hz
+    return any(low <= target <= high for target in _rfuav_center_frequencies_hz())
 
 
 def downsample(data, target_length=256):
@@ -511,6 +663,7 @@ def generate_fft_data():
     fft_max = None
     fft_persist_data = None  # Initialize persistence trace
     persistence_decay = vars.persistence_decay  # Fetch decay factor (e.g., 0.9)
+    decoder_plugins_idle = False
     
     while running:
         try:
@@ -525,49 +678,92 @@ def generate_fft_data():
 
             # Capture and process FFT samples
             capture_samples()
-            noisy_drone_plugin.configure(
-                enabled=bool(getattr(vars, 'rf_model_classifier_enabled', False)),
-                repo_path=getattr(vars, 'rf_model_classifier_repo_path', None),
-                model_path=getattr(vars, 'rf_model_classifier_model_path', None),
-                backend=getattr(vars, 'rf_model_classifier_backend', None),
-                engine_path=getattr(vars, 'rf_model_classifier_engine_path', None),
-                target_freq_hz=float(getattr(vars, 'rf_model_classifier_target_mhz', 2399.0) or 0.0) * 1e6,
-                sample_rate_hz=float(getattr(vars, 'rf_model_classifier_bandwidth_mhz', 20.0) or 20.0) * 1e6,
-                interval_sec=float(getattr(vars, 'rf_model_classifier_interval_sec', 1.0) or 1.0),
-                confidence_threshold=float(getattr(vars, 'rf_model_classifier_threshold', 0.45) or 0.45),
-            )
-            noisy_drone_plugin.submit_iq(
-                sample_buffer,
-                center_freq_hz=float(vars.sdr_frequency()),
-                sample_rate_hz=float(vars.sdr_sampleRate()),
-            )
-            bluetooth_protocols, bluetooth_sdr, _bluetooth_step, _bluetooth_receiver = _decoder_context_for('btc', 'btle', 'bluetooth')
-            if bluetooth_sdr is not None and _decoder_enabled(bluetooth_protocols, 'btc', 'btle', 'bluetooth'):
-                bluetooth_plugin.update(bluetooth_sdr)
+            current_center_hz = float(vars.sdr_frequency())
+            current_sample_rate_hz = float(vars.sdr_sampleRate())
+            active_decoder_protocols = _active_decoder_protocols()
+            rf_model_enabled_for_tune = _rf_model_passband_enabled(current_center_hz, current_sample_rate_hz)
+
+            if not active_decoder_protocols and not rf_model_enabled_for_tune:
+                if not decoder_plugins_idle:
+                    _stop_protocol_plugins()
+                    if getattr(vars, "worker_sdr_suspended", False):
+                        vars.resume_worker_sdr()
+                    decoder_plugins_idle = True
             else:
-                bluetooth_plugin.stop()
-            wifi_protocols, wifi_sdr, _wifi_step, _wifi_receiver = _decoder_context_for('wifi')
-            if wifi_sdr is not None and _decoder_enabled(wifi_protocols, 'wifi'):
-                wifi_plugin.update(wifi_sdr)
-            else:
-                wifi_plugin.stop()
-            zigbee_protocols, zigbee_sdr, _zigbee_step, _zigbee_receiver = _decoder_context_for('zigbee', 'thread')
-            if zigbee_sdr is not None and _decoder_enabled(zigbee_protocols, 'zigbee', 'thread'):
-                zigbee_plugin.update(zigbee_sdr)
-            else:
-                zigbee_plugin.stop()
-            adsb_protocols, adsb_sdr, _adsb_step, _adsb_receiver = _decoder_context_for('adsb')
-            if adsb_sdr is not None and _decoder_enabled(adsb_protocols, 'adsb'):
-                adsb_plugin.update(adsb_sdr)
-            else:
-                adsb_plugin.stop()
-            rtl433_protocols, rtl433_step, _rtl433_receiver = _decoder_step_for('rtl433', 'subghz')
-            if _decoder_enabled(rtl433_protocols, 'rtl433', 'subghz') and rtl433_step:
-                rtl433_plugin.update(rtl433_step, vars)
-            else:
-                rtl433_plugin.stop()
-                if getattr(vars, "worker_sdr_suspended", False):
-                    vars.resume_worker_sdr()
+                decoder_plugins_idle = False
+                noisy_drone_plugin.configure(
+                    enabled=rf_model_enabled_for_tune,
+                    repo_path=getattr(vars, 'rf_model_classifier_repo_path', None),
+                    model_path=getattr(vars, 'rf_model_classifier_model_path', None),
+                    backend=getattr(vars, 'rf_model_classifier_backend', None),
+                    engine_path=getattr(vars, 'rf_model_classifier_engine_path', None),
+                    # RFML target is intentionally implied by the current tuned
+                    # center/passband; stale saved target MHz settings should
+                    # not steer live classification.
+                    target_freq_hz=0.0,
+                    sample_rate_hz=float(getattr(vars, 'rf_model_classifier_bandwidth_mhz', 20.0) or 20.0) * 1e6,
+                    interval_sec=float(getattr(vars, 'rf_model_classifier_interval_sec', 1.0) or 1.0),
+                    confidence_threshold=float(getattr(vars, 'rf_model_classifier_threshold', 0.45) or 0.45),
+                )
+                rf_model_samples = sample_buffer
+                if hasattr(vars.sdr0, "get_latest_iq_chunk"):
+                    try:
+                        candidate_samples = vars.sdr0.get_latest_iq_chunk()
+                        if getattr(candidate_samples, "size", 0) > 0:
+                            rf_model_samples = candidate_samples
+                    except Exception:
+                        rf_model_samples = sample_buffer
+                noisy_drone_plugin.submit_iq(
+                    rf_model_samples,
+                    center_freq_hz=current_center_hz,
+                    sample_rate_hz=current_sample_rate_hz,
+                )
+                bluetooth_protocols, bluetooth_sdr, _bluetooth_step, _bluetooth_receiver = _decoder_context_for('btc', 'btle', 'bluetooth')
+                if bluetooth_sdr is not None and _decoder_enabled(bluetooth_protocols, 'btc', 'btle', 'bluetooth'):
+                    bluetooth_plugin.update(bluetooth_sdr)
+                else:
+                    bluetooth_plugin.stop()
+                wifi_protocols, wifi_sdr, _wifi_step, _wifi_receiver = _decoder_context_for('wifi')
+                if wifi_sdr is not None and _decoder_enabled(wifi_protocols, 'wifi'):
+                    wifi_plugin.update(wifi_sdr)
+                else:
+                    wifi_plugin.stop()
+                zigbee_protocols, zigbee_sdr, _zigbee_step, _zigbee_receiver = _decoder_context_for('zigbee', 'thread')
+                if zigbee_sdr is not None and _decoder_enabled(zigbee_protocols, 'zigbee', 'thread'):
+                    zigbee_plugin.update(zigbee_sdr)
+                else:
+                    zigbee_plugin.stop()
+                adsb_protocols, adsb_sdr, _adsb_step, _adsb_receiver = _decoder_context_for('adsb')
+                if adsb_sdr is not None and _decoder_enabled(adsb_protocols, 'adsb'):
+                    adsb_plugin.update(adsb_sdr)
+                else:
+                    adsb_plugin.stop()
+                rtl433_protocols, rtl433_step, _rtl433_receiver = _decoder_step_for('rtl433', 'subghz')
+                if _decoder_enabled(rtl433_protocols, 'rtl433', 'subghz') and rtl433_step:
+                    rtl433_plugin.update(rtl433_step, vars)
+                else:
+                    rtl433_plugin.stop()
+                    if getattr(vars, "worker_sdr_suspended", False):
+                        vars.resume_worker_sdr()
+            if not bool(getattr(vars, "show_waterfall", True)):
+                full_fft = []
+                fft_max = None
+                fft_persist_data = None
+                fm_plugin.stop()
+                with data_lock:
+                    fft_data['original_fft'] = []
+                    fft_data['secondary_fft'] = []
+                    fft_data['max'] = []
+                    fft_data['persist'] = []
+                    waterfall_buffer.clear()
+                    main_fft_updated_at = time.time()
+                    main_frame_seq += 1
+                vars.signal_stats["display_processing"] = "off"
+                vars.signal_stats.pop("fft_error", None)
+                vars.signal_stats.pop("fft_error_ts", None)
+                time.sleep(max(0.02, float(getattr(vars, "sleeptime", 0.01) or 0.01)))
+                continue
+
             current_fft = process_fft(sample_buffer)
             secondary_fft = []
             mimo_info = vars.sdr0.mimo_info() if hasattr(vars.sdr0, "mimo_info") else {}
@@ -827,6 +1023,15 @@ def _build_data_payload(source='main', waterfall_mode='history', include_seconda
         
         peaks_snapshot = list(fft_data['peaks'])
 
+    display_processing_enabled = bool(getattr(vars, "show_waterfall", True))
+    if not display_processing_enabled:
+        main_fft_snapshot = []
+        secondary_fft_snapshot = []
+        scanner_fft_snapshot = []
+        main_waterfall_snapshot = []
+        scanner_waterfall_snapshot = []
+        peaks_snapshot = []
+
     scanner_fresh = (time.time() - scanner_ts_snapshot) <= 3.0
     scanner_available = scanner_fresh and len(scanner_fft_snapshot) > 0
     main_available = len(main_fft_snapshot) > 0
@@ -925,6 +1130,7 @@ def _build_data_payload(source='main', waterfall_mode='history', include_seconda
         'waterfall': waterfall_response,
         'waterfallMode': waterfall_mode,
         'waterfallRows': len(waterfall_response),
+        'displayProcessingEnabled': display_processing_enabled,
         'time': current_time,
         'settings': vars.get_settings(),
         'mainFrameSeq': int(main_seq_snapshot),
@@ -935,8 +1141,10 @@ def _build_data_payload(source='main', waterfall_mode='history', include_seconda
         'fftError': fft_error,
         'scannerError': scanner_error,
         'decodersAlwaysEnabled': bool(getattr(vars, 'decoders_always_enabled', False)),
+        'wifiDecoderEnabled': bool(getattr(vars, 'wifi_decoder_enabled', False)),
         'mimo': vars.sdr0.mimo_info() if hasattr(vars.sdr0, "mimo_info") else {'enabled': False, 'channels': [0]},
         'workerSdr': vars.worker_sdr_info() if hasattr(vars, "worker_sdr_info") else {},
+        'systemMetrics': _system_metrics_snapshot(),
         'bluetooth': bluetooth_plugin.snapshot(max_events=20),
         'fm': fm_plugin.snapshot(max_events=20),
         'wifi': wifi_plugin.snapshot(max_events=20),
@@ -1406,7 +1614,7 @@ def upload_classifier():
 @api_blueprint.route('/api/select_sdr', methods=['POST'])
 def select_sdr():
     sdr_name = request.json.get('sdr_name', 'hackrf')
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay', 'rfiq'}
     driver = str(sdr_name).split(':', 1)[0]
     if driver not in supported_drivers:
         return jsonify({
@@ -1416,6 +1624,8 @@ def select_sdr():
         }), 400
     if driver == 'replay':
         return jsonify({'status': 'success', 'result': int(getattr(vars.sdr0, "backend", "") == "replay")})
+    if driver == 'rfiq':
+        return jsonify({'status': 'success', 'result': int(vars.set_receiver_backend('rfiq'))})
     result = vars.reselect_radio(sdr_name)
     if result:
         return jsonify({'status': 'success', 'result': result})
@@ -1424,7 +1634,7 @@ def select_sdr():
 
 @api_blueprint.route('/api/sdr_devices', methods=['GET'])
 def get_sdr_devices():
-    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay'}
+    supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay', 'rfiq'}
 
     def _filter_supported(devices):
         return [d for d in devices if str(d.get('driver', '')).lower() in supported_drivers]
@@ -1448,6 +1658,7 @@ def get_settings():
     settings = {
         'sdr': vars.sdr0.device_id or vars.radio_name,
         'sdrBackend': getattr(vars.sdr0, 'backend', 'gateway'),
+        'backendReadOnly': getattr(vars.sdr0, 'backend', '') == 'rfiq',
         'frequency': vars.sdr_frequency() / 1e6,  # Convert to MHz
         'gain': vars.sdr_gain(),
         'sampleRate': vars.sdr_sampleRate() / 1e6,  # Convert to MHz
@@ -1456,12 +1667,13 @@ def get_settings():
         'dcSuppress': vars.dc_suppress,
         'showWaterfall': vars.show_waterfall,
         'decodersAlwaysEnabled': bool(getattr(vars, 'decoders_always_enabled', False)),
+        'wifiDecoderEnabled': bool(getattr(vars, 'wifi_decoder_enabled', False)),
         'rfModelClassifierEnabled': bool(getattr(vars, 'rf_model_classifier_enabled', False)),
         'rfModelClassifierRepoPath': getattr(vars, 'rf_model_classifier_repo_path', ''),
         'rfModelClassifierModelPath': getattr(vars, 'rf_model_classifier_model_path', ''),
         'rfModelClassifierBackend': getattr(vars, 'rf_model_classifier_backend', 'auto'),
         'rfModelClassifierEnginePath': getattr(vars, 'rf_model_classifier_engine_path', ''),
-        'rfModelClassifierTargetMHz': float(getattr(vars, 'rf_model_classifier_target_mhz', 2399.0) or 0.0),
+        'rfModelClassifierTargetMHz': 0.0,
         'rfModelClassifierBandwidthMHz': float(getattr(vars, 'rf_model_classifier_bandwidth_mhz', 20.0) or 20.0),
         'rfModelClassifierIntervalSec': float(getattr(vars, 'rf_model_classifier_interval_sec', 1.0) or 1.0),
         'rfModelClassifierThreshold': float(getattr(vars, 'rf_model_classifier_threshold', 0.45) or 0.45),
@@ -1483,6 +1695,19 @@ def get_settings():
     }
     return jsonify(_to_builtin(settings))
 
+@api_blueprint.route('/api/sdr_backend', methods=['POST'])
+def set_sdr_backend():
+    backend = str((request.json or {}).get('backend') or '').strip().lower()
+    if backend not in {'soapy', 'gateway', 'rfiq'}:
+        return jsonify({'success': False, 'error': f'Unsupported SDR backend: {backend}'}), 400
+    if not vars.set_receiver_backend(backend):
+        return jsonify({'success': False, 'error': f'Failed to switch SDR backend to {backend}'}), 400
+    return jsonify(_to_builtin({
+        'success': True,
+        'backend': getattr(vars.sdr0, 'backend', backend),
+        'settings': vars.get_settings(),
+    }))
+
 @api_blueprint.route('/api/update_settings', methods=['POST'])
 def update_settings():
     if not settings_update_lock.acquire(timeout=0.1):
@@ -1497,7 +1722,7 @@ def update_settings():
             return jsonify(_to_builtin({'success': True, 'settings': settings}))
         requested_sdr = str(settings.get('sdr') or '').strip()
         if requested_sdr and requested_sdr != (vars.sdr0.device_id or vars.radio_name):
-            supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay'}
+            supported_drivers = {'hackrf', 'sidekiq', 'airspy', 'bladerf', 'rtlsdr', 'mock', 'antsdre200', 'replay', 'rfiq'}
             driver = requested_sdr.split(':', 1)[0]
             if driver not in supported_drivers:
                 return jsonify({
@@ -1510,6 +1735,12 @@ def update_settings():
                     'error': f"Failed to switch SDR to {requested_sdr}"
                 }), 400
         new_settings = settings.copy()
+        if getattr(vars.sdr0, 'backend', '') == 'rfiq':
+            current = vars.get_settings()
+            for key in ('frequency', 'sampleRate', 'bandwidth', 'gain'):
+                if key in current:
+                    new_settings[key] = current[key]
+                    settings[key] = current[key]
         # Update vars with the new settings and save them
         new_settings['frequency'] = settings['frequency'] * 1e6
         new_settings['frequency_stop'] = settings['frequency_stop'] * 1e6

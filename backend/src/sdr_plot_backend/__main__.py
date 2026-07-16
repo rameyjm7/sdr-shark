@@ -4,7 +4,7 @@ import socket
 import subprocess
 import threading
 from pathlib import Path
-from flask import Flask
+from flask import Flask, abort, send_from_directory
 from flask_cors import CORS
 from sdr_plot_backend.actions import actions_blueprint
 from sdr_plot_backend.api import api_blueprint
@@ -14,21 +14,51 @@ from sdr_plot_backend.sigid_plugin import sigid_plugin_blueprint
 faulthandler.enable()
 
 def create_app():
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder=None)
     app.register_blueprint(api_blueprint)
     app.register_blueprint(actions_blueprint)
     app.register_blueprint(file_mgr_blueprint)
     app.register_blueprint(sigid_plugin_blueprint)
     CORS(app)
+    register_frontend_routes(app)
     # Start the frontend in a separate thread
     threading.Thread(target=start_frontend, daemon=True).start()
     return app
 
+def frontend_build_dir():
+    return Path(__file__).resolve().parents[3] / "frontend" / "build"
+
+def register_frontend_routes(app):
+    build_dir = frontend_build_dir()
+
+    @app.route("/", defaults={"path": ""})
+    @app.route("/<path:path>")
+    def serve_frontend(path):
+        if path.startswith(("api/", "actions/", "files/", "sigid/")):
+            abort(404)
+        index_path = build_dir / "index.html"
+        if not index_path.exists():
+            abort(404)
+        if path:
+            requested = build_dir / path
+            if requested.is_file():
+                return send_from_directory(build_dir, path)
+        return send_from_directory(build_dir, "index.html")
+
 def start_frontend():
-    """Launch the frontend using npm start."""
+    """Launch the development frontend only when no production build is served."""
     auto_start = os.getenv("SDR_SHARK_AUTO_START_FRONTEND", "1").strip().lower()
     if auto_start in {"0", "false", "no"}:
         print("Frontend auto-start disabled by SDR_SHARK_AUTO_START_FRONTEND.")
+        return
+
+    mode = os.getenv("SDR_SHARK_FRONTEND_MODE", "auto").strip().lower()
+    build_dir = frontend_build_dir()
+    if (build_dir / "index.html").exists() and mode != "dev":
+        print(f"Serving production frontend from {build_dir}; skipping npm start.")
+        return
+    if mode in {"production", "prod", "static"}:
+        print(f"Production frontend requested but {build_dir / 'index.html'} was not found.")
         return
 
     frontend_dir = Path(__file__).resolve().parents[3] / "frontend"

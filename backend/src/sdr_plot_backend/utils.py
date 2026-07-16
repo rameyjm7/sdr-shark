@@ -71,10 +71,11 @@ class sdr_scheduler_config:
         self.dc_suppress = True
         self.show_waterfall = True
         self.decoders_always_enabled = False
+        self.wifi_decoder_enabled = os.getenv("SDR_SHARK_WIFI_DECODER_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
         self.rf_model_classifier_enabled = False
         self.rf_model_classifier_repo_path = os.getenv(
             "SDR_SHARK_RF_MODEL_REPO",
-            "/home/jake/workspace/SDR/rf-signal-intelligence",
+            "/home/jake/workspace/SDR/rf-signal-intelligence-private",
         )
         self.rf_model_classifier_model_path = os.getenv(
             "SDR_SHARK_RF_MODEL_PATH",
@@ -95,7 +96,7 @@ class sdr_scheduler_config:
                 "noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine",
             ),
         )
-        self.rf_model_classifier_target_mhz = float(os.getenv("SDR_SHARK_RF_MODEL_TARGET_MHZ", "2399") or "2399")
+        self.rf_model_classifier_target_mhz = 0.0
         self.rf_model_classifier_bandwidth_mhz = float(os.getenv("SDR_SHARK_RF_MODEL_BW_MHZ", "20") or "20")
         self.rf_model_classifier_interval_sec = float(os.getenv("SDR_SHARK_RF_MODEL_INTERVAL_SEC", "1.0") or "1.0")
         self.rf_model_classifier_threshold = float(os.getenv("SDR_SHARK_RF_MODEL_THRESHOLD", "0.45") or "0.45")
@@ -240,6 +241,53 @@ class sdr_scheduler_config:
             "error": self.worker_sdr_error,
         }
 
+    def set_receiver_backend(self, backend: str) -> bool:
+        requested = str(backend or "").strip().lower()
+        if requested not in {"soapy", "gateway", "rfiq"}:
+            return False
+        current = str(getattr(self.sdr0, "backend", "") or "").strip().lower()
+        if requested == current:
+            return True
+
+        old_sdr = self.sdr0
+        old_backend = os.environ.get("SDR_BACKEND")
+        os.environ["SDR_BACKEND"] = requested
+        try:
+            settings = self.sdr_settings.get(self.sdr_name, next(iter(self.sdr_settings.values())))
+            name = "rfiq" if requested == "rfiq" else (self.radio_name or self.sdr_name)
+            next_sdr = SDRGeneric(
+                name,
+                center_freq=settings.frequency,
+                sample_rate=settings.sampleRate,
+                bandwidth=settings.bandwidth,
+                gain=settings.gain,
+                size=self.sample_size,
+            )
+            next_sdr.start()
+            self.sdr0 = next_sdr
+            if requested == "rfiq":
+                self.sdr_name = "rfiq"
+                self.radio_name = "rfiq:0"
+                self._ensure_radio_settings("rfiq")
+            else:
+                driver = str(next_sdr.device_id or self.radio_name or self.sdr_name).split(":", 1)[0].lower()
+                self._ensure_radio_settings(driver)
+                self.sdr_name = driver
+                self.radio_name = next_sdr.device_id or self.radio_name
+            try:
+                old_sdr.stop()
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            print(f"Failed to switch SDR backend to {requested}: {exc}")
+            if old_backend is None:
+                os.environ.pop("SDR_BACKEND", None)
+            else:
+                os.environ["SDR_BACKEND"] = old_backend
+            self.sdr0 = old_sdr
+            return False
+
     def _ensure_radio_settings(self, key: str):
         """Ensure we have a settings bucket for a discovered radio driver."""
         if key in self.sdr_settings:
@@ -316,6 +364,14 @@ class sdr_scheduler_config:
 
     def get_settings(self):
         """Get current settings as a dictionary."""
+        if getattr(self.sdr0, "backend", "") == "rfiq":
+            self._ensure_radio_settings("rfiq")
+            self.sdr_name = "rfiq"
+            self.radio_name = "rfiq:0"
+            self.sdr_settings["rfiq"].frequency = float(getattr(self.sdr0, "frequency", self.sdr_settings["rfiq"].frequency))
+            self.sdr_settings["rfiq"].sampleRate = float(getattr(self.sdr0, "sample_rate", self.sdr_settings["rfiq"].sampleRate))
+            self.sdr_settings["rfiq"].bandwidth = float(getattr(self.sdr0, "bandwidth", self.sdr_settings["rfiq"].bandwidth))
+            self.sdr_settings["rfiq"].gain = float(getattr(self.sdr0, "gain", self.sdr_settings["rfiq"].gain))
         settings = {
             "frequency": self.sdr_frequency(),
             "sample_rate": self.sdr_sampleRate(),
@@ -328,6 +384,7 @@ class sdr_scheduler_config:
             "dc_suppress": self.dc_suppress,
             "show_waterfall": self.show_waterfall,
             "decodersAlwaysEnabled": self.decoders_always_enabled,
+            "wifiDecoderEnabled": self.wifi_decoder_enabled,
             "rfModelClassifierEnabled": self.rf_model_classifier_enabled,
             "rfModelClassifierRepoPath": self.rf_model_classifier_repo_path,
             "rfModelClassifierModelPath": self.rf_model_classifier_model_path,
@@ -345,6 +402,8 @@ class sdr_scheduler_config:
             "minPeakDistance": self.minPeakDistance,
             "analysisRetentionSec": self.analysis_retention_sec,
             "radio_name": self.radio_name,
+            "sdrBackend": getattr(self.sdr0, "backend", "gateway"),
+            "backendReadOnly": getattr(self.sdr0, "backend", "") == "rfiq",
             "showFirstTrace": self.showFirstTrace,
             "showSecondTrace": self.showSecondTrace,
             "showMaxTrace" : self.showMaxTrace,
@@ -379,12 +438,13 @@ class sdr_scheduler_config:
             self.dc_suppress = settings.get("dcSuppress", self.dc_suppress)
             self.show_waterfall = settings.get("showWaterfall", self.show_waterfall)
             self.decoders_always_enabled = bool(settings.get("decodersAlwaysEnabled", self.decoders_always_enabled))
+            self.wifi_decoder_enabled = bool(settings.get("wifiDecoderEnabled", self.wifi_decoder_enabled))
             self.rf_model_classifier_enabled = bool(settings.get("rfModelClassifierEnabled", self.rf_model_classifier_enabled))
             self.rf_model_classifier_repo_path = str(settings.get("rfModelClassifierRepoPath", self.rf_model_classifier_repo_path) or "")
             self.rf_model_classifier_model_path = str(settings.get("rfModelClassifierModelPath", self.rf_model_classifier_model_path) or "")
             self.rf_model_classifier_backend = str(settings.get("rfModelClassifierBackend", self.rf_model_classifier_backend) or "auto").strip().lower()
             self.rf_model_classifier_engine_path = str(settings.get("rfModelClassifierEnginePath", self.rf_model_classifier_engine_path) or "")
-            self.rf_model_classifier_target_mhz = float(settings.get("rfModelClassifierTargetMHz", self.rf_model_classifier_target_mhz) or 0.0)
+            self.rf_model_classifier_target_mhz = 0.0
             self.rf_model_classifier_bandwidth_mhz = float(settings.get("rfModelClassifierBandwidthMHz", self.rf_model_classifier_bandwidth_mhz) or 20.0)
             self.rf_model_classifier_interval_sec = float(settings.get("rfModelClassifierIntervalSec", self.rf_model_classifier_interval_sec) or 1.0)
             self.rf_model_classifier_threshold = float(settings.get("rfModelClassifierThreshold", self.rf_model_classifier_threshold) or 0.45)
@@ -488,6 +548,8 @@ class sdr_scheduler_config:
             "averagingCount": 1,
             "dcSuppress": True,
             "showWaterfall": True,
+            "decodersAlwaysEnabled": False,
+            "wifiDecoderEnabled": self.wifi_decoder_enabled,
             "rfModelClassifierEnabled": False,
             "rfModelClassifierRepoPath": self.rf_model_classifier_repo_path,
             "rfModelClassifierModelPath": self.rf_model_classifier_model_path,
