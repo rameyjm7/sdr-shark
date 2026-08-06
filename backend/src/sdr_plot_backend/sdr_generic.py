@@ -488,7 +488,13 @@ class SDRGeneric:
                 "backend": "rfiq",
                 "freq_min_hz": 1e6,
                 "freq_max_hz": 6e9,
-                "max_sample_rate_sps": 61.44e6,
+                # Not the BladeRF's theoretical ADC ceiling (61.44 Msps) -
+                # station1 runs two rfiq_daemon instances sharing one USB
+                # bus. Requesting anywhere near that rate floods the daemon
+                # with RX transfer timeouts and aborts it (see rf-iq-gateway
+                # ControlState::kMaxSustainableSampleRateHz for the matching
+                # server-side clamp). Keep this in sync with that value.
+                "max_sample_rate_sps": 25e6,
                 "notes": "rfiq_daemon CF32 socket stream (live-tunable via control socket)",
                 "rfiq_socket_path": socket_path,
                 "rfiq_control_socket_path": control_path,
@@ -509,10 +515,15 @@ class SDRGeneric:
         SDR-Shark's own tuning UI actually drive the daemon, matching how the
         soapy/gateway backends already behave.
         """
+        # Belt-and-suspenders: the daemon also clamps (ControlState::
+        # kMaxSustainableSampleRateHz), but don't rely solely on the
+        # network round-trip to catch a caller that bypassed device limits.
+        safe_sample_rate = min(self.sample_rate, self.max_sample_rate)
+        safe_bandwidth = min(self.bandwidth, self.max_sample_rate)
         command = (
             f"SET mode=fixed center_hz={self.frequency:.0f} "
-            f"sample_rate_hz={self.sample_rate:.0f} "
-            f"bandwidth_hz={self.bandwidth:.0f} "
+            f"sample_rate_hz={safe_sample_rate:.0f} "
+            f"bandwidth_hz={safe_bandwidth:.0f} "
             f"gain_db={self.gain:.1f}\n"
         )
         try:
