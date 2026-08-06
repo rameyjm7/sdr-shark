@@ -1710,6 +1710,7 @@ def set_sdr_backend():
 
 @api_blueprint.route('/api/update_settings', methods=['POST'])
 def update_settings():
+    global reset_max_trace, reset_persist_trace
     if not settings_update_lock.acquire(timeout=0.1):
         return jsonify({
             'success': True,
@@ -1764,6 +1765,15 @@ def update_settings():
                 scanner_plan['dwell_until'] = 0.0
                 scanner_plan['receiver_states'] = {}
             vars.signal_stats.pop('scanner_mode', None)
+            # Max-hold/persist traces are stale once the frequency axis
+            # changes - old bins from the previous center/span otherwise
+            # linger and get drawn against the new axis (e.g. a leftover
+            # peak pinned at the old span's edge after retuning).
+            with data_lock:
+                fft_data['max'] = []
+                reset_max_trace = True
+                fft_data['persist'] = []
+                reset_persist_trace = True
         vars.apply_settings(new_settings)
         vars.save_settings()
 

@@ -1,0 +1,13 @@
+libdir=/usr/local/lib
+includedir=/usr/local/include
+
+Name: Soapy SDR
+Description: Vendor and platform neutral SDR interface library.
+URL: https://github.com/pothosware/SoapySDR/wiki
+Version: 0.8.1
+Requires:
+Requires.private:
+Conflicts:
+Cflags: -I${includedir}
+Libs: -L${libdir} -lSoapySDR
+Libs.private:

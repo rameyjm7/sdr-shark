@@ -58,6 +58,12 @@ const ChartComponent = ({
   const [fftData, setFftData] = useState([]);
   const [secondaryFftData, setSecondaryFftData] = useState([]);
   const [secondaryFftMeta, setSecondaryFftMeta] = useState(null);
+  // Backend always sends a full-length secondaryFft array (raw linear
+  // magnitudes, not the dB scale the chart is plotted in) even with no real
+  // second RX channel active - that stale/wrong-scale data painted a solid
+  // block across the chart when the "2nd SDR" checkbox was on. Only trust
+  // secondaryFft when mimo.enabled is actually true.
+  const [mimoEnabled, setMimoEnabled] = useState(false);
   const [fftMaxData, setFftMaxData] = useState([]);
   const [persistanceData, setPersistanceData] = useState([]);
   const [waterfallData, setWaterfallData] = useState([]);
@@ -281,8 +287,13 @@ const ChartComponent = ({
           }
         }
         const rawFft = Array.isArray(data.fft) ? data.fft : [];
-        const rawSecondaryFft = Array.isArray(data.secondaryFft) ? data.secondaryFft : [];
-        const rawSecondaryMeta = data?.secondaryMeta && typeof data.secondaryMeta === 'object' ? data.secondaryMeta : null;
+        const mimoIsEnabled = Boolean(data?.mimo?.enabled);
+        setMimoEnabled(mimoIsEnabled);
+        if (!mimoIsEnabled && traceStyles.secondary.visible) {
+          setSecondTraceVisible(false);
+        }
+        const rawSecondaryFft = mimoIsEnabled && Array.isArray(data.secondaryFft) ? data.secondaryFft : [];
+        const rawSecondaryMeta = mimoIsEnabled && data?.secondaryMeta && typeof data.secondaryMeta === 'object' ? data.secondaryMeta : null;
         const rawWaterfall = Array.isArray(data.waterfall) ? data.waterfall : [];
         // Replace NaN values in FFT data
         const sanitizedFftData = rawFft.map(value => isNaN(value) ? -255 : value);
@@ -1623,10 +1634,14 @@ const ChartComponent = ({
             />
             Max
           </label>
-          <label style={quickTuneLabelStyle} title="Request and draw the second SDR / secondary FFT trace">
+          <label
+            style={{ ...quickTuneLabelStyle, opacity: mimoEnabled ? 1 : 0.4, cursor: mimoEnabled ? 'pointer' : 'not-allowed' }}
+            title={mimoEnabled ? 'Request and draw the second SDR / secondary FFT trace' : 'No second RX channel active'}
+          >
             <input
               type="checkbox"
-              checked={traceStyles.secondary.visible}
+              checked={mimoEnabled && traceStyles.secondary.visible}
+              disabled={!mimoEnabled}
               onChange={(e) => setSecondTraceVisible(e.target.checked)}
             />
             2nd SDR
