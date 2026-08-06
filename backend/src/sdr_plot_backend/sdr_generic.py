@@ -489,12 +489,13 @@ class SDRGeneric:
                 "freq_min_hz": 1e6,
                 "freq_max_hz": 6e9,
                 # Not the BladeRF's theoretical ADC ceiling (61.44 Msps) -
-                # station1 runs two rfiq_daemon instances sharing one USB
-                # bus. Requesting anywhere near that rate floods the daemon
-                # with RX transfer timeouts and aborts it (see rf-iq-gateway
-                # ControlState::kMaxSustainableSampleRateHz for the matching
-                # server-side clamp). Keep this in sync with that value.
-                "max_sample_rate_sps": 25e6,
+                # measured on station1, a single radio starts dropping
+                # frames above ~35 Msps regardless of driver path (generic
+                # SoapySDR or native-bladerf with tuned buffers), climbing
+                # to ~45% loss by 60+ Msps. This is a real USB/host
+                # throughput ceiling, not a bug. Keep in sync with
+                # rf-iq-gateway's ControlState::kMaxSustainableSampleRateHz.
+                "max_sample_rate_sps": 33e6,
                 "notes": "rfiq_daemon CF32 socket stream (live-tunable via control socket)",
                 "rfiq_socket_path": socket_path,
                 "rfiq_control_socket_path": control_path,
