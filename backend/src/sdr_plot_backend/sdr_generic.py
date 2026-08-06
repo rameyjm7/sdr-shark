@@ -83,6 +83,7 @@ class SDRGeneric:
         self.rfiq_socket_path, self.rfiq_control_socket_path = self._rfiq_endpoints[0]
         self._rfiq_socket: socket.socket | None = None
         self._rfiq_header = struct.Struct("<IHHHHQQIIdddd")
+        self._pending_rfiq_tuning: tuple[float, float, float] | None = None
 
         self._devices_cache: list[dict[str, Any]] = []
         self._selected_device_hint: str | None = None
@@ -523,6 +524,16 @@ class SDRGeneric:
         # network round-trip to catch a caller that bypassed device limits.
         safe_sample_rate = min(self.sample_rate, self.max_sample_rate)
         safe_bandwidth = min(self.bandwidth, self.max_sample_rate)
+        # The daemon's ring buffer holds ~256 frames of history; a client
+        # that's fallen even slightly behind drains through *old* frames
+        # tagged with the pre-retune center/rate/bandwidth before reaching
+        # freshly-produced ones - and _decode_rfiq_frame() below trusts
+        # every frame's header, so those stale frames would visibly revert
+        # self.frequency/sample_rate/bandwidth back to the old values for
+        # up to several seconds after a retune before catching up. Record
+        # what was actually requested so stale headers can be recognized
+        # and ignored until a frame confirms the daemon caught up.
+        self._pending_rfiq_tuning = (self.frequency, safe_sample_rate, safe_bandwidth)
         command = (
             f"SET mode=fixed center_hz={self.frequency:.0f} "
             f"sample_rate_hz={safe_sample_rate:.0f} "
@@ -600,6 +611,26 @@ class SDRGeneric:
         payload = self._read_exact(sock, payload_bytes)
         raw = np.frombuffer(payload, dtype="<f4")
         iq = (raw[0::2] + 1j * raw[1::2]).astype(np.complex64, copy=False)
+        pending = getattr(self, "_pending_rfiq_tuning", None)
+        if pending is not None:
+            # This frame may have been produced (and queued in the
+            # daemon's ring buffer) before our own retune request reached
+            # it - its header would still describe the pre-retune tuning.
+            # Only trust it, and clear the pending marker, once a frame
+            # actually confirms the daemon caught up; otherwise keep the
+            # locally-requested values so the UI reflects what was asked
+            # for immediately rather than flickering back to stale values
+            # for however long it takes to drain the backlog.
+            target_freq, target_rate, target_bw = pending
+            if (
+                abs(float(center_hz) - target_freq) <= 1.0
+                and abs(float(sample_rate_hz) - target_rate) <= 1.0
+                and abs(float(bandwidth_hz) - target_bw) <= 1.0
+            ):
+                self._pending_rfiq_tuning = None
+            else:
+                self.gain = float(gain_db)
+                return iq
         self.frequency = float(center_hz)
         self.sample_rate = float(sample_rate_hz)
         self.bandwidth = float(bandwidth_hz)

@@ -466,10 +466,11 @@ class sdr_scheduler_config:
 
 
             sr = self.sdr_sampleRate()
+            bw = self.sdr_bandwidth()
             next_receiver = (
                 float(self.sdr_settings[self.sdr_name].frequency),
                 float(sr),
-                float(sr),
+                float(bw),
                 float(self.sdr_gain()),
             )
             receiver_changed = any(abs(left - right) > 1.0 for left, right in zip(previous_receiver, next_receiver))
@@ -477,7 +478,13 @@ class sdr_scheduler_config:
                 self.sdr0.configure_receiver(
                     frequency=self.sdr_settings[self.sdr_name].frequency,
                     sample_rate=sr,
-                    bandwidth=sr,
+                    # Was `bandwidth=sr` (the sample rate value, not the
+                    # requested bandwidth) - masked whenever a caller sets
+                    # both to the same value (the common case with
+                    # lockBandwidthSampleRate on), but meant an
+                    # independently-requested bandwidth was silently
+                    # discarded and replaced with the sample rate.
+                    bandwidth=bw,
                     gain=self.sdr_gain(),
                 )
         except Exception as e:
