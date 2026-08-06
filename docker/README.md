@@ -91,3 +91,22 @@ wrong-scale block across the whole chart. Fixed on both ends:
   Max-hold/persist FFT traces (`backend/src/sdr_plot_backend/api.py`,
   `update_settings()`), so stale bins from the previous span could
   linger misaligned against the new frequency axis after a retune.
+
+## Default backend is now `rfiq`, not `soapy`
+
+`SDR_BACKEND` defaults to `rfiq`: talks to `rfiq_daemon` (see
+`rf-iq-gateway`) over unix sockets under `/tmp` rather than opening
+SoapySDR directly, so it shares the radios with rf-sentinel through the
+same daemon instead of both processes independently competing for direct
+USB access. Deploy with `-v /tmp:/tmp` instead of the USB
+passthrough/`--device-cgroup-rule` flags shown above for direct mode.
+Both configured radios are exposed as separate selectable devices
+(`rfiq:0`/`rfiq:1`, via `SDR_RFIQ_SOCKET_0`/`_1` +
+`SDR_RFIQ_CONTROL_SOCKET_0`/`_1`, defaulting to `/tmp/rfiq0*.sock` and
+`/tmp/rfiq1*.sock`), and retuning/gain changes made through the UI are
+pushed to the daemon's control socket live - this was originally
+receive-only and has been fixed to be fully interactive.
+
+Override with `-e SDR_BACKEND=soapy` (direct SoapySDR, needs USB
+passthrough - see the top of this file) or `-e SDR_BACKEND=gateway`
+(the older `sdr-gateway` HTTP path) if you need those instead.
