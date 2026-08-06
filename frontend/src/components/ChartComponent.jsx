@@ -1306,7 +1306,7 @@ const ChartComponent = ({
   };
 
   const applyQuickTune = async (nextCenterMHz, nextSpanMHz) => {
-    if (settings.backendReadOnly || settings.sdrBackend === 'rfiq') {
+    if (settings.backendReadOnly) {
       setQuickCenterMHz(safeFrequencyMHz);
       setQuickSpanMHz(safeSampleRateMHz);
       return;
@@ -1349,7 +1349,7 @@ const ChartComponent = ({
   }, [settings.frequency, settings.sampleRate, settings.bandwidth]);
 
   const nudgeFrequency = (deltaMHz) => {
-    if (settings.backendReadOnly || settings.sdrBackend === 'rfiq') return;
+    if (settings.backendReadOnly) return;
     applyQuickTune(toFinite(quickCenterMHz, safeFrequencyMHz) + deltaMHz, quickSpanMHz);
   };
 
@@ -1484,7 +1484,7 @@ const ChartComponent = ({
     }
   };
 
-  const receiverReadOnly = Boolean(settings.backendReadOnly || settings.sdrBackend === 'rfiq');
+  const receiverReadOnly = Boolean(settings.backendReadOnly);
 
   useEffect(() => {
     const handleKeyDown = (event) => {

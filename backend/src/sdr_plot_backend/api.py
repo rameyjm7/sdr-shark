@@ -1658,7 +1658,10 @@ def get_settings():
     settings = {
         'sdr': vars.sdr0.device_id or vars.radio_name,
         'sdrBackend': getattr(vars.sdr0, 'backend', 'gateway'),
-        'backendReadOnly': getattr(vars.sdr0, 'backend', '') == 'rfiq',
+        # rfiq is no longer receive-only - SDRGeneric now pushes tuning
+        # changes through to the daemon's control socket, same as the other
+        # backends push to their own device/gateway.
+        'backendReadOnly': False,
         'frequency': vars.sdr_frequency() / 1e6,  # Convert to MHz
         'gain': vars.sdr_gain(),
         'sampleRate': vars.sdr_sampleRate() / 1e6,  # Convert to MHz
@@ -1736,12 +1739,12 @@ def update_settings():
                     'error': f"Failed to switch SDR to {requested_sdr}"
                 }), 400
         new_settings = settings.copy()
-        if getattr(vars.sdr0, 'backend', '') == 'rfiq':
-            current = vars.get_settings()
-            for key in ('frequency', 'sampleRate', 'bandwidth', 'gain'):
-                if key in current:
-                    new_settings[key] = current[key]
-                    settings[key] = current[key]
+        # Historically the rfiq backend was receive-only (the daemon owned
+        # tuning and requests here were silently overridden with whatever
+        # the daemon last reported), so it's no longer receive-only - the
+        # SDRGeneric rfiq backend now pushes tuning changes to the daemon's
+        # control socket. Requested values flow through like every other
+        # backend.
         # Update vars with the new settings and save them
         new_settings['frequency'] = settings['frequency'] * 1e6
         new_settings['frequency_stop'] = settings['frequency_stop'] * 1e6

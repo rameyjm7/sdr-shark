@@ -103,7 +103,9 @@ const ControlPanel = ({
   const selectedDevice = discoveredSelectedDevice || fallbackDeviceForSdr(sdr);
   const savedSelectedDevice = selectedDevice || { id: sdr, label: sdr };
   const selectedBackend = settings.sdrBackend || 'soapy';
-  const backendReadOnly = Boolean(settings.backendReadOnly || selectedBackend === 'rfiq');
+  // rfiq is no longer receive-only - the backend pushes tuning changes to
+  // the daemon's control socket now, same as it does for soapy/gateway.
+  const backendReadOnly = Boolean(settings.backendReadOnly);
   const displayedSdrs = discoveredSelectedDevice || !sdr
     ? availableSdrs
     : [{ ...savedSelectedDevice, id: sdr, label: `${savedSelectedDevice.label || sdr} (last selected)` }, ...availableSdrs];
@@ -391,7 +393,7 @@ const ControlPanel = ({
   const handleBackendChange = async (e) => {
     const backend = e.target.value;
     updateStatus(`Switching backend to ${backend}...`, 'info');
-    setSettings({ ...settings, sdrBackend: backend, backendReadOnly: backend === 'rfiq' });
+    setSettings({ ...settings, sdrBackend: backend, backendReadOnly: false });
     try {
       const response = await axios.post('/api/sdr_backend', { backend });
       if (!response?.data?.success) {

@@ -80,12 +80,14 @@ ENV PYTHONPATH=/app/backend/src:/usr/local/lib/python3.10/dist-packages
 # see the note above (must be a sibling of backend/, not inside it).
 COPY --from=build-frontend /frontend/build /app/frontend/build
 
-# Direct SoapySDR backend - opens the BladeRF hardware itself rather than
-# going through sdr-gateway. Note this doesn't "free" a radio another
-# process already has open; it's just another direct competitor for the
-# same exclusive-access hardware. Override with -e SDR_BACKEND=gateway to
-# go back to the shared-gateway path.
-ENV SDR_BACKEND=soapy
+# Default backend is rfiq: talks to the station's rfiq_daemon instance(s)
+# (one per BladeRF, unix sockets under /tmp - needs -v /tmp:/tmp, not USB
+# passthrough) rather than opening SoapySDR itself, so it shares hardware
+# through the same daemon rf-sentinel also uses instead of directly
+# competing for the radios. Override with -e SDR_BACKEND=soapy for direct
+# SoapySDR access (needs USB passthrough instead - see docker/README.md),
+# or -e SDR_BACKEND=gateway for the older sdr-gateway HTTP path.
+ENV SDR_BACKEND=rfiq
 ENV SDR_SERVER_URL=http://127.0.0.1:8080
 # __main__.py also spawns a dev frontend server by default unless told not
 # to - the build above is already production static output.

@@ -58,7 +58,7 @@ class SDRGeneric:
         self.min_frequency = 1e6
         self.max_frequency = 6e9
         self.max_sample_rate = 20e6
-        self.backend = os.getenv("SDR_BACKEND", "soapy").strip().lower()
+        self.backend = os.getenv("SDR_BACKEND", "rfiq").strip().lower()
 
         base = os.getenv("SDR_SERVER_URL", "http://127.0.0.1:8080").rstrip("/")
         self.api_base = base
@@ -66,7 +66,21 @@ class SDRGeneric:
         self.gateway_token = (os.getenv("SDR_GATEWAY_API_TOKEN", "") or "").strip()
         self.gateway_requested_iq_format = (os.getenv("SDR_GATEWAY_IQ_FORMAT", "native") or "native").strip().lower()
         self.gateway_iq_format = self.gateway_requested_iq_format
-        self.rfiq_socket_path = os.getenv("SDR_RFIQ_SOCKET", "/tmp/rfiq.sock")
+        # Station1 runs one rfiq_daemon instance per BladeRF (rfiq-daemon@radio0/
+        # radio1). Falls back to the single-instance defaults
+        # (SDR_RFIQ_SOCKET/SDR_RFIQ_CONTROL_SOCKET) as device 0 if the _0/_1
+        # env vars aren't set, so a single-daemon deployment still works.
+        self._rfiq_endpoints = [
+            (
+                os.getenv("SDR_RFIQ_SOCKET_0", os.getenv("SDR_RFIQ_SOCKET", "/tmp/rfiq0.sock")),
+                os.getenv("SDR_RFIQ_CONTROL_SOCKET_0", os.getenv("SDR_RFIQ_CONTROL_SOCKET", "/tmp/rfiq0-control.sock")),
+            ),
+            (
+                os.getenv("SDR_RFIQ_SOCKET_1", "/tmp/rfiq1.sock"),
+                os.getenv("SDR_RFIQ_CONTROL_SOCKET_1", "/tmp/rfiq1-control.sock"),
+            ),
+        ]
+        self.rfiq_socket_path, self.rfiq_control_socket_path = self._rfiq_endpoints[0]
         self._rfiq_socket: socket.socket | None = None
         self._rfiq_header = struct.Struct("<IHHHHQQIIdddd")
 
@@ -142,6 +156,7 @@ class SDRGeneric:
     def set_frequency(self, frequency: float) -> None:
         self.frequency = float(frequency)
         if self.backend == "rfiq":
+            self._send_rfiq_control()
             return
         if self.backend == "soapy" and self._soapy_device is not None:
             try:
@@ -156,12 +171,14 @@ class SDRGeneric:
     def set_sample_rate(self, sample_rate: float) -> None:
         self.sample_rate = float(sample_rate)
         if self.backend == "rfiq":
+            self._send_rfiq_control()
             return
         self._restart_stream()
 
     def set_bandwidth(self, bandwidth: float) -> None:
         self.bandwidth = float(bandwidth)
         if self.backend == "rfiq":
+            self._send_rfiq_control()
             return
         if self.backend == "soapy" and self._soapy_device is not None:
             try:
@@ -174,6 +191,7 @@ class SDRGeneric:
     def set_gain(self, gain: float) -> None:
         self.gain = float(gain)
         if self.backend == "rfiq":
+            self._send_rfiq_control()
             return
         if self.backend == "soapy" and self._soapy_device is not None:
             self._apply_soapy_gain(self._soapy_device, self._soapy_driver(), self.gain)
@@ -200,8 +218,7 @@ class SDRGeneric:
             self.gain = float(gain)
 
         if self.backend == "rfiq":
-            # The first rfiq daemon integration is receive-only. The daemon owns
-            # tuning; SDR-Shark mirrors the requested values for UI metadata.
+            self._send_rfiq_control()
             return
 
         if self.backend != "soapy":
@@ -294,7 +311,7 @@ class SDRGeneric:
 
     def list_devices(self) -> list[dict[str, Any]]:
         if self.backend == "rfiq":
-            return [self._rfiq_device()]
+            return self._rfiq_devices()
         if self.backend == "soapy":
             devices = self._fetch_soapy_devices()
             return [dict(d) for d in devices]
@@ -303,12 +320,25 @@ class SDRGeneric:
 
     def select_device(self, selector: str) -> bool:
         if self.backend == "rfiq":
-            selected = self._rfiq_device()
-            if selector not in {selected["id"], selected["driver"]}:
+            selected = self._rfiq_device_by_id(selector)
+            if selected is None and selector == "rfiq":
+                selected = self._rfiq_devices()[0]
+            if selected is None:
                 return False
+            switching = self.rfiq_socket_path != selected["rfiq_socket_path"]
+            self.rfiq_socket_path = selected["rfiq_socket_path"]
+            self.rfiq_control_socket_path = selected["rfiq_control_socket_path"]
             self.device_id = selected["id"]
             self._selected_device_hint = selected["id"]
             self._apply_device_limits(selected)
+            if switching and self._running:
+                # Force the rx loop to drop its current (now stale) socket
+                # connection and reconnect using the just-updated paths.
+                if self._rfiq_socket is not None:
+                    try:
+                        self._rfiq_socket.close()
+                    except Exception:
+                        pass
             return True
 
         if self.backend == "soapy":
@@ -448,23 +478,65 @@ class SDRGeneric:
         self._devices_cache = devices
         return devices
 
-    def _rfiq_device(self) -> dict[str, Any]:
-        return {
-            "id": "rfiq:0",
-            "driver": "rfiq",
-            "label": f"RF IQ daemon ({self.rfiq_socket_path})",
-            "serial": "",
-            "backend": "rfiq",
-            "freq_min_hz": 1e6,
-            "freq_max_hz": 6e9,
-            "max_sample_rate_sps": 61.44e6,
-            "notes": "External rfiq_daemon CF32 socket stream",
-        }
+    def _rfiq_devices(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": f"rfiq:{index}",
+                "driver": "rfiq",
+                "label": f"RF IQ daemon {index} ({socket_path})",
+                "serial": "",
+                "backend": "rfiq",
+                "freq_min_hz": 1e6,
+                "freq_max_hz": 6e9,
+                "max_sample_rate_sps": 61.44e6,
+                "notes": "rfiq_daemon CF32 socket stream (live-tunable via control socket)",
+                "rfiq_socket_path": socket_path,
+                "rfiq_control_socket_path": control_path,
+            }
+            for index, (socket_path, control_path) in enumerate(self._rfiq_endpoints)
+        ]
+
+    def _rfiq_device_by_id(self, device_id: str) -> dict[str, Any] | None:
+        for device in self._rfiq_devices():
+            if device["id"] == device_id:
+                return device
+        return None
+
+    def _send_rfiq_control(self) -> None:
+        """Push the current frequency/rate/bandwidth/gain to rfiq_daemon's
+        control socket. Originally this backend was receive-only (the daemon
+        owned tuning and the UI just mirrored whatever it saw); this makes
+        SDR-Shark's own tuning UI actually drive the daemon, matching how the
+        soapy/gateway backends already behave.
+        """
+        command = (
+            f"SET mode=fixed center_hz={self.frequency:.0f} "
+            f"sample_rate_hz={self.sample_rate:.0f} "
+            f"bandwidth_hz={self.bandwidth:.0f} "
+            f"gain_db={self.gain:.1f}\n"
+        )
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(2.0)
+            try:
+                sock.connect(self.rfiq_control_socket_path)
+                sock.sendall(command.encode("utf-8"))
+                response = sock.recv(4096)
+                if not response.startswith(b"OK"):
+                    print(f"[rfiq] control command rejected: {response!r}")
+            finally:
+                sock.close()
+        except Exception as exc:
+            print(f"[rfiq] control socket unavailable ({self.rfiq_control_socket_path}): {exc}")
 
     def _start_rfiq_stream(self) -> None:
-        self.device_id = "rfiq:0"
+        if not self.device_id or not self.device_id.startswith("rfiq:"):
+            default_device = self._rfiq_devices()[0]
+            self.rfiq_socket_path = default_device["rfiq_socket_path"]
+            self.rfiq_control_socket_path = default_device["rfiq_control_socket_path"]
+            self.device_id = default_device["id"]
         self._selected_device_hint = self.device_id
-        self._apply_device_limits(self._rfiq_device())
+        self._apply_device_limits(self._rfiq_device_by_id(self.device_id) or self._rfiq_devices()[0])
         self._running = True
         self._rx_thread = threading.Thread(target=self._rfiq_rx_loop, daemon=True)
         self._rx_thread.start()
