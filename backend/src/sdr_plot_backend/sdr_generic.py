@@ -488,14 +488,16 @@ class SDRGeneric:
                 "backend": "rfiq",
                 "freq_min_hz": 1e6,
                 "freq_max_hz": 6e9,
-                # Not the BladeRF's theoretical ADC ceiling (61.44 Msps) -
-                # measured on station1, a single radio starts dropping
-                # frames above ~35 Msps regardless of driver path (generic
-                # SoapySDR or native-bladerf with tuned buffers), climbing
-                # to ~45% loss by 60+ Msps. This is a real USB/host
-                # throughput ceiling, not a bug. Keep in sync with
-                # rf-iq-gateway's ControlState::kMaxSustainableSampleRateHz.
-                "max_sample_rate_sps": 33e6,
+                # Full BladeRF 2.0 ADC ceiling - rf-iq-gateway's daemon
+                # sustains this on both radios simultaneously with proper
+                # SoapySDR stream args (RFIQ_STREAM_ARGS) and its delivery-
+                # path fixes (see ControlState::kMaxSustainableSampleRateHz
+                # for the matching server-side clamp, which was lowered to
+                # 33 Msps and then raised back here once the real bugs -
+                # missing stream args, a lock-held per-frame copy in the
+                # ring buffer, redundant per-client reserialization - were
+                # found and fixed instead of just capping the rate).
+                "max_sample_rate_sps": 61.44e6,
                 "notes": "rfiq_daemon CF32 socket stream (live-tunable via control socket)",
                 "rfiq_socket_path": socket_path,
                 "rfiq_control_socket_path": control_path,
