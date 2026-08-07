@@ -8,6 +8,7 @@ import RadioIcon from '@mui/icons-material/Radio';
 import SensorsIcon from '@mui/icons-material/Sensors';
 import StopIcon from '@mui/icons-material/Stop';
 import WifiIcon from '@mui/icons-material/Wifi';
+import BluetoothDeviceCards from './BluetoothDeviceCards';
 
 const PATTERN_OF_LIFE_STORAGE_KEY = 'sdrshark_pattern_of_life_v1';
 const PATTERN_OF_LIFE_MAX_DAYS = 90;
@@ -1202,6 +1203,7 @@ const DecodedEventsPanel = ({ telemetry, settings }) => {
       </Paper>
 
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', pr: 0.5 }}>
+        <BluetoothDeviceCards />
         {filteredEvents.length === 0 ? (
           <Paper
             elevation={0}

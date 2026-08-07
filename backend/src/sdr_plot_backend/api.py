@@ -7,6 +7,7 @@ from werkzeug.utils import secure_filename
 import os
 import numpy as np
 import json
+import requests
 from pathlib import Path
 from flask import Blueprint, jsonify, request, current_app, Response
 
@@ -1237,6 +1238,27 @@ def stream_data():
 def bluetooth_events():
     max_events = _safe_int(request.args.get('limit', 50), default=50, min_value=1, max_value=200)
     return jsonify(_to_builtin(bluetooth_plugin.snapshot(max_events=max_events)))
+
+
+RF_SENTINEL_STATUS_URL = os.getenv("RF_SENTINEL_STATUS_URL", "http://127.0.0.1:5050/api/status")
+
+
+@api_blueprint.route('/api/bluetooth/devices')
+def bluetooth_devices():
+    """Resolved BTC/BLE device cards - same discovery_table rf-sentinel
+    itself renders (both apps' backends feed it from the same always-on
+    shared detector; this just fetches rf-sentinel's own resolution of it,
+    same host/network namespace, rather than duplicating that fairly
+    involved UAP/piconet/manufacturer-lookup logic here).
+    """
+    try:
+        resp = requests.get(RF_SENTINEL_STATUS_URL, timeout=3)
+        resp.raise_for_status()
+        rows = resp.json().get('discovery_table', [])
+    except requests.RequestException as exc:
+        return jsonify({'rows': [], 'error': str(exc)})
+    rows = [row for row in rows if str(row.get('protocol') or '').upper() in {'BTC', 'BTLE'}]
+    return jsonify({'rows': rows, 'error': None})
 
 
 @api_blueprint.route('/api/fm/play', methods=['POST'])
