@@ -45,6 +45,27 @@ function fmtManufacturer(row) {
   return data ? `${name} ${data.slice(0, 10)}${data.length > 10 ? '...' : ''}` : name;
 }
 
+// Same matching as rf-sentinel's own brandKind()/brandIcon() - icon files
+// copied from its ui/resources/icons/ into this app's public/ so both
+// render identically without depending on rf-sentinel's server being up.
+function brandIconSrc(row) {
+  const text = [
+    row.identity,
+    row.name,
+    row.device_type,
+    row.device_type_detail,
+    row.manufacturer?.company_name,
+    fmtManufacturer(row),
+    Array.isArray(row.uuid16_names) ? row.uuid16_names.join(' ') : '',
+  ]
+    .join(' ')
+    .toLowerCase();
+  if (text.includes('airtag') || text.includes('find my')) return { src: '/apple-airtag.png', alt: 'AirTag' };
+  if (text.includes('apple')) return { src: '/apple.png', alt: 'Apple' };
+  if (text.includes('tile') || text.includes('feed')) return { src: '/tile.png', alt: 'Tile' };
+  return null;
+}
+
 function Chip({ children }) {
   return (
     <span
@@ -73,6 +94,7 @@ function DeviceCard({ row }) {
   const manufacturer = fmtManufacturer(row);
   const deviceType = String(row.device_type || '').trim();
   const deviceTypeDetail = String(row.device_type_detail || '').trim();
+  const brandIcon = brandIconSrc(row);
   return (
     <Box
       sx={{
@@ -83,7 +105,13 @@ function DeviceCard({ row }) {
         background: PROTOCOL_BG[protocol] || 'rgba(255,255,255,0.03)',
       }}
     >
-      <Typography variant="subtitle2" sx={{ color: '#fff', mb: 0.5 }}>
+      <Typography
+        variant="subtitle2"
+        sx={{ color: '#fff', mb: 0.5, display: 'flex', alignItems: 'center', gap: 0.6 }}
+      >
+        {brandIcon ? (
+          <img src={brandIcon.src} alt={brandIcon.alt} width={16} height={16} style={{ borderRadius: 3 }} />
+        ) : null}
         {row.identity || row.name || row.mac || 'Unknown device'}
       </Typography>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: row.detail || row.decoded_text ? 0.5 : 0 }}>
