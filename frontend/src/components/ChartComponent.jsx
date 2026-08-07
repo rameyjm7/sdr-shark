@@ -434,7 +434,7 @@ const ChartComponent = ({
         lastFrameTsRef.current = now;
         lastDataTsRef.current = now;
         const latencyMs = performance.now() - start;
-        const safeSdr = data?.settings?.sdr || settings?.sdr || 'n/a';
+        const safeSdr = data?.settings?.sdrLabel || data?.settings?.sdr || settings?.sdrLabel || settings?.sdr || 'n/a';
         const safeSampleRateHz = Math.max(1, (Number(settings.sampleRate) || 1) * 1e6);
         const safeBinsTelemetry = Math.max(1, sanitizedFftData.length || 1);
 

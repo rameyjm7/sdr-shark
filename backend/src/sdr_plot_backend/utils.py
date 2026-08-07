@@ -402,6 +402,7 @@ class sdr_scheduler_config:
             "minPeakDistance": self.minPeakDistance,
             "analysisRetentionSec": self.analysis_retention_sec,
             "radio_name": self.radio_name,
+            "sdrLabel": self.sdr0.current_device_label(),
             "sdrBackend": getattr(self.sdr0, "backend", "gateway"),
             "backendReadOnly": getattr(self.sdr0, "backend", "") == "rfiq",
             "showFirstTrace": self.showFirstTrace,

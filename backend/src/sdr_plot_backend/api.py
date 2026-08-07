@@ -1657,6 +1657,7 @@ def get_sdr_devices():
 def get_settings():
     settings = {
         'sdr': vars.sdr0.device_id or vars.radio_name,
+        'sdrLabel': vars.sdr0.current_device_label(),
         'sdrBackend': getattr(vars.sdr0, 'backend', 'gateway'),
         # rfiq is no longer receive-only - SDRGeneric now pushes tuning
         # changes through to the daemon's control socket, same as the other

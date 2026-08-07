@@ -480,11 +480,17 @@ class SDRGeneric:
         return devices
 
     def _rfiq_devices(self) -> list[dict[str, Any]]:
+        # rfiq_daemon's wire protocol carries no device metadata (just
+        # center/rate/bandwidth/gain), so this can't be discovered live -
+        # station1 has two BladeRF 2.0 units, one per rfiq_daemon instance,
+        # which is what these labels describe. Update if the underlying
+        # hardware ever changes.
+        rfiq_labels = {0: "bladeRF 0 (2.4 GHz)", 1: "bladeRF 1 (5.8 GHz)"}
         return [
             {
                 "id": f"rfiq:{index}",
                 "driver": "rfiq",
-                "label": f"RF IQ daemon {index} ({socket_path})",
+                "label": rfiq_labels.get(index, f"rfiq:{index}"),
                 "serial": "",
                 "backend": "rfiq",
                 "freq_min_hz": 1e6,
@@ -511,6 +517,23 @@ class SDRGeneric:
             if device["id"] == device_id:
                 return device
         return None
+
+    def current_device_label(self) -> str:
+        """Human-readable label for the currently selected device (e.g.
+        "bladeRF 0 (2.4 GHz)") - UI code should show this instead of the
+        raw connection id ("rfiq:0"), which means nothing to a user.
+        """
+        device_id = self.device_id or ""
+        try:
+            if self.backend == "rfiq":
+                device = self._rfiq_device_by_id(device_id)
+            else:
+                device = next((d for d in self._fetch_soapy_devices() if d.get("id") == device_id), None)
+            if device and device.get("label"):
+                return str(device["label"])
+        except Exception:
+            pass
+        return device_id or "n/a"
 
     def _send_rfiq_control(self) -> None:
         """Push the current frequency/rate/bandwidth/gain to rfiq_daemon's
