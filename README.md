@@ -366,17 +366,15 @@ Potential areas for future work:
 ## Licensing
 
 SDR-Shark is source-available for personal, educational, research, evaluation,
-and other non-commercial use. All commercial rights are retained by Jacob Ramey
-and RTG LLC. Commercial use, paid deployment, commercial hosting, integration
+and other non-commercial use. All commercial rights are retained by Jacob Ramey.
+Commercial use, paid deployment, commercial hosting, integration
 into commercial products or services, contract deliverables, managed service
 offerings, or other revenue-generating use requires prior written permission.
 
 This project may interoperate with third-party datasets, models, SDR drivers,
-decoder projects, protocol specifications, and external tools. Jacob Ramey and
-RTG LLC make no ownership claim over those third-party materials; they remain
+decoder projects, protocol specifications, and external tools. Jacob Ramey makes no ownership claim over those third-party materials; they remain
 subject to their original licenses, terms, and redistribution restrictions.
 
 For commercial licensing, integration, support, or permission inquiries, contact:
 
 - Jacob Ramey: rameyjm7@gmail.com
-- RTG LLC: jake.rtgllc@gmail.com
