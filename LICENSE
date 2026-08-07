@@ -1,15 +1,15 @@
 SDR-Shark Non-Commercial Source-Available License
 
-Copyright (c) 2024-2026 Jacob Ramey and RTG LLC
+Copyright (c) 2024-2026 Jacob Ramey
 
-All commercial rights are reserved by Jacob Ramey and RTG LLC.
+All commercial rights are reserved by Jacob Ramey.
 
 Permission is granted to use, copy, modify, and distribute the original software,
 scripts, documentation, configuration, and project-authored artifacts in this
 repository for personal, educational, research, evaluation, and other
 non-commercial purposes only.
 
-Commercial use requires prior written permission from Jacob Ramey or RTG LLC.
+Commercial use requires prior written permission from Jacob Ramey.
 Commercial use includes, but is not limited to, sale, sublicensing, paid
 deployment, commercial hosting, integration into commercial products or
 services, contract deliverables, internal commercial operations, managed service
@@ -18,12 +18,11 @@ offerings, or other revenue-generating use.
 Commercial licensing, integration, support, or permission inquiries:
 
 - Jacob Ramey: rameyjm7@gmail.com
-- RTG LLC: jake.rtgllc@gmail.com
 
 Third-Party Materials
 
 This license applies only to original work authored for this repository. Jacob
-Ramey and RTG LLC make no claim of ownership over third-party datasets,
+Ramey makes no claim of ownership over third-party datasets,
 pretrained models, dependencies, drivers, SDR vendor software, decoder projects,
 protocol specifications, sample captures, or other externally sourced materials
 referenced, used with, or required by this repository.
