@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import CloseIcon from '@mui/icons-material/Close';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import GpsFixedIcon from '@mui/icons-material/GpsFixed';
 import GpsNotFixedIcon from '@mui/icons-material/GpsNotFixed';
 import SettingsIcon from '@mui/icons-material/Settings';
@@ -33,6 +34,26 @@ import Classifiers from './components/ControlPanel/Classifiers';
 import DecodedEventsPanel from './components/DecodedEventsPanel';
 import axios from 'axios';
 import './App.css';
+
+const LAUNCHER_RETURN_STORAGE_KEY = 'sdrshark_launcher_return_v1';
+
+// The station1 app launcher appends ?launcher_return=<url> when it redirects
+// here after starting this container - only show a back button when that's
+// actually how we got here, not when someone hits this port directly.
+// Persisted to sessionStorage since a plain reload/navigation within this
+// single-page app would otherwise lose the query param.
+const readLauncherReturn = () => {
+  try {
+    const fromQuery = new URLSearchParams(window.location.search).get('launcher_return');
+    if (fromQuery) {
+      sessionStorage.setItem(LAUNCHER_RETURN_STORAGE_KEY, fromQuery);
+      return fromQuery;
+    }
+    return sessionStorage.getItem(LAUNCHER_RETURN_STORAGE_KEY) || '';
+  } catch (error) {
+    return '';
+  }
+};
 
 const ACTIVITY_LOG_RETENTION_STORAGE_KEY = 'sdrshark_activity_log_retention_sec_v1';
 const LAST_SDR_STORAGE_KEY = 'sdrshark_last_selected_sdr_v1';
@@ -141,6 +162,7 @@ const App = () => {
   const [displayMode, setDisplayMode] = useState(readDisplayMode);
   const [signalActivityVisible, setSignalActivityVisible] = useState(readSignalActivityVisible);
   const [gpsOpen, setGpsOpen] = useState(false);
+  const [launcherReturn] = useState(readLauncherReturn);
   const [telemetry, setTelemetry] = useState({
     sdr: 'n/a',
     hzPerBin: 0,
@@ -496,6 +518,25 @@ const App = () => {
             width: '100%',
           }}
         >
+          {launcherReturn && (
+            <Button
+              size="small"
+              variant="text"
+              startIcon={<ArrowBackIcon />}
+              onClick={() => { window.location.href = launcherReturn; }}
+              sx={{
+                color: '#d9f0ff',
+                borderRadius: '3px',
+                px: 1.25,
+                mr: 'auto',
+                '&:hover': {
+                  bgcolor: 'rgba(144, 202, 249, 0.10)',
+                },
+              }}
+            >
+              Launcher
+            </Button>
+          )}
           {navButtons.map((item) => (
             <Button
               key={item.key}
