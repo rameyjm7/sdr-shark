@@ -411,10 +411,18 @@ const ControlPanel = ({
   const enforceLimits = (settings) => {
     const newSettings = { ...settings };
     const targetSdr = newSettings.sdr || sdr;
-    const device = availableSdrs.find((d) => d.id === targetSdr);
+    // availableSdrs is populated by an async fetch and can still be empty
+    // the moment a settings change fires (e.g. right after a page load or
+    // app switch) - falling back to a bare 20 MHz default in that window
+    // silently clamped a 60 MHz request from an rfiq/bladerf device down
+    // to 20 and, worse, persisted that lower value to the backend. Fall
+    // back to the known per-driver ceiling (already used elsewhere for
+    // this exact "device list hasn't loaded yet" case) instead of a
+    // single hardcoded number that's wrong for every device but hackrf.
+    const device = availableSdrs.find((d) => d.id === targetSdr) || fallbackDeviceForSdr(targetSdr);
     const freqMinMHz = device ? Number(device.freq_min_hz) / 1e6 : 1;
     const freqMaxMHz = device ? Number(device.freq_max_hz) / 1e6 : 6000;
-    const srMaxMHz = device ? Number(device.max_sample_rate_sps) / 1e6 : 20;
+    const srMaxMHz = device ? Number(device.max_sample_rate_sps) / 1e6 : 61.44;
 
     const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
