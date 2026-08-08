@@ -15,6 +15,12 @@ The project is intended for lawful RF engineering, lab validation, education, sp
 
 [Short SDR-Shark demo clip](docs/media/sdr-shark-demo.gif)
 
+## Interface Evidence
+
+| Scanner setup | SDR settings | Signal analysis |
+|---|---|---|
+| [![SDR-Shark scanner setup dialog](docs/media/sdr-shark-scanner.jpg)](docs/media/sdr-shark-scanner.jpg) | [![SDR-Shark SDR settings dialog](docs/media/sdr-shark-settings.jpg)](docs/media/sdr-shark-settings.jpg) | [![SDR-Shark signal analysis dialog](docs/media/sdr-shark-analysis.jpg)](docs/media/sdr-shark-analysis.jpg) |
+
 ## What It Does
 
 - Displays a live spectrum trace and waterfall with GPU-backed rendering support.
