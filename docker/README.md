@@ -13,7 +13,26 @@ with expired GPG keys, and supervisor running a dev frontend server, and
 has been removed. `docker/soapy-build/` here is a build asset, not an
 alternate Dockerfile.)
 
-## Deploy (direct SoapySDR)
+## Deploy (default: `rfiq`, the actual production config)
+
+`SDR_BACKEND` defaults to `rfiq` (see the section below) - this is what's
+actually running on station1 and dev-desktop:
+
+```
+docker run -d \
+  --name sdr-shark \
+  --restart unless-stopped \
+  --network host \
+  -v /tmp:/tmp \
+  sdr-shark:latest
+```
+
+## Deploy (direct SoapySDR, `-e SDR_BACKEND=soapy`)
+
+Only needed if you're bypassing `rfiq_daemon` and want this container to
+open the BladeRF itself - competes directly with anything else (like
+rf-sentinel) also trying to hold the radio, unlike the default `rfiq`
+mode which shares it through the daemon:
 
 ```
 docker run -d \
@@ -23,6 +42,7 @@ docker run -d \
   -v /dev/bus/usb:/dev/bus/usb \
   --device-cgroup-rule="c 189:* rmw" \
   --group-add plugdev \
+  -e SDR_BACKEND=soapy \
   sdr-shark:latest
 ```
 

@@ -43,6 +43,15 @@ The direct SoapySDR path can work with any radio supported by the installed Soap
 
 High-rate features such as 60 MHz 2.4 GHz scanning require hardware and host I/O that can sustain the requested bandwidth. For narrowband features such as ADS-B, FM, and sub-GHz monitoring, lower bandwidth devices may be sufficient.
 
+## Docker
+
+A container build also exists (root `Dockerfile`, not the legacy one
+under `docker/` - see `docker/README.md`), deployed on station1 and
+dev-desktop. **See `docker/README.md`** for the deploy commands (default
+`rfiq` mode vs. direct-SoapySDR/gateway overrides) and a list of real
+bugs found and fixed getting the original Dockerfiles working, before
+building your own image from scratch.
+
 ## Quick Install
 
 On Debian/Ubuntu-like systems, the recommended one-script install is:
