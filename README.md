@@ -11,6 +11,10 @@ The project demonstrates the system layer around RF ML: live device streaming, b
 
 The project is intended for lawful RF engineering, lab validation, education, spectrum monitoring, and passive signal-awareness workflows. Operators are responsible for complying with all applicable radio, privacy, and computer misuse laws in their jurisdiction.
 
+![SDR-Shark live spectrum, waterfall, and decoded signal activity](docs/media/sdr-shark-signal-activity.jpg)
+
+[Short SDR-Shark demo clip](docs/media/sdr-shark-demo.gif)
+
 ## What It Does
 
 - Displays a live spectrum trace and waterfall with GPU-backed rendering support.
