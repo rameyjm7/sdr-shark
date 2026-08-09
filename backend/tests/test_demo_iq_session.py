@@ -81,3 +81,30 @@ def test_iq_replay_sdr_reads_generated_demo_samples(tmp_path):
     assert info["sample_rate_sps"] == 200000
     assert replay.current_device_label() == "Public synthetic 2.4 GHz SDR-Shark demo"
     assert replay.mimo_info()["enabled"] is False
+
+
+def test_iq_replay_sdr_configure_receiver_updates_stream_info(tmp_path):
+    generator = _load_demo_generator()
+    session_root = tmp_path / "iq-sessions"
+    args = generator.build_parser().parse_args([
+        "--root", str(session_root),
+        "--session-id", "public-demo-test",
+        "--duration", "0.25",
+        "--sample-rate", "200000",
+        "--chunk-samples", "1024",
+    ])
+    generator.generate_session(args)
+
+    replay = IQReplaySDR(session_root / "public-demo-test", loop=False, speed=20, size=1024)
+    replay.configure_receiver(
+        frequency=2_438_000_000,
+        sample_rate=1_000_000,
+        bandwidth=750_000,
+        gain=22,
+    )
+
+    info = replay.iq_tap_info()
+    assert info["center_freq_hz"] == 2_438_000_000
+    assert info["sample_rate_sps"] == 1_000_000
+    assert info["bandwidth_hz"] == 750_000
+    assert info["gain_db"] == 22

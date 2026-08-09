@@ -281,8 +281,15 @@ class IQReplaySDR:
     def current_device_label(self) -> str:
         return str(self.metadata.get("label") or self.device_id or "IQ replay")
 
-    def configure_receiver(self, **_: Any) -> None:
-        return
+    def configure_receiver(self, **kwargs: Any) -> None:
+        if kwargs.get("frequency") is not None:
+            self.frequency = float(kwargs["frequency"])
+        if kwargs.get("sample_rate") is not None:
+            self.sample_rate = float(kwargs["sample_rate"])
+        if kwargs.get("bandwidth") is not None:
+            self.bandwidth = float(kwargs["bandwidth"])
+        if kwargs.get("gain") is not None:
+            self.gain = float(kwargs["gain"])
 
     def set_frequency(self, frequency: float) -> None:
         self.frequency = float(frequency)
