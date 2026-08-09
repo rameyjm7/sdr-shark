@@ -5,15 +5,43 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
 HOST="${SDR_SHARK_DEMO_HOST:-127.0.0.1}"
-PORT="${SDR_SHARK_DEMO_PORT:-5000}"
+REQUESTED_PORT="${SDR_SHARK_DEMO_PORT:-80}"
+FALLBACK_PORT="${SDR_SHARK_DEMO_FALLBACK_PORT:-8080}"
 SESSION_ID="${SDR_SHARK_DEMO_SESSION_ID:-public-demo-2p4ghz}"
 SESSION_ROOT="${SDR_SHARK_IQ_SESSION_DIR:-${REPO_ROOT}/.demo/iq-sessions}"
-HOST_ID="${HOST//[^A-Za-z0-9_.-]/_}"
-PID_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-${HOST_ID}-${PORT}.pid"
-LOG_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-${HOST_ID}-${PORT}.log"
+ACTIVE_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-active.env"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 mkdir -p "${REPO_ROOT}/.demo"
+
+can_bind_port() {
+  local port="$1"
+  "${PYTHON_BIN}" - "$HOST" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((host, port))
+PY
+}
+
+PORT="${REQUESTED_PORT}"
+if ! can_bind_port "${PORT}" 2>/dev/null; then
+  if [[ "${PORT}" != "${FALLBACK_PORT}" ]] && can_bind_port "${FALLBACK_PORT}" 2>/dev/null; then
+    echo "Port ${PORT} is unavailable without elevated permissions; falling back to ${FALLBACK_PORT}."
+    PORT="${FALLBACK_PORT}"
+  else
+    echo "Neither port ${PORT} nor fallback port ${FALLBACK_PORT} is available." >&2
+    exit 1
+  fi
+fi
+
+HOST_ID="${HOST//[^A-Za-z0-9_.-]/_}"
+PID_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-${HOST_ID}-${PORT}.pid"
+LOG_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-${HOST_ID}-${PORT}.log"
 
 if [[ ! -x "${REPO_ROOT}/.venv/bin/python" ]]; then
   echo "Creating .venv for SDR-Shark demo..."
@@ -66,18 +94,14 @@ if [[ ! -f "${PID_FILE}" ]]; then
     "SDR_SHARK_WORKER_SDR=${SDR_SHARK_WORKER_SDR:-0}"
     "SDR_SHARK_GUNICORN=${REPO_ROOT}/.venv/bin/gunicorn"
   )
-  nohup bash -c '
-    log_file="$1"
-    pid_file="$2"
-    shift 2
-    setsid env "$@" scripts/start.sh >"${log_file}" 2>&1 &
-    echo "$!" > "${pid_file}"
-  ' sdr-shark-demo "${LOG_FILE}" "${PID_FILE}" "${launch_env[@]}" >/dev/null 2>&1 &
-  for _ in $(seq 1 40); do
-    [[ -f "${PID_FILE}" ]] && break
-    sleep 0.05
-  done
+  nohup setsid env "${launch_env[@]}" scripts/start.sh >"${LOG_FILE}" 2>&1 &
+  echo "$!" > "${PID_FILE}"
 fi
+
+{
+  printf 'SDR_SHARK_DEMO_HOST=%q\n' "${HOST}"
+  printf 'SDR_SHARK_DEMO_PORT=%q\n' "${PORT}"
+} > "${ACTIVE_FILE}"
 
 for _ in $(seq 1 80); do
   if curl -fsS "http://${HOST}:${PORT}/api/iq/sessions" >/dev/null 2>&1; then
@@ -105,7 +129,7 @@ echo "  Status: http://${HOST}:${PORT}/api/iq/replay/status"
 echo "  Log:    ${LOG_FILE}"
 echo
 echo "Stop it with:"
-if [[ "${HOST}" == "127.0.0.1" && "${PORT}" == "5000" ]]; then
+if [[ "${HOST}" == "127.0.0.1" && "${PORT}" == "80" ]]; then
   echo "  ./scripts/demo_stop.sh"
 else
   echo "  SDR_SHARK_DEMO_HOST=${HOST} SDR_SHARK_DEMO_PORT=${PORT} ./scripts/demo_stop.sh"

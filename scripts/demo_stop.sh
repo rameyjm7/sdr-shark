@@ -2,8 +2,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ACTIVE_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-active.env"
+if [[ -z "${SDR_SHARK_DEMO_PORT:-}" && -f "${ACTIVE_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ACTIVE_FILE}"
+fi
 HOST="${SDR_SHARK_DEMO_HOST:-127.0.0.1}"
-PORT="${SDR_SHARK_DEMO_PORT:-5000}"
+PORT="${SDR_SHARK_DEMO_PORT:-80}"
 HOST_ID="${HOST//[^A-Za-z0-9_.-]/_}"
 PID_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-${HOST_ID}-${PORT}.pid"
 curl -fsS -X POST "http://${HOST}:${PORT}/api/iq/replay/stop" >/dev/null 2>&1 || true
@@ -24,6 +29,7 @@ if [[ -f "${PID_FILE}" ]]; then
     echo "Stopped SDR-Shark demo backend PID ${pid}."
   fi
   rm -f "${PID_FILE}"
+  rm -f "${ACTIVE_FILE}"
 else
   echo "No SDR-Shark demo PID file found."
 fi

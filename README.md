@@ -23,10 +23,10 @@ SDR-Shark includes a hardware-free public demo that generates deterministic synt
 ./scripts/demo.sh
 ```
 
-Open the UI at:
+The script tries port `80` first and falls back to `8080` when low-port bind is unavailable without elevated permissions. Open the URL printed by the script, usually:
 
 ```text
-http://127.0.0.1:5000
+http://127.0.0.1:8080
 ```
 
 Stop the demo with:

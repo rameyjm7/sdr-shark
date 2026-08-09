@@ -10,10 +10,10 @@ From the repository root:
 ./scripts/demo.sh
 ```
 
-Then open:
+The script tries port `80` first and falls back to `8080` when low-port bind is unavailable without elevated permissions. Open the URL printed by the script, usually:
 
 ```text
-http://127.0.0.1:5000
+http://127.0.0.1:8080
 ```
 
 Stop the demo with:
@@ -44,32 +44,32 @@ Those directories are ignored by git. Do not commit generated IQ sessions unless
 ## Useful API Checks
 
 ```bash
-curl http://127.0.0.1:5000/api/iq/sessions
-curl http://127.0.0.1:5000/api/iq/replay/status
-curl http://127.0.0.1:5000/api/data
+curl http://127.0.0.1:8080/api/iq/sessions
+curl http://127.0.0.1:8080/api/iq/replay/status
+curl http://127.0.0.1:8080/api/data
 ```
 
 Successful demo replay should show `active: true` from `/api/iq/replay/status` and non-empty `fft` and `waterfall` arrays from `/api/data`.
 
 ## Troubleshooting
 
-- If port `5000` is busy, run with another port:
+- Port `80` is attempted first and `8080` is the default fallback. To choose a different fallback:
 
   ```bash
-  SDR_SHARK_DEMO_PORT=5010 ./scripts/demo.sh
+  SDR_SHARK_DEMO_FALLBACK_PORT=5000 ./scripts/demo.sh
   ```
 
-  Stop that instance with the same port:
+  To force a specific port:
 
   ```bash
-  SDR_SHARK_DEMO_PORT=5010 ./scripts/demo_stop.sh
+  SDR_SHARK_DEMO_PORT=5000 ./scripts/demo.sh
   ```
 
 - If dependencies are missing, `demo.sh` creates an ignored local `.venv`, installs backend dependencies, and builds the React frontend for same-origin serving.
 - If the server fails to start, inspect:
 
   ```text
-  .demo/sdr-shark-demo-127.0.0.1-5000.log
+  .demo/sdr-shark-demo-127.0.0.1-8080.log
   ```
 
 - To regenerate the synthetic session:
