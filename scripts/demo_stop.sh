@@ -7,11 +7,20 @@ if [[ -z "${SDR_SHARK_DEMO_PORT:-}" && -f "${ACTIVE_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ACTIVE_FILE}"
 fi
-HOST="${SDR_SHARK_DEMO_HOST:-127.0.0.1}"
+HOST="${SDR_SHARK_DEMO_HOST:-0.0.0.0}"
 PORT="${SDR_SHARK_DEMO_PORT:-80}"
+if [[ "${HOST}" == "0.0.0.0" || "${HOST}" == "::" ]]; then
+  CONTROL_HOST="127.0.0.1"
+else
+  CONTROL_HOST="${HOST}"
+fi
 HOST_ID="${HOST//[^A-Za-z0-9_.-]/_}"
 PID_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-${HOST_ID}-${PORT}.pid"
-curl -fsS -X POST "http://${HOST}:${PORT}/api/iq/replay/stop" >/dev/null 2>&1 || true
+if [[ "${PORT}" == "80" ]]; then
+  curl -fsS -X POST "http://${CONTROL_HOST}/api/iq/replay/stop" >/dev/null 2>&1 || true
+else
+  curl -fsS -X POST "http://${CONTROL_HOST}:${PORT}/api/iq/replay/stop" >/dev/null 2>&1 || true
+fi
 
 if [[ -f "${PID_FILE}" ]]; then
   pid="$(cat "${PID_FILE}" || true)"

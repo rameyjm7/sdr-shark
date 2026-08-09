@@ -4,7 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
-HOST="${SDR_SHARK_DEMO_HOST:-127.0.0.1}"
+HOST="${SDR_SHARK_DEMO_HOST:-0.0.0.0}"
 REQUESTED_PORT="${SDR_SHARK_DEMO_PORT:-80}"
 FALLBACK_PORT="${SDR_SHARK_DEMO_FALLBACK_PORT:-8080}"
 SESSION_ID="${SDR_SHARK_DEMO_SESSION_ID:-public-demo-2p4ghz}"
@@ -13,6 +13,35 @@ ACTIVE_FILE="${REPO_ROOT}/.demo/sdr-shark-demo-active.env"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 mkdir -p "${REPO_ROOT}/.demo"
+
+if [[ "${HOST}" == "0.0.0.0" || "${HOST}" == "::" ]]; then
+  CONTROL_HOST="127.0.0.1"
+else
+  CONTROL_HOST="${HOST}"
+fi
+
+format_url() {
+  local host="$1"
+  local port="$2"
+  if [[ "${port}" == "80" ]]; then
+    printf 'http://%s' "${host}"
+  else
+    printf 'http://%s:%s' "${host}" "${port}"
+  fi
+}
+
+detect_lan_host() {
+  ip -4 route get 1.1.1.1 2>/dev/null | awk '
+    {
+      for (i = 1; i <= NF; i++) {
+        if ($i == "src" && (i + 1) <= NF) {
+          print $(i + 1)
+          exit
+        }
+      }
+    }
+  '
+}
 
 can_bind_port() {
   local port="$1"
@@ -104,13 +133,13 @@ fi
 } > "${ACTIVE_FILE}"
 
 for _ in $(seq 1 80); do
-  if curl -fsS "http://${HOST}:${PORT}/api/iq/sessions" >/dev/null 2>&1; then
+  if curl -fsS "$(format_url "${CONTROL_HOST}" "${PORT}")/api/iq/sessions" >/dev/null 2>&1; then
     break
   fi
   sleep 0.25
 done
 
-if ! curl -fsS "http://${HOST}:${PORT}/api/iq/sessions" >/dev/null 2>&1; then
+if ! curl -fsS "$(format_url "${CONTROL_HOST}" "${PORT}")/api/iq/sessions" >/dev/null 2>&1; then
   echo "SDR-Shark demo backend did not become ready. Recent log:" >&2
   tail -n 80 "${LOG_FILE}" >&2 || true
   exit 1
@@ -120,16 +149,20 @@ echo "Starting IQ replay session ${SESSION_ID}..."
 curl -fsS \
   -H "Content-Type: application/json" \
   -d "{\"id\":\"${SESSION_ID}\",\"loop\":true,\"speed\":1}" \
-  "http://${HOST}:${PORT}/api/iq/replay/start" >/dev/null
+  "$(format_url "${CONTROL_HOST}" "${PORT}")/api/iq/replay/start" >/dev/null
 
 echo
+LAN_HOST="${SDR_SHARK_DEMO_LAN_HOST:-$(detect_lan_host)}"
 echo "SDR-Shark synthetic demo is running:"
-echo "  UI:     http://${HOST}:${PORT}"
-echo "  Status: http://${HOST}:${PORT}/api/iq/replay/status"
+echo "  Local UI:  $(format_url "${CONTROL_HOST}" "${PORT}")"
+if [[ -n "${LAN_HOST}" && "${HOST}" == "0.0.0.0" ]]; then
+  echo "  LAN UI:    $(format_url "${LAN_HOST}" "${PORT}")"
+fi
+echo "  Status:    $(format_url "${CONTROL_HOST}" "${PORT}")/api/iq/replay/status"
 echo "  Log:    ${LOG_FILE}"
 echo
 echo "Stop it with:"
-if [[ "${HOST}" == "127.0.0.1" && "${PORT}" == "80" ]]; then
+if [[ "${HOST}" == "0.0.0.0" && "${PORT}" == "80" ]]; then
   echo "  ./scripts/demo_stop.sh"
 else
   echo "  SDR_SHARK_DEMO_HOST=${HOST} SDR_SHARK_DEMO_PORT=${PORT} ./scripts/demo_stop.sh"
