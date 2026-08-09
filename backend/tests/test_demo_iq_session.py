@@ -41,6 +41,8 @@ def test_generate_demo_iq_session_creates_replay_fixture(tmp_path):
     assert metadata["stream"]["center_freq_hz"] == generator.DEFAULT_CENTER_HZ
     assert metadata["stream"]["sample_rate_sps"] == 200000
     assert metadata["replay_preview_scale"] == generator.DEFAULT_REPLAY_PREVIEW_SCALE
+    assert metadata["generator"]["version"] == 2
+    assert "Bluetooth-like frequency-hopping emitter" in metadata["generator"]["description"]
     assert metadata["chunks"] > 0
     assert metadata["bytes"] > 0
     assert capture_path.stat().st_size == metadata["bytes"]

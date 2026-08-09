@@ -1,6 +1,6 @@
 # SDR-Shark Public Demo Mode
 
-SDR-Shark can run a hardware-free public demo using deterministic synthetic IQ replay data. The demo data is generated locally and is public-safe: it contains a scanner-driven hopping sequence, synthetic tones, noise-floor movement, and burst activity, not captured RF from a real environment.
+SDR-Shark can run a hardware-free public demo using deterministic synthetic IQ replay data. The demo data is generated locally and is public-safe: it contains a stationary receiver view of a Bluetooth-like frequency-hopping emitter, synthetic tones, noise-floor movement, and burst activity, not captured RF from a real environment.
 
 Public case study: [RTG Spectrum SDR-Shark](https://rtgspectrum.com/sdr-shark/)
 
@@ -49,7 +49,7 @@ Stop the demo with:
 ## What The Demo Shows
 
 - A replay-backed SDR source centered at 2.437 GHz.
-- A scanner-driven hop sequence across synthetic 2.4 GHz dwell steps.
+- A stationary receiver view of a Bluetooth-like frequency-hopping 2.4 GHz emitter.
 - A live FFT trace with a moving noise floor and multiple synthetic carriers.
 - Waterfall activity with short burst clusters.
 - Max-hold and persistence behavior from repeatable signal movement.
@@ -80,7 +80,7 @@ Successful demo replay should show `active: true` from `/api/iq/replay/status` a
 
 ## Public Demo Media
 
-The checked-in demo media was captured from the Docker demo using the synthetic `public-demo-2p4ghz` replay session and a short public demo scanner hop plan:
+The checked-in demo media was captured from the Docker demo using the synthetic `public-demo-2p4ghz` replay session. The receiver stays centered while the synthetic Bluetooth-like emitter hops across the passband:
 
 - [Replay GIF](media/sdr-shark-demo.gif)
 - [Full dashboard screenshot](media/sdr-shark-public-demo-dashboard.png)

@@ -11,11 +11,11 @@ The project demonstrates the system layer around RF ML: live device streaming, b
 
 The project is intended for lawful RF engineering, lab validation, education, spectrum monitoring, and passive signal-awareness workflows. Operators are responsible for complying with all applicable radio, privacy, and computer misuse laws in their jurisdiction.
 
-![SDR-Shark public Docker demo scanner hopping sequence](docs/media/sdr-shark-demo.gif)
+![SDR-Shark public Docker demo frequency-hopping signal](docs/media/sdr-shark-demo.gif)
 
 ## Public Demo Mode
 
-SDR-Shark includes a hardware-free public demo that generates deterministic synthetic IQ replay data locally. The demo is public-safe: it shows a scanner-driven hopping sequence, tones, moving noise floor, and burst activity without committing real RF captures or requiring SDR hardware.
+SDR-Shark includes a hardware-free public demo that generates deterministic synthetic IQ replay data locally. The demo is public-safe: it shows a stationary receiver watching a Bluetooth-like frequency-hopping emitter move across the passband, along with tones, moving noise floor, and burst activity, without committing real RF captures or requiring SDR hardware.
 
 Portfolio case study: [RTG Spectrum SDR-Shark](https://rtgspectrum.com/sdr-shark/)
 
@@ -60,7 +60,7 @@ See [docs/demo.md](docs/demo.md) for API checks, troubleshooting, and replay det
 ## What This Proves
 
 - One-command Docker path for reviewers, customers, and collaborators.
-- Scanner-driven hop sequence across synthetic 2.4 GHz dwell steps.
+- Stationary receiver view of a Bluetooth-like frequency-hopping 2.4 GHz emitter.
 - Browser-based spectrum and waterfall UI driven by replayed IQ.
 - Backend FFT, max-hold, persistence, and replay session plumbing.
 - Hardware-aware SDR architecture that can run live, gateway-backed, or replay-backed.
@@ -68,7 +68,7 @@ See [docs/demo.md](docs/demo.md) for API checks, troubleshooting, and replay det
 
 ## Public Demo Evidence
 
-The captures below were generated from the Docker demo using the synthetic `public-demo-2p4ghz` replay session and a short public demo scanner hop plan.
+The captures below were generated from the Docker demo using the synthetic `public-demo-2p4ghz` replay session. The receiver stays centered while the synthetic Bluetooth-like emitter hops across the passband.
 
 | Live replay dashboard | Spectrum and waterfall detail | Signal activity panel |
 |---|---|---|

@@ -42,6 +42,29 @@ def _burst_envelope(t: np.ndarray, centers: tuple[float, ...], width: float) -> 
     return np.clip(env, 0.0, 1.0)
 
 
+def _frequency_hopper(t: np.ndarray, duration: float) -> np.ndarray:
+    """Stationary receiver view of a public-safe frequency-hopping emitter."""
+    hop_offsets = np.array(
+        [-720_000.0, -360_000.0, 180_000.0, 610_000.0, -120_000.0, 430_000.0, -540_000.0, 760_000.0],
+        dtype=np.float64,
+    )
+    hop_period = 0.18
+    hop_active_start = min(7.0, max(0.0, duration * 0.24))
+    hop_active_stop = max(hop_active_start + 1.0, duration - 2.0)
+    relative = np.maximum(0.0, t - hop_active_start)
+    hop_index = np.floor(relative / hop_period).astype(np.int64) % hop_offsets.size
+    local = np.mod(relative, hop_period)
+    duty = hop_period * 0.62
+    edge = hop_period * 0.08
+    on = (t >= hop_active_start) & (t <= hop_active_stop) & (local <= duty)
+    rise = np.clip(local / max(edge, 1e-6), 0.0, 1.0)
+    fall = np.clip((duty - local) / max(edge, 1e-6), 0.0, 1.0)
+    envelope = np.where(on, np.minimum(rise, fall), 0.0).astype(np.float32)
+    symbol_wobble = 0.14 * np.sin(2.0 * np.pi * t * 37.0)
+    phase = hop_offsets[hop_index] * t + symbol_wobble
+    return (0.30 * envelope * np.exp(2j * np.pi * phase)).astype(np.complex64)
+
+
 def _quantize_cs8(iq: np.ndarray) -> bytes:
     real = np.clip(np.real(iq), -0.98, 0.98)
     imag = np.clip(np.imag(iq), -0.98, 0.98)
@@ -88,6 +111,7 @@ def _chunk_iq(
 
     lower_burst = _burst_envelope(np.mod(t + 0.35, duration), (6.3, 14.4, 22.2, 28.6), width=0.12)
     iq = iq + (0.17 * lower_burst * np.exp(2j * np.pi * (-360_000.0 * t + 0.11))).astype(np.complex64)
+    iq = iq + _frequency_hopper(t, duration)
     return iq.astype(np.complex64, copy=False)
 
 
@@ -102,6 +126,7 @@ def _existing_session_matches(metadata: dict[str, object], args: argparse.Namesp
         and int(stream.get("sample_rate_sps") or 0) == int(round(float(args.sample_rate)))
         and int(stream.get("bandwidth_hz") or 0) == int(round(float(args.bandwidth)))
         and float(metadata.get("replay_preview_scale") or 0.0) == DEFAULT_REPLAY_PREVIEW_SCALE
+        and int(dict(metadata.get("generator") or {}).get("version") or 0) == 2
     )
 
 
@@ -186,9 +211,9 @@ def generate_session(args: argparse.Namespace) -> dict[str, object]:
         "replay_preview_scale": DEFAULT_REPLAY_PREVIEW_SCALE,
         "generator": {
             "name": "scripts/generate_demo_iq_session.py",
-            "version": 1,
+            "version": 2,
             "public_safe": True,
-            "description": "Deterministic synthetic tones, noise-floor motion, and burst clusters; no recorded RF environment data.",
+            "description": "Deterministic synthetic tones, noise-floor motion, burst clusters, and a stationary-view Bluetooth-like frequency-hopping emitter; no recorded RF environment data.",
         },
     }
     metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
