@@ -11,9 +11,7 @@ The project demonstrates the system layer around RF ML: live device streaming, b
 
 The project is intended for lawful RF engineering, lab validation, education, spectrum monitoring, and passive signal-awareness workflows. Operators are responsible for complying with all applicable radio, privacy, and computer misuse laws in their jurisdiction.
 
-![SDR-Shark live spectrum, waterfall, and decoded signal activity](docs/media/sdr-shark-signal-activity.jpg)
-
-[Short SDR-Shark demo clip](docs/media/sdr-shark-demo.gif)
+![SDR-Shark public Docker demo replay](docs/media/sdr-shark-demo.gif)
 
 ## Public Demo Mode
 
@@ -21,7 +19,7 @@ SDR-Shark includes a hardware-free public demo that generates deterministic synt
 
 Portfolio case study: [RTG Spectrum SDR-Shark](https://rtgspectrum.com/sdr-shark/)
 
-Docker demo:
+Run the public Docker demo in one command:
 
 ```bash
 docker compose -f docker-compose.demo.yml up --build
@@ -66,6 +64,14 @@ See [docs/demo.md](docs/demo.md) for API checks, troubleshooting, and replay det
 - Backend FFT, max-hold, persistence, and replay session plumbing.
 - Hardware-aware SDR architecture that can run live, gateway-backed, or replay-backed.
 - A safe portfolio demo path for RF workflow review without exposing local RF environment data.
+
+## Public Demo Evidence
+
+The captures below were generated from the Docker demo using the synthetic `public-demo-2p4ghz` replay session.
+
+| Live replay dashboard | Spectrum and waterfall detail | Signal activity panel |
+|---|---|---|
+| [![SDR-Shark public replay dashboard](docs/media/sdr-shark-public-demo-dashboard.png)](docs/media/sdr-shark-public-demo-dashboard.png) | [![SDR-Shark public replay spectrum and waterfall](docs/media/sdr-shark-public-demo-spectrum-waterfall.png)](docs/media/sdr-shark-public-demo-spectrum-waterfall.png) | [![SDR-Shark public replay signal activity panel](docs/media/sdr-shark-public-demo-signal-activity.png)](docs/media/sdr-shark-public-demo-signal-activity.png) |
 
 ## Interface Evidence
 

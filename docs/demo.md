@@ -77,6 +77,15 @@ curl http://127.0.0.1:8080/api/data
 
 Successful demo replay should show `active: true` from `/api/iq/replay/status` and non-empty `fft` and `waterfall` arrays from `/api/data`.
 
+## Public Demo Media
+
+The checked-in demo media was captured from the Docker demo using the synthetic `public-demo-2p4ghz` replay session:
+
+- [Replay GIF](media/sdr-shark-demo.gif)
+- [Full dashboard screenshot](media/sdr-shark-public-demo-dashboard.png)
+- [Spectrum and waterfall screenshot](media/sdr-shark-public-demo-spectrum-waterfall.png)
+- [Signal activity panel screenshot](media/sdr-shark-public-demo-signal-activity.png)
+
 ## Docker Options
 
 Run in the background:
