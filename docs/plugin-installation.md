@@ -73,13 +73,13 @@ If using the systemd service, place gateway settings in `/etc/default/sdr-shark`
 SDR-Shark can reuse RF Sentinel plugin code for several decoders. By default it looks for:
 
 ```bash
-/home/jake/workspace/SDR/RF_Sentinel
+~/workspace/rf-sentinel
 ```
 
 Override the path:
 
 ```bash
-export RF_SENTINEL_ROOT='/path/to/RF_Sentinel'
+export RF_SENTINEL_ROOT='/opt/rf-sentinel'
 ```
 
 Expected RF Sentinel plugin source paths:
@@ -100,7 +100,7 @@ Environment:
 
 ```bash
 SDR_SHARK_BLUETOOTH_PLUGIN='1'
-RF_SENTINEL_ROOT='/home/jake/workspace/SDR/RF_Sentinel'
+RF_SENTINEL_ROOT='/opt/rf-sentinel'
 SDR_SHARK_BLUETOOTH_LOG_DIR='/var/log/sdr-shark'
 ```
 
@@ -113,7 +113,7 @@ SDR_SHARK_BLUETOOTH_PLUGIN='0'
 Build the Bluetooth Classic sniffer if RF Sentinel requires it:
 
 ```bash
-cd /home/jake/workspace/SDR/RF_Sentinel/rf_platform/plugins/bluetooth-classic
+cd /opt/rf-sentinel/rf_platform/plugins/bluetooth-classic
 mkdir -p build
 cd build
 cmake ..
@@ -123,7 +123,7 @@ make -j"$(nproc)"
 The expected binary is:
 
 ```bash
-/home/jake/workspace/SDR/RF_Sentinel/rf_platform/plugins/bluetooth-classic/build/btcexplorer-sniffer-gateway
+/opt/rf-sentinel/rf_platform/plugins/bluetooth-classic/build/btcexplorer-sniffer-gateway
 ```
 
 Runtime logs:
@@ -140,7 +140,7 @@ Environment:
 
 ```bash
 SDR_SHARK_ZIGBEE_PLUGIN='1'
-RF_SENTINEL_ROOT='/home/jake/workspace/SDR/RF_Sentinel'
+RF_SENTINEL_ROOT='/opt/rf-sentinel'
 SDR_SHARK_ZIGBEE_CHANNEL_RATE_SPS='4000000'
 SDR_SHARK_ZIGBEE_CORR_MIN='0.18'
 SDR_SHARK_ZIGBEE_AGGREGATE_MS='3.5'
@@ -169,10 +169,10 @@ Environment:
 
 ```bash
 SDR_SHARK_WIFI_PLUGIN='1'
-RF_SENTINEL_ROOT='/home/jake/workspace/SDR/RF_Sentinel'
-WIFI_80211_STACK_ROOT='/home/jake/workspace/SDR/wifi_80211_sdr_stack'
+RF_SENTINEL_ROOT='/opt/rf-sentinel'
+WIFI_80211_STACK_ROOT='/opt/wifi-80211-sdr-stack'
 SDR_SHARK_WIFI_MAC_DECODER='1'
-SDR_SHARK_WIFI_FRAME_JSONL='/home/jake/workspace/SDR/wifi_80211_sdr_stack/pcaps/wifi_bladerf_frames.jsonl'
+SDR_SHARK_WIFI_FRAME_JSONL='/opt/wifi-80211-sdr-stack/pcaps/wifi_bladerf_frames.jsonl'
 ```
 
 Disable:
@@ -190,7 +190,7 @@ SDR_SHARK_WIFI_MAC_DECODER='0'
 Recommended external stack layout:
 
 ```bash
-/home/jake/workspace/SDR/wifi_80211_sdr_stack
+/opt/wifi-80211-sdr-stack
   scripts/wifi_rx_bladerf_gr.py
   local/lib/python3.12/dist-packages
   local/lib/x86_64-linux-gnu
@@ -219,7 +219,7 @@ SDR_SHARK_WIFI_DECODE_INTERVAL_MS='250'
 SDR_SHARK_WIFI_FRAME_POLL_MS='1000'
 SDR_SHARK_WIFI_MAC_DECODER_MAX_CHANNELS='4'
 SDR_SHARK_WIFI_MAC_DECODER_ACTIVITY_TTL='20'
-SDR_SHARK_WIFI_DECODER_SCRIPT='/home/jake/workspace/SDR/wifi_80211_sdr_stack/scripts/wifi_rx_bladerf_gr.py'
+SDR_SHARK_WIFI_DECODER_SCRIPT='/opt/wifi-80211-sdr-stack/scripts/wifi_rx_bladerf_gr.py'
 ```
 
 Tools:
@@ -243,14 +243,14 @@ Liquid-DSP improves channelizer performance:
 
 ```bash
 sudo apt-get install -y libliquid-dev
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 bash backend/src/sdr_plot_backend/native/build_fm_channelizer.sh
 ```
 
 RF Sentinel's FM demod quality code is used when available:
 
 ```bash
-export RF_SENTINEL_ROOT='/home/jake/workspace/SDR/RF_Sentinel'
+export RF_SENTINEL_ROOT='/opt/rf-sentinel'
 ```
 
 If RF Sentinel is unavailable, SDR-Shark falls back to an internal quality demod implementation.
@@ -270,7 +270,7 @@ sudo apt-get install -y cargo
 Build manually if desired:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/backend/src/sdr_plot_backend/plugins/adsb_rx/adsb-rx
+cd sdr-shark/backend/src/sdr_plot_backend/plugins/adsb_rx/adsb-rx
 cargo build --release
 ```
 
@@ -343,8 +343,8 @@ SDR_SHARK_GPS_PLUGIN='0'
 SDR_BACKEND='soapy'
 SDR_SHARK_LOG_DIR='/var/log/sdr-shark'
 SDR_SHARK_BLUETOOTH_LOG_DIR='/var/log/sdr-shark'
-RF_SENTINEL_ROOT='/home/jake/workspace/SDR/RF_Sentinel'
-WIFI_80211_STACK_ROOT='/home/jake/workspace/SDR/wifi_80211_sdr_stack'
+RF_SENTINEL_ROOT='/opt/rf-sentinel'
+WIFI_80211_STACK_ROOT='/opt/wifi-80211-sdr-stack'
 GPSD_HOST='127.0.0.1'
 GPSD_PORT='2948'
 SDR_SHARK_WIFI_MAC_DECODER='1'

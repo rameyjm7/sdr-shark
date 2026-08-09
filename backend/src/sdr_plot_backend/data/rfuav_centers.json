@@ -1099,5 +1099,5 @@
   "drone_count": 36,
   "record_count": 350,
   "schema": "sdr-shark-rfuav-centers-v1",
-  "source": "/home/jake/workspace/SDR/rf-signal-intelligence/rfuav_metadata/rfuav_centers.json"
+  "source": "rf-signal-intelligence/rfuav_metadata/rfuav_centers.json"
 }

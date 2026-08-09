@@ -5,7 +5,7 @@
 ![SDR](https://img.shields.io/badge/SDR-SoapySDR-green)
 ![ML](https://img.shields.io/badge/Applied%20ML-RF%20Signal%20Analysis-orange)
 
-SDR-Shark is an applied RF signal-intelligence platform and web-based software defined radio console for live spectrum monitoring, waterfall visualization, protocol-aware signal activity, and decoder-assisted RF discovery. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
+This repository is a personal portfolio copy of SDR-Shark, an RF signal-intelligence and SDR visualization platform demonstrating live spectrum monitoring, decoder integration, RF activity tracking, and ML integration. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
 
 The project demonstrates the system layer around RF ML: live device streaming, browser visualization, signal feature extraction, decoder plugin orchestration, service deployment, and integration points for models from [rf-signal-intelligence](https://github.com/rameyjm7/rf-signal-intelligence).
 
@@ -16,8 +16,6 @@ The project is intended for lawful RF engineering, lab validation, education, sp
 ## Public Demo Mode
 
 SDR-Shark includes a hardware-free public demo that generates deterministic synthetic IQ replay data locally. The demo is public-safe: it shows a stationary receiver watching a Bluetooth-like frequency-hopping emitter move across the passband, along with tones, moving noise floor, and burst activity, without committing real RF captures or requiring SDR hardware.
-
-Portfolio case study: [RTG Spectrum SDR-Shark](https://rtgspectrum.com/sdr-shark/)
 
 Run the public Docker demo in one command:
 
@@ -126,7 +124,7 @@ building your own image from scratch.
 On Debian/Ubuntu-like systems, the recommended one-script install is:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 chmod +x scripts/install.sh
 ./scripts/install.sh
 ```
@@ -136,7 +134,7 @@ This installs common system dependencies when `apt-get` is available, creates `.
 To install and start SDR-Shark as a systemd service in one command:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 ./scripts/install.sh --enable-service
 ```
 
@@ -160,7 +158,7 @@ sudo apt-get install -y \
 Create and populate the Python environment:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip wheel setuptools
@@ -171,7 +169,7 @@ python -m pip install -e backend
 Install and build the frontend:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm install
 npm run build
 ```
@@ -179,7 +177,7 @@ npm run build
 Optional FM channelizer build:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 bash backend/src/sdr_plot_backend/native/build_fm_channelizer.sh
 ```
 
@@ -188,7 +186,7 @@ bash backend/src/sdr_plot_backend/native/build_fm_channelizer.sh
 Start the backend from the repository root:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 source .venv/bin/activate
 ./scripts/start.sh
 ```
@@ -196,7 +194,7 @@ source .venv/bin/activate
 For frontend development:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm start
 ```
 
@@ -207,7 +205,7 @@ The development frontend normally runs on `http://localhost:3000` and proxies AP
 Install or refresh the service:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 ./scripts/sdr-shark-service.sh install
 ```
 
@@ -390,7 +388,7 @@ Default log locations:
 Backend development:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 source .venv/bin/activate
 python3 -m sdr_plot_backend
 ```
@@ -398,14 +396,14 @@ python3 -m sdr_plot_backend
 Frontend development:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm start
 ```
 
 Production frontend build check:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm run build
 ```
 
@@ -444,15 +442,12 @@ Potential areas for future work:
 ## Licensing
 
 SDR-Shark is source-available for personal, educational, research, evaluation,
-and other non-commercial use. All commercial rights are retained by Jacob Ramey.
-Commercial use, paid deployment, commercial hosting, integration
+and other non-commercial use. All commercial rights are reserved by the
+copyright holder. Commercial use, paid deployment, commercial hosting, integration
 into commercial products or services, contract deliverables, managed service
 offerings, or other revenue-generating use requires prior written permission.
 
 This project may interoperate with third-party datasets, models, SDR drivers,
-decoder projects, protocol specifications, and external tools. Jacob Ramey makes no ownership claim over those third-party materials; they remain
+decoder projects, protocol specifications, and external tools. The copyright
+holder makes no ownership claim over those third-party materials; they remain
 subject to their original licenses, terms, and redistribution restrictions.
-
-For commercial licensing, integration, support, or permission inquiries, contact:
-
-- Jacob Ramey: rameyjm7@gmail.com

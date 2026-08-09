@@ -20,7 +20,7 @@ FM_GRID_STEP_HZ = 200_000
 
 
 def _load_rf_sentinel_demod():
-    root = Path(os.getenv("RF_SENTINEL_ROOT", "/home/jake/workspace/SDR/RF_Sentinel"))
+    root = Path(os.getenv("RF_SENTINEL_ROOT", "~/workspace/rf-sentinel")).expanduser()
     src = root / "rf_platform" / "plugins" / "fm-broadcast" / "src"
     if src.exists() and str(src) not in sys.path:
         sys.path.insert(0, str(src))

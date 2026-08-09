@@ -5,7 +5,6 @@ setup(
     version="0.1.0",
     description="SDR plot backend",
     author="Jacob Ramey",
-    author_email="rameyjm7@gmail.com",
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     include_package_data=True,

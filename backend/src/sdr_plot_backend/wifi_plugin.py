@@ -30,7 +30,7 @@ class WiFiGatewayPlugin:
     def __init__(self) -> None:
         self.enabled = str(os.getenv("SDR_SHARK_WIFI_PLUGIN", "1")).strip().lower() not in {"0", "false", "no"}
         self.rf_sentinel_root = Path(
-            os.getenv("RF_SENTINEL_ROOT", "/home/jake/workspace/SDR/RF_Sentinel")
+            os.getenv("RF_SENTINEL_ROOT", "~/workspace/rf-sentinel")
         ).expanduser()
         self._events: deque[dict[str, Any]] = deque(maxlen=int(os.getenv("SDR_SHARK_WIFI_EVENT_LIMIT", "200")))
         self._lock = threading.Lock()
@@ -42,7 +42,7 @@ class WiFiGatewayPlugin:
         self._frame_jsonl_path = Path(
             os.getenv(
                 "SDR_SHARK_WIFI_FRAME_JSONL",
-                "/home/jake/workspace/SDR/wifi_80211_sdr_stack/pcaps/wifi_bladerf_frames.jsonl",
+                "~/workspace/wifi-80211-sdr-stack/pcaps/wifi_bladerf_frames.jsonl",
             )
         ).expanduser()
         self._frame_pcap_path = Path(os.getenv("SDR_SHARK_WIFI_FRAME_PCAP", "")).expanduser()
@@ -326,7 +326,7 @@ class WiFiGatewayPlugin:
 
     def _start_mac_decoder(self, channel: int, info: dict[str, Any]) -> None:
         src = self.rf_sentinel_root / "rf_platform" / "plugins" / "wifi-80211" / "src"
-        stack_root = Path(os.getenv("WIFI_80211_STACK_ROOT", "/home/jake/workspace/SDR/wifi_80211_sdr_stack")).expanduser()
+        stack_root = Path(os.getenv("WIFI_80211_STACK_ROOT", "~/workspace/wifi-80211-sdr-stack")).expanduser()
         env = os.environ.copy()
         stack_python = stack_root / "local" / "lib" / "python3.12" / "dist-packages"
         stack_lib = stack_root / "local" / "lib" / "x86_64-linux-gnu"
