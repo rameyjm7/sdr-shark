@@ -1,0 +1,26 @@
+services:
+  sdr-shark-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    image: sdr-shark-demo:latest
+    container_name: sdr-shark-demo
+    ports:
+      - "${SDR_SHARK_DEMO_BIND:-0.0.0.0}:${SDR_SHARK_DEMO_PORT:-8080}:8080"
+    environment:
+      SDR_SHARK_HOST: "0.0.0.0"
+      SDR_SHARK_PORT: "8080"
+      SDR_SHARK_DEMO_SESSION_ID: "${SDR_SHARK_DEMO_SESSION_ID:-public-demo-2p4ghz}"
+      SDR_SHARK_DEMO_DURATION: "${SDR_SHARK_DEMO_DURATION:-30}"
+      SDR_SHARK_DEMO_SAMPLE_RATE: "${SDR_SHARK_DEMO_SAMPLE_RATE:-2000000}"
+      SDR_SHARK_DEMO_CENTER_HZ: "${SDR_SHARK_DEMO_CENTER_HZ:-2437000000}"
+      SDR_SHARK_DEMO_BANDWIDTH: "${SDR_SHARK_DEMO_BANDWIDTH:-2000000}"
+      SDR_SHARK_WORKER_SDR: "0"
+      SDR_SHARK_AUTO_START_FRONTEND: "0"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/iq/replay/status | grep -q '\"active\":true'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s

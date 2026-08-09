@@ -7,6 +7,28 @@ SDR-Shark can run a hardware-free public demo using deterministic synthetic IQ r
 From the repository root:
 
 ```bash
+docker compose -f docker-compose.demo.yml up --build
+```
+
+The Docker demo builds the React UI, generates deterministic synthetic IQ data inside the container, starts the backend, and activates replay automatically.
+
+Open the LAN URL for this machine, usually:
+
+```text
+http://<machine-ip>:8080
+```
+
+Stop the Docker demo with:
+
+```bash
+docker compose -f docker-compose.demo.yml down
+```
+
+## Local Source Demo
+
+From the repository root:
+
+```bash
 ./scripts/demo.sh
 ```
 
@@ -32,7 +54,7 @@ Stop the demo with:
 
 ## Generated Files
 
-The demo writes generated local artifacts under:
+The local source demo writes generated local artifacts under:
 
 ```text
 .demo/
@@ -40,6 +62,8 @@ frontend/build/
 ```
 
 Those directories are ignored by git. Do not commit generated IQ sessions unless a future reviewed fixture is intentionally created for public distribution.
+
+The Docker demo generates its IQ replay session inside the container filesystem and does not commit or mount real RF captures.
 
 ## Useful API Checks
 
@@ -50,6 +74,26 @@ curl http://127.0.0.1:8080/api/data
 ```
 
 Successful demo replay should show `active: true` from `/api/iq/replay/status` and non-empty `fft` and `waterfall` arrays from `/api/data`.
+
+## Docker Options
+
+Run in the background:
+
+```bash
+docker compose -f docker-compose.demo.yml up -d --build
+```
+
+Use a different host port:
+
+```bash
+SDR_SHARK_DEMO_PORT=8090 docker compose -f docker-compose.demo.yml up --build
+```
+
+Use a shorter generated session for quick smoke testing:
+
+```bash
+SDR_SHARK_DEMO_DURATION=5 docker compose -f docker-compose.demo.yml up --build
+```
 
 ## Troubleshooting
 

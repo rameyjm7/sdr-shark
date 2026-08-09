@@ -19,6 +19,26 @@ The project is intended for lawful RF engineering, lab validation, education, sp
 
 SDR-Shark includes a hardware-free public demo that generates deterministic synthetic IQ replay data locally. The demo is public-safe: it shows tones, moving noise floor, and burst activity without committing real RF captures or requiring SDR hardware.
 
+Docker demo:
+
+```bash
+docker compose -f docker-compose.demo.yml up --build
+```
+
+Then open the LAN URL for this machine, usually:
+
+```text
+http://<machine-ip>:8080
+```
+
+Stop it with:
+
+```bash
+docker compose -f docker-compose.demo.yml down
+```
+
+Local source demo:
+
 ```bash
 ./scripts/demo.sh
 ```

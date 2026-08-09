@@ -1,5 +1,6 @@
 .git
 .venv
+.demo
 backend/.venv
 frontend/node_modules
 frontend/build
