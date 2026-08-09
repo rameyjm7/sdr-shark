@@ -19,6 +19,8 @@ The project is intended for lawful RF engineering, lab validation, education, sp
 
 SDR-Shark includes a hardware-free public demo that generates deterministic synthetic IQ replay data locally. The demo is public-safe: it shows tones, moving noise floor, and burst activity without committing real RF captures or requiring SDR hardware.
 
+Portfolio case study: [RTG Spectrum SDR-Shark](https://rtgspectrum.com/sdr-shark/)
+
 Docker demo:
 
 ```bash
@@ -59,6 +61,7 @@ See [docs/demo.md](docs/demo.md) for API checks, troubleshooting, and replay det
 
 ## What This Proves
 
+- One-command Docker path for reviewers, customers, and collaborators.
 - Browser-based spectrum and waterfall UI driven by replayed IQ.
 - Backend FFT, max-hold, persistence, and replay session plumbing.
 - Hardware-aware SDR architecture that can run live, gateway-backed, or replay-backed.

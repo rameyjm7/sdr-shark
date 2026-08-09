@@ -2,6 +2,8 @@
 
 SDR-Shark can run a hardware-free public demo using deterministic synthetic IQ replay data. The demo data is generated locally and is public-safe: it contains synthetic tones, noise-floor movement, and burst activity, not captured RF from a real environment.
 
+Public case study: [RTG Spectrum SDR-Shark](https://rtgspectrum.com/sdr-shark/)
+
 ## Quick Start
 
 From the repository root:
