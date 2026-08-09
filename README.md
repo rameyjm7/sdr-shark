@@ -15,6 +15,35 @@ The project is intended for lawful RF engineering, lab validation, education, sp
 
 [Short SDR-Shark demo clip](docs/media/sdr-shark-demo.gif)
 
+## Public Demo Mode
+
+SDR-Shark includes a hardware-free public demo that generates deterministic synthetic IQ replay data locally. The demo is public-safe: it shows tones, moving noise floor, and burst activity without committing real RF captures or requiring SDR hardware.
+
+```bash
+./scripts/demo.sh
+```
+
+Open the UI at:
+
+```text
+http://127.0.0.1:5000
+```
+
+Stop the demo with:
+
+```bash
+./scripts/demo_stop.sh
+```
+
+See [docs/demo.md](docs/demo.md) for API checks, troubleshooting, and replay details.
+
+## What This Proves
+
+- Browser-based spectrum and waterfall UI driven by replayed IQ.
+- Backend FFT, max-hold, persistence, and replay session plumbing.
+- Hardware-aware SDR architecture that can run live, gateway-backed, or replay-backed.
+- A safe portfolio demo path for RF workflow review without exposing local RF environment data.
+
 ## Interface Evidence
 
 | Scanner setup | SDR settings | Signal analysis |
