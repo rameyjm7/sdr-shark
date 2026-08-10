@@ -37,6 +37,24 @@ Receive modes:
 - `SDR_BACKEND=soapy`: SDR-Shark opens the radio locally using SoapySDR.
 - `replay`: internal/plugin workflows can consume recorded or replayed IQ where supported.
 
+## Part of a Platform
+
+SDR-Shark is one console in a larger RF-intelligence suite, not a
+standalone tool:
+
+- [`rf-iq-gateway`](https://github.com/rameyjm7/rf-iq-gateway) provides
+  the shared IQ capture/fanout daemon this console can receive from, and
+  ships `app_launcher.py`, a single-pane-of-glass launcher that starts,
+  stops, and health-checks every tool in the suite (SDR-Shark, RF-Sentinel,
+  AirScope, PASSIVE-SHIELD, Trace Analyzer) from one page, with
+  hardware-conflict-aware exclusivity so tools that need the same radio
+  never run against it at once.
+- [`trace-analyzer`](https://github.com/rameyjm7/trace-analyzer) is a
+  Wireshark-style live view that polls SDR-Shark's, RF-Sentinel's,
+  AirScope's, and PASSIVE-SHIELD's detection APIs and normalizes all of
+  them into one deduplicated, filterable packet stream - proof the tools
+  share a common event model rather than each living in its own silo.
+
 ## Hardware
 
 The direct SoapySDR path can work with any radio supported by the installed SoapySDR modules. Common devices include HackRF, bladeRF, RTL-SDR, Airspy, Sidekiq, and other Soapy-compatible receivers.
@@ -46,18 +64,20 @@ High-rate features such as 60 MHz 2.4 GHz scanning require hardware and host I/O
 ## Docker
 
 A container build also exists (root `Dockerfile`, not the legacy one
-under `docker/` - see `docker/README.md`), deployed on station1 and
-dev-desktop. **See `docker/README.md`** for the deploy commands (default
-`rfiq` mode vs. direct-SoapySDR/gateway overrides) and a list of real
-bugs found and fixed getting the original Dockerfiles working, before
-building your own image from scratch.
+under `docker/` - see `docker/README.md`), and is the recommended way to
+run SDR-Shark in production across multiple radio hosts. **See
+`docker/README.md`** for the deploy commands (default `rfiq` mode vs.
+direct-SoapySDR/gateway overrides) and a list of real bugs found and
+fixed getting the original Dockerfiles working, before building your own
+image from scratch.
 
 ## Quick Install
 
 On Debian/Ubuntu-like systems, the recommended one-script install is:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+git clone https://github.com/rameyjm7/sdr-shark.git
+cd sdr-shark
 chmod +x scripts/install.sh
 ./scripts/install.sh
 ```
@@ -67,7 +87,7 @@ This installs common system dependencies when `apt-get` is available, creates `.
 To install and start SDR-Shark as a systemd service in one command:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 ./scripts/install.sh --enable-service
 ```
 
@@ -91,7 +111,7 @@ sudo apt-get install -y \
 Create and populate the Python environment:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip wheel setuptools
@@ -102,7 +122,7 @@ python -m pip install -e backend
 Install and build the frontend:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm install
 npm run build
 ```
@@ -110,7 +130,7 @@ npm run build
 Optional FM channelizer build:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 bash backend/src/sdr_plot_backend/native/build_fm_channelizer.sh
 ```
 
@@ -119,7 +139,7 @@ bash backend/src/sdr_plot_backend/native/build_fm_channelizer.sh
 Start the backend from the repository root:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 source .venv/bin/activate
 ./scripts/start.sh
 ```
@@ -127,7 +147,7 @@ source .venv/bin/activate
 For frontend development:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm start
 ```
 
@@ -138,7 +158,7 @@ The development frontend normally runs on `http://localhost:3000` and proxies AP
 Install or refresh the service:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 ./scripts/sdr-shark-service.sh install
 ```
 
@@ -321,7 +341,7 @@ Default log locations:
 Backend development:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark
+cd sdr-shark
 source .venv/bin/activate
 python3 -m sdr_plot_backend
 ```
@@ -329,14 +349,14 @@ python3 -m sdr_plot_backend
 Frontend development:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm start
 ```
 
 Production frontend build check:
 
 ```bash
-cd /home/jake/workspace/SDR/SDR-Shark/frontend
+cd sdr-shark/frontend
 npm run build
 ```
 
