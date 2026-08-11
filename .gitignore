@@ -10,6 +10,7 @@
 
 # production
 /build
+frontend/build/
 
 # misc
 .DS_Store
@@ -33,4 +34,6 @@ backend/tests/scan_data.pkl
 scan_data.pkl
 backend/.venv/
 backend/.venv
+.venv/
 sdr-gateway/
+.demo/

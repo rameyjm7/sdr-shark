@@ -1,0 +1,59 @@
+# Public-safe SDR-Shark demo image.
+#
+# This image does not require SDR hardware. It builds the React UI, generates
+# deterministic synthetic IQ data at container startup, starts the backend, and
+# enables replay through the existing IQ replay API.
+
+FROM node:22-slim AS frontend
+
+WORKDIR /app/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm install --legacy-peer-deps
+
+COPY frontend ./
+RUN CI=false npm run build
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+RUN python -m pip install --no-cache-dir --upgrade pip wheel setuptools \
+    && python -m pip install --no-cache-dir \
+      flask \
+      flask-cors \
+      gunicorn \
+      numpy \
+      pandas \
+      requests \
+      websocket-client
+
+COPY backend ./backend
+COPY scripts/generate_demo_iq_session.py scripts/docker_demo_entrypoint.sh ./scripts/
+COPY --from=frontend /app/frontend/build ./frontend/build
+
+RUN chmod +x ./scripts/generate_demo_iq_session.py ./scripts/docker_demo_entrypoint.sh
+
+ENV PYTHONPATH=/app/backend/src
+ENV SDR_BACKEND=gateway
+ENV SDR_SHARK_HOST=0.0.0.0
+ENV SDR_SHARK_PORT=8080
+ENV SDR_SHARK_AUTO_START_FRONTEND=0
+ENV SDR_SHARK_WORKER_SDR=0
+ENV SDR_SHARK_IQ_SESSION_DIR=/app/.demo/iq-sessions
+ENV SDR_SHARK_DEMO_SESSION_ID=public-demo-2p4ghz
+ENV SDR_SHARK_DEMO_DURATION=30
+ENV SDR_SHARK_DEMO_SAMPLE_RATE=2000000
+ENV SDR_SHARK_DEMO_CENTER_HZ=2437000000
+ENV SDR_SHARK_DEMO_BANDWIDTH=2000000
+
+EXPOSE 8080
+
+ENTRYPOINT ["./scripts/docker_demo_entrypoint.sh"]

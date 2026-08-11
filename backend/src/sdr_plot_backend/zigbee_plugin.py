@@ -28,7 +28,7 @@ class ZigbeeGatewayPlugin:
     def __init__(self) -> None:
         self.enabled = str(os.getenv("SDR_SHARK_ZIGBEE_PLUGIN", "1")).strip().lower() not in {"0", "false", "no"}
         self.rf_sentinel_root = Path(
-            os.getenv("RF_SENTINEL_ROOT", "/home/jake/workspace/SDR/RF_Sentinel")
+            os.getenv("RF_SENTINEL_ROOT", "~/workspace/rf-sentinel")
         ).expanduser()
         self._events: deque[dict[str, Any]] = deque(maxlen=int(os.getenv("SDR_SHARK_ZIGBEE_EVENT_LIMIT", "200")))
         self._lock = threading.Lock()

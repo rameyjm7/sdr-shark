@@ -35,7 +35,7 @@ const SDRSettings = ({ settings, selectedDevice, handleChange, handleKeyPress, s
   const dcSuppress = typeof settings.dcSuppress === 'boolean' ? settings.dcSuppress : false;
   const decodersAlwaysEnabled = typeof settings.decodersAlwaysEnabled === 'boolean' ? settings.decodersAlwaysEnabled : false;
   const rfModelClassifierEnabled = typeof settings.rfModelClassifierEnabled === 'boolean' ? settings.rfModelClassifierEnabled : false;
-  const rfModelClassifierRepoPath = settings.rfModelClassifierRepoPath || '/home/jake/workspace/SDR/rf-signal-intelligence';
+  const rfModelClassifierRepoPath = settings.rfModelClassifierRepoPath || '~/workspace/rf-signal-intelligence';
   const rfModelClassifierModelPath = settings.rfModelClassifierModelPath || `${rfModelClassifierRepoPath}/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_best.keras`;
   const rfModelClassifierBackend = settings.rfModelClassifierBackend || 'auto';
   const rfModelClassifierEnginePath = settings.rfModelClassifierEnginePath || `${rfModelClassifierRepoPath}/models/noisy_drone_rf_v2/noisy_drone_rf_v2_vgg_full_complex_spectrogram_fp16.engine`;

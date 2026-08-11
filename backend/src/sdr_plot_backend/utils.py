@@ -75,7 +75,7 @@ class sdr_scheduler_config:
         self.rf_model_classifier_enabled = False
         self.rf_model_classifier_repo_path = os.getenv(
             "SDR_SHARK_RF_MODEL_REPO",
-            "/home/jake/workspace/SDR/rf-signal-intelligence-private",
+            "~/workspace/rf-signal-intelligence-private",
         )
         self.rf_model_classifier_model_path = os.getenv(
             "SDR_SHARK_RF_MODEL_PATH",

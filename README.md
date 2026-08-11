@@ -5,11 +5,78 @@
 ![SDR](https://img.shields.io/badge/SDR-SoapySDR-green)
 ![ML](https://img.shields.io/badge/Applied%20ML-RF%20Signal%20Analysis-orange)
 
-SDR-Shark is an applied RF signal-intelligence platform and web-based software defined radio console for live spectrum monitoring, waterfall visualization, protocol-aware signal activity, and decoder-assisted RF discovery. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
+This repository is a personal portfolio copy of SDR-Shark, an RF signal-intelligence and SDR visualization platform demonstrating live spectrum monitoring, decoder integration, RF activity tracking, and ML integration. It combines a Python/Flask backend with a React frontend and can receive samples either directly through SoapySDR or through `sdr-gateway`.
 
 The project demonstrates the system layer around RF ML: live device streaming, browser visualization, signal feature extraction, decoder plugin orchestration, service deployment, and integration points for models from [rf-signal-intelligence](https://github.com/rameyjm7/rf-signal-intelligence).
 
 The project is intended for lawful RF engineering, lab validation, education, spectrum monitoring, and passive signal-awareness workflows. Operators are responsible for complying with all applicable radio, privacy, and computer misuse laws in their jurisdiction.
+
+![SDR-Shark public Docker demo frequency-hopping signal](docs/media/sdr-shark-demo.gif)
+
+## Public Demo Mode
+
+SDR-Shark includes a hardware-free public demo that generates deterministic synthetic IQ replay data locally. The demo is public-safe: it shows a stationary receiver watching a Bluetooth-like frequency-hopping emitter move across the passband, along with tones, moving noise floor, and burst activity, without committing real RF captures or requiring SDR hardware.
+
+Run the public Docker demo in one command:
+
+```bash
+docker compose -f docker-compose.demo.yml up --build
+```
+
+Then open the LAN URL for this machine, usually:
+
+```text
+http://<machine-ip>:8080
+```
+
+Stop it with:
+
+```bash
+docker compose -f docker-compose.demo.yml down
+```
+
+Local source demo:
+
+```bash
+./scripts/demo.sh
+```
+
+The script binds to `0.0.0.0`, tries port `80` first, and falls back to `8080` when low-port bind is unavailable without elevated permissions. Open the LAN URL printed by the script, usually:
+
+```text
+http://<machine-ip>:8080
+```
+
+Stop the demo with:
+
+```bash
+./scripts/demo_stop.sh
+```
+
+See [docs/demo.md](docs/demo.md) for API checks, troubleshooting, and replay details.
+
+## What This Proves
+
+- One-command Docker path for reviewers, customers, and collaborators.
+- Stationary receiver view of a Bluetooth-like frequency-hopping 2.4 GHz emitter.
+- Browser-based spectrum and waterfall UI driven by replayed IQ.
+- Backend FFT, max-hold, persistence, and replay session plumbing.
+- Hardware-aware SDR architecture that can run live, gateway-backed, or replay-backed.
+- A safe portfolio demo path for RF workflow review without exposing local RF environment data.
+
+## Public Demo Evidence
+
+The captures below were generated from the Docker demo using the synthetic `public-demo-2p4ghz` replay session. The receiver stays centered while the synthetic Bluetooth-like emitter hops across the passband.
+
+| Live replay dashboard | Spectrum and waterfall detail | Signal activity panel |
+|---|---|---|
+| [![SDR-Shark public replay dashboard](docs/media/sdr-shark-public-demo-dashboard.png)](docs/media/sdr-shark-public-demo-dashboard.png) | [![SDR-Shark public replay spectrum and waterfall](docs/media/sdr-shark-public-demo-spectrum-waterfall.png)](docs/media/sdr-shark-public-demo-spectrum-waterfall.png) | [![SDR-Shark public replay signal activity panel](docs/media/sdr-shark-public-demo-signal-activity.png)](docs/media/sdr-shark-public-demo-signal-activity.png) |
+
+## Interface Evidence
+
+| Scanner setup | SDR settings | Signal analysis |
+|---|---|---|
+| [![SDR-Shark scanner setup dialog](docs/media/sdr-shark-scanner.jpg)](docs/media/sdr-shark-scanner.jpg) | [![SDR-Shark SDR settings dialog](docs/media/sdr-shark-settings.jpg)](docs/media/sdr-shark-settings.jpg) | [![SDR-Shark signal analysis dialog](docs/media/sdr-shark-analysis.jpg)](docs/media/sdr-shark-analysis.jpg) |
 
 ## What It Does
 
@@ -395,15 +462,12 @@ Potential areas for future work:
 ## Licensing
 
 SDR-Shark is source-available for personal, educational, research, evaluation,
-and other non-commercial use. All commercial rights are retained by Jacob Ramey.
-Commercial use, paid deployment, commercial hosting, integration
+and other non-commercial use. All commercial rights are reserved by the
+copyright holder. Commercial use, paid deployment, commercial hosting, integration
 into commercial products or services, contract deliverables, managed service
 offerings, or other revenue-generating use requires prior written permission.
 
 This project may interoperate with third-party datasets, models, SDR drivers,
-decoder projects, protocol specifications, and external tools. Jacob Ramey makes no ownership claim over those third-party materials; they remain
+decoder projects, protocol specifications, and external tools. The copyright
+holder makes no ownership claim over those third-party materials; they remain
 subject to their original licenses, terms, and redistribution restrictions.
-
-For commercial licensing, integration, support, or permission inquiries, contact:
-
-- Jacob Ramey: rameyjm7@gmail.com

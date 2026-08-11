@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 
-DEFAULT_RF_INTELLIGENCE_ROOT = Path("/home/jake/workspace/SDR/rf-signal-intelligence-private")
+DEFAULT_RF_INTELLIGENCE_ROOT = Path("~/workspace/rf-signal-intelligence-private").expanduser()
 DEFAULT_NOISY_DRONE_MODEL = (
     DEFAULT_RF_INTELLIGENCE_ROOT
     / "models"

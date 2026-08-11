@@ -1,5 +1,27 @@
 # SDR-Shark Docker image
 
+## Public demo image
+
+For the hardware-free public demo, use the dedicated demo Compose file from
+the repo root:
+
+```
+docker compose -f docker-compose.demo.yml up --build
+```
+
+That path builds `Dockerfile.demo`, generates deterministic synthetic IQ inside
+the container, starts SDR-Shark on container port `8080`, and exposes it on the
+host at `0.0.0.0:8080` by default. Stop it with:
+
+```
+docker compose -f docker-compose.demo.yml down
+```
+
+The root `Dockerfile` below remains the hardware-oriented SDR-Shark image for
+`rfiq`, SoapySDR, or gateway-backed deployments.
+
+## Hardware image
+
 Deployed to station1 (`10.139.1.160:5000`) for testing. Build from the
 repo root:
 

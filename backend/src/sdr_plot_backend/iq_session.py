@@ -231,6 +231,7 @@ class IQReplaySDR:
         self.bandwidth = float(stream.get("bandwidth_hz") or self.sample_rate)
         self.gain = float(stream.get("gain_db") or 0)
         self.size = int(size)
+        self.replay_preview_scale = float(self.metadata.get("replay_preview_scale") or 1.0)
         self.loop = bool(loop)
         self.speed = max(0.01, float(speed or 1.0))
         self._capture_path = self.session_dir / str(self.metadata.get("capture_file") or "chunks.cs8")
@@ -263,8 +264,32 @@ class IQReplaySDR:
         with self._lock:
             return self._latest_samples.copy()
 
-    def configure_receiver(self, **_: Any) -> None:
-        return
+    def get_latest_samples_secondary(self) -> np.ndarray | None:
+        return None
+
+    def get_latest_iq_chunk(self) -> np.ndarray:
+        return self.get_latest_samples()
+
+    def mimo_info(self) -> dict[str, Any]:
+        return {
+            "enabled": False,
+            "channels": [0],
+            "backend": "replay",
+            "device_id": self.device_id,
+        }
+
+    def current_device_label(self) -> str:
+        return str(self.metadata.get("label") or self.device_id or "IQ replay")
+
+    def configure_receiver(self, **kwargs: Any) -> None:
+        if kwargs.get("frequency") is not None:
+            self.frequency = float(kwargs["frequency"])
+        if kwargs.get("sample_rate") is not None:
+            self.sample_rate = float(kwargs["sample_rate"])
+        if kwargs.get("bandwidth") is not None:
+            self.bandwidth = float(kwargs["bandwidth"])
+        if kwargs.get("gain") is not None:
+            self.gain = float(kwargs["gain"])
 
     def set_frequency(self, frequency: float) -> None:
         self.frequency = float(frequency)
@@ -324,7 +349,7 @@ class IQReplaySDR:
                 if not self._should_run:
                     break
                 any_chunk = True
-                iq = _cs8_to_complex(raw)
+                iq = _cs8_to_complex(raw) * self.replay_preview_scale
                 if iq.size >= self.size:
                     out = iq[: self.size]
                 else:
